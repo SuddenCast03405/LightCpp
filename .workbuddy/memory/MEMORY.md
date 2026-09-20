@@ -92,3 +92,12 @@ LightC++ IDE：显示名 "LightC++"，代码标识 `LightCpp`，最终二进制 
   需要命令输出时写文件再读。
 - MinGW 下测试可执行文件静态链接 GCC 运行时（`-static-libgcc -static-libstdc++`），否则 ctest 派生进程会缺 DLL。
 - 运行 Qt 程序需 `E:\msys64\ucrt64\bin` 在 PATH 中（Qt6Core.dll 等依赖）。
+- **单文件编译**：Tools → Compile Current File（F7）+ Toolchain 子菜单
+  （GCC/Clang 互斥，默认 GCC）。编译器固定 `E:\msys64\ucrt64\bin` 下
+  gcc/g++/clang/clang++（按 .c 选 C 编译器、其余 C++）。
+  - args：`-Wall -Wextra -g <src> -o <stem>.exe`；Untitled 写
+    `%TEMP%/lightcpp-compile/<stem>.cpp`；已保存但 modified 自动写盘。
+  - QProcess* compiler_ 懒创建复用，MergedChannels → OutputPanel；
+    子进程 PATH 前置 `kMingwBin`（运行时 DLL 在那）；编译中按钮 disabled。
+- MinGW 下测试可执行文件静态链接 GCC 运行时（`-static-libgcc -static-libstdc++`），否则 ctest 派生进程会缺 DLL。
+- 运行 Qt 程序需 `E:\msys64\ucrt64\bin` 在 PATH 中（Qt6Core.dll 等依赖）。
