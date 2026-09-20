@@ -1,0 +1,55 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "msys2-ucrt64",
+      "displayName": "MSYS2 UCRT64 (GCC)",
+      "description": "Configure with the MSYS2 UCRT64 toolchain (E:\\msys64\\ucrt64) using Ninja.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/msys2-ucrt64",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "E:/msys64/ucrt64/bin/gcc.exe",
+        "CMAKE_CXX_COMPILER": "E:/msys64/ucrt64/bin/g++.exe",
+        "CMAKE_MAKE_PROGRAM": "E:/msys64/ucrt64/bin/ninja.exe",
+        "CMAKE_PREFIX_PATH": "E:/msys64/ucrt64",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "msys2-ucrt64-coverage",
+      "displayName": "MSYS2 UCRT64 + coverage",
+      "inherits": "msys2-ucrt64",
+      "binaryDir": "${sourceDir}/build/msys2-ucrt64-coverage",
+      "cacheVariables": {
+        "LIGHTCPP_ENABLE_COVERAGE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "msys2-ucrt64",
+      "configurePreset": "msys2-ucrt64"
+    },
+    {
+      "name": "msys2-ucrt64-coverage",
+      "configurePreset": "msys2-ucrt64-coverage"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "msys2-ucrt64",
+      "configurePreset": "msys2-ucrt64",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "msys2-ucrt64-coverage",
+      "configurePreset": "msys2-ucrt64-coverage",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

@@ -1,0 +1,261 @@
+// LightCppText - text encoding detection (implementation).
+
+#include "LightCpp/Text/Encoding.hpp"
+
+#include <array>
+#include <string_view>
+
+#include <QStringView>
+
+#include "LightCpp/Core/Utf8.hpp"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+namespace LightCpp::Text {
+
+namespace {
+
+struct BomEntry {
+    const char* bytes;
+    int length;
+    TextEncoding encoding;
+};
+
+// Order matters: UTF-32LE (FF FE 00 00) must be checked before UTF-16LE
+// (FF FE), otherwise the shorter BOM would shadow it.
+constexpr std::array kBoms{
+    BomEntry{"\x00\x00\xFE\xFF", 4, TextEncoding::Utf32Be},
+    BomEntry{"\xFF\xFE\x00\x00", 4, TextEncoding::Utf32Le},
+    BomEntry{"\xEF\xBB\xBF", 3, TextEncoding::Utf8},
+    BomEntry{"\xFF\xFE", 2, TextEncoding::Utf16Le},
+    BomEntry{"\xFE\xFF", 2, TextEncoding::Utf16Be},
+};
+
+/// True when the buffer "looks like" UTF-16 without a BOM: even length and
+/// every second byte is NUL (typical for Latin-script UTF-16 text where all
+/// code units have the high byte zero).
+[[nodiscard]] bool looksLikeUtf16NoBom(QByteArrayView bytes, int stride) noexcept
+{
+    if (bytes.size() < 8 || bytes.size() % 2 != 0) {
+        return false;
+    }
+    int zeros = 0;
+    int checked = 0;
+    for (qsizetype i = 0; i + 1 < bytes.size(); i += 2) {
+        const char hi = bytes[static_cast<qsizetype>(i) + (stride == 2 ? 1 : 0)];
+        const char lo = bytes[static_cast<qsizetype>(i) + (stride == 2 ? 0 : 1)];
+        ++checked;
+        if (hi == '\0' && lo != '\0') {
+            ++zeros;
+        }
+    }
+    return checked > 0 && zeros == checked;
+}
+
+}  // namespace
+
+const char* toName(TextEncoding encoding) noexcept
+{
+    switch (encoding) {
+    case TextEncoding::Utf8: return "UTF-8";
+    case TextEncoding::Utf16Le: return "UTF-16LE";
+    case TextEncoding::Utf16Be: return "UTF-16BE";
+    case TextEncoding::Utf32Le: return "UTF-32LE";
+    case TextEncoding::Utf32Be: return "UTF-32BE";
+    case TextEncoding::Gb18030: return "GB18030";
+    case TextEncoding::Gbk: return "GBK";
+    case TextEncoding::Big5: return "Big5";
+    case TextEncoding::ShiftJis: return "Shift-JIS";
+    case TextEncoding::EucKr: return "EUC-KR";
+    case TextEncoding::Windows1252: return "Windows-1252";
+    case TextEncoding::Latin1: return "ISO-8859-1";
+    case TextEncoding::Binary: return "binary";
+    case TextEncoding::Unknown: return "unknown";
+    }
+    return "unknown";
+}
+
+bool isLegacyCodec(TextEncoding encoding) noexcept
+{
+    switch (encoding) {
+    case TextEncoding::Gb18030:
+    case TextEncoding::Gbk:
+    case TextEncoding::Big5:
+    case TextEncoding::ShiftJis:
+    case TextEncoding::EucKr:
+    case TextEncoding::Windows1252:
+        return true;
+    default:
+        return false;
+    }
+}
+
+std::optional<TextEncoding> fromName(QByteArrayView name)
+{
+    if (name.isEmpty()) {
+        return std::nullopt;
+    }
+    // Normalize: uppercase, drop '-' and '_'.
+    QByteArray normalized;
+    normalized.reserve(static_cast<qsizetype>(name.size()));
+    for (const char c : name) {
+        const char upper = (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c;
+        if (upper == '-' || upper == '_') {
+            continue;
+        }
+        normalized.append(upper);
+    }
+
+    static const struct {
+        TextEncoding encoding;
+        const char* normalized;
+    } kMap[] = {
+        {TextEncoding::Utf8, "UTF8"},
+        {TextEncoding::Utf16Le, "UTF16LE"},
+        {TextEncoding::Utf16Be, "UTF16BE"},
+        {TextEncoding::Utf32Le, "UTF32LE"},
+        {TextEncoding::Utf32Be, "UTF32BE"},
+        {TextEncoding::Gb18030, "GB18030"},
+        {TextEncoding::Gbk, "GBK"},
+        {TextEncoding::Gbk, "GB2312"},  // historical alias, GBK superset in practice
+        {TextEncoding::Big5, "BIG5"},
+        {TextEncoding::ShiftJis, "SHIFTJIS"},
+        {TextEncoding::ShiftJis, "SJIS"},
+        {TextEncoding::EucKr, "EUCKR"},
+        {TextEncoding::Windows1252, "WINDOWS1252"},
+        {TextEncoding::Windows1252, "CP1252"},
+        {TextEncoding::Latin1, "ISO88591"},
+        {TextEncoding::Latin1, "LATIN1"},
+    };
+    for (const auto& entry : kMap) {
+        if (normalized == entry.normalized) {
+            return entry.encoding;
+        }
+    }
+    return std::nullopt;
+}
+
+TextEncoding localAnsiEncoding() noexcept
+{
+#ifdef _WIN32
+    // ::GetACP() returns the system's "ANSI" code page identifier.
+    //   936   -> GBK (simplified Chinese, zh-CN)
+    //   950   -> Big5 (traditional Chinese, zh-TW/HK)
+    //   949   -> EUC-KR / CP949 (Korean)
+    //   932   -> Shift-JIS (Japanese)
+    //   1252  -> Windows-1252 (Western European)
+    //   54936 -> GB18030
+    const UINT cp = ::GetACP();
+    switch (cp) {
+    case 936:   return TextEncoding::Gbk;
+    case 950:   return TextEncoding::Big5;
+    case 949:   return TextEncoding::EucKr;
+    case 932:   return TextEncoding::ShiftJis;
+    case 54936: return TextEncoding::Gb18030;
+    case 1252:  return TextEncoding::Windows1252;
+    default:    return TextEncoding::Windows1252;
+    }
+#else
+    return TextEncoding::Windows1252;
+#endif
+}
+
+QString localAnsiDisplayName() noexcept
+{
+    return QStringLiteral("ANSI (%1)")
+        .arg(QString::fromLatin1(toName(localAnsiEncoding())));
+}
+
+EncodingDetection detectEncoding(QByteArrayView bytes)
+{
+    EncodingDetection result;
+
+    if (bytes.isEmpty()) {
+        result.encoding = TextEncoding::Utf8;
+        result.reliable = true;
+        return result;
+    }
+
+    // -- 1. Byte-order marks (always authoritative) -------------------------
+    for (const BomEntry& bom : kBoms) {
+        if (bytes.size() >= bom.length
+            && QByteArrayView(bytes.constData(), bom.length)
+                   == QByteArrayView(bom.bytes, bom.length)) {
+            result.encoding = bom.encoding;
+            result.hadBom = true;
+            result.score = 1000;
+            result.reliable = true;
+            return result;
+        }
+    }
+
+    // -- 2. NUL-based structure (UTF-16/32 without BOM, or binary) ----------
+    const qsizetype size = bytes.size();
+    qsizetype zeros = 0;
+    qsizetype controls = 0;  // C0 bytes other than \t \n \r
+    for (qsizetype i = 0; i < size; ++i) {
+        const char c = bytes[i];
+        if (c == '\0') {
+            ++zeros;
+        } else if (static_cast<unsigned char>(c) < 0x20
+                   && c != '\t' && c != '\n' && c != '\r') {
+            ++controls;
+        }
+    }
+
+    if (zeros > 0) {
+        if (looksLikeUtf16NoBom(bytes, 2)) {
+            result.encoding = TextEncoding::Utf16Le;
+            result.score = 700;
+            result.reliable = true;
+            return result;
+        }
+        if (looksLikeUtf16NoBom(bytes, 1)) {
+            result.encoding = TextEncoding::Utf16Be;
+            result.score = 700;
+            result.reliable = true;
+            return result;
+        }
+        // NULs without a Unicode alignment pattern: treat as binary.
+        result.encoding = TextEncoding::Binary;
+        result.score = 0;
+        result.reliable = true;
+        return result;
+    }
+    if (size > 0 && static_cast<double>(controls) / static_cast<double>(size) > 0.05) {
+        result.encoding = TextEncoding::Binary;
+        result.reliable = true;
+        return result;
+    }
+
+    // -- 3. UTF-8 (with or without multi-byte sequences) --------------------
+    {
+        const std::string_view view(bytes.constData(), static_cast<std::size_t>(size));
+        if (LightCpp::Core::Text::validateUtf8(view) == 0) {
+            result.encoding = TextEncoding::Utf8;
+            result.score = 800;
+            result.reliable = true;
+            return result;
+        }
+    }
+
+    // -- 4. Not Unicode: default to local ANSI code page -------------------
+    // The previous implementation tried to score each legacy candidate
+    // (GBK, GB18030, Big5, Shift-JIS, EUC-KR) and pick the best by content
+    // frequency. That approach was brittle: GBK and EUC-KR byte ranges
+    // overlap so heavily that almost any GBK file is also syntactically
+    // valid EUC-KR, and Korean text is also syntactically valid GBK — pure
+    // scoring could flip either way. In practice, non-Unicode files on a
+    // user's machine almost always match the machine's locale, so defaulting
+    // to the local ANSI code page is both simpler and more reliable.
+    // Users who need to override the choice can do so via the GUI's
+    // encoding drop-down (which re-opens the file with the chosen codec).
+    result.encoding = localAnsiEncoding();
+    result.score = 100;
+    result.reliable = false;  // guessed, not verified
+    return result;
+}
+
+}  // namespace LightCpp::Text

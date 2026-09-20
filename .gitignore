@@ -1,0 +1,21 @@
+# Build output
+build/
+
+# Local tool artifacts
+*.user
+.vs/
+.vscode/
+.idea/
+
+# Local temp files used for build/test output capture
+_*.txt
+_*.py
+_check.txt
+
+# Coverage artifacts
+coverage.info
+coverage_html/
+
+# OS files
+Thumbs.db
+.DS_Store
