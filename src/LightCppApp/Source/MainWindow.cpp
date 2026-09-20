@@ -12,6 +12,7 @@
 #include <algorithm>
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -25,6 +26,9 @@
 #include <QMetaType>
 #include <QMessageBox>
 #include <QPair>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyle>
 #include <QTabWidget>
@@ -42,6 +46,10 @@ namespace {
 /// Path to the language server used for syntax checking.
 /// TEMPORARY: hardcoded per project phase; will become a setting later.
 const QString kClangdPath = QStringLiteral("E:/msys64/ucrt64/bin/clangd.exe");
+
+/// Toolchain directory for single-file compilation (MSYS2 UCRT64). Contains
+/// gcc/g++/clang/clang++ plus their runtime DLLs.
+const QString kMingwBin = QStringLiteral("E:/msys64/ucrt64/bin");
 
 /// How long the editor stays idle before the new text is pushed to the
 /// language server (ms). 300ms keeps up with fast typing without spamming
@@ -247,6 +255,12 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    // Stop a running single-file compile so its child process doesn't
+    // outlive the window (QProcess::~QProcess does not kill).
+    if (compiler_ && compiler_->state() != QProcess::NotRunning) {
+        compiler_->kill();
+        compiler_->waitForFinished(2000);
+    }
     // Prompt to save modified files.
     for (int i = 0; i < tabWidget_->count(); ++i) {
         if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
@@ -311,6 +325,28 @@ void MainWindow::createActions()
     connect(actSyntaxCheck_, &QAction::toggled,
             this, &MainWindow::onSyntaxCheckToggled);
 
+    // --- single-file compile -------------------------------------------
+    actCompile_ = new QAction(tr("Compil&e Current File"), this);
+    actCompile_->setShortcut(QKeySequence(Qt::Key_F7));
+    actCompile_->setStatusTip(tr("Compile the active file with the selected "
+                                  "toolchain (gcc/g++/clang/clang++)"));
+    connect(actCompile_, &QAction::triggered,
+            this, &MainWindow::onCompileCurrentFile);
+
+    // Toolchain choice: GCC vs Clang. C/C++ (g++ vs gcc etc.) is chosen
+    // automatically from the file extension at compile time.
+    auto* toolchainGroup = new QActionGroup(this);
+    toolchainGroup->setExclusive(true);
+    actToolchainGcc_ = new QAction(tr("&GCC (g++/gcc)"), this);
+    actToolchainGcc_->setCheckable(true);
+    actToolchainGcc_->setChecked(true);
+    actToolchainGcc_->setStatusTip(tr("Use GCC from MSYS2 UCRT64"));
+    actToolchainClang_ = new QAction(tr("&Clang (clang++/clang)"), this);
+    actToolchainClang_->setCheckable(true);
+    actToolchainClang_->setStatusTip(tr("Use Clang from MSYS2 UCRT64"));
+    toolchainGroup->addAction(actToolchainGcc_);
+    toolchainGroup->addAction(actToolchainClang_);
+
     actAbout_ = new QAction(tr("&About LightC++..."), this);
     connect(actAbout_, &QAction::triggered, this, &MainWindow::onAbout);
 }
@@ -329,6 +365,11 @@ void MainWindow::createMenuBar()
 
     auto* toolsMenu = menuBar()->addMenu(tr("&Tools"));
     toolsMenu->addAction(actSyntaxCheck_);
+    toolsMenu->addSeparator();
+    toolsMenu->addAction(actCompile_);
+    auto* toolchainMenu = toolsMenu->addMenu(tr("&Toolchain"));
+    toolchainMenu->addAction(actToolchainGcc_);
+    toolchainMenu->addAction(actToolchainClang_);
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(fileExplorer_->toggleViewAction());
@@ -348,6 +389,8 @@ void MainWindow::createToolBar()
     tb->addAction(actOpen_);
     tb->addAction(actSave_);
     tb->addAction(actSaveAll_);
+    tb->addSeparator();
+    tb->addAction(actCompile_);
 }
 
 void MainWindow::createStatusBar()
@@ -763,4 +806,123 @@ QString MainWindow::languageIdForFile(const QString& path)
     if (suf == "c") return QStringLiteral("c");
     if (suf == "h") return QStringLiteral("c");  // ambiguous; clangd detects
     return QStringLiteral("cpp");
+}
+
+// ---------------------------------------------------------------------------
+// Single-file compile
+// ---------------------------------------------------------------------------
+void MainWindow::onCompileCurrentFile()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr) {
+        outputPanel_->appendOutput(tr("No active file to compile."));
+        return;
+    }
+    // The compiler needs real bytes on disk. For an unsaved Untitled buffer
+    // write a temp .cpp file; for a saved file just flush the buffer to
+    // its path so the compiler reads the latest content.
+    QString srcPath = ed->filePath();
+    if (srcPath.isEmpty()) {
+        const QString dir = QDir(QDir::tempPath())
+                              .filePath(QStringLiteral("lightcpp-compile"));
+        QDir().mkpath(dir);
+        // Derive a stem from the tab title, stripping the modification dot.
+        const int idx = tabWidget_->indexOf(ed);
+        QString stem = idx >= 0
+                ? QFileInfo(tabWidget_->tabText(idx)).completeBaseName()
+                : QStringLiteral("Untitled");
+        stem.remove(QStringLiteral(" \u25CF"));
+        if (stem.isEmpty()) stem = QStringLiteral("Untitled");
+        srcPath = QDir(dir).filePath(stem + QStringLiteral(".cpp"));
+        if (QFile f(srcPath); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            f.write(ed->toUtf8());
+        } else {
+            outputPanel_->appendOutput(tr("Cannot write temp file: %1").arg(srcPath));
+            return;
+        }
+    } else if (ed->isModified()) {
+        if (QFile f(srcPath); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            f.write(ed->toUtf8());
+            ed->setModified(false);
+            const int idx = tabWidget_->indexOf(ed);
+            if (idx >= 0) {
+                QString t = tabWidget_->tabText(idx);
+                if (t.endsWith(u'\u25CF')) t = t.left(t.length() - 2);
+                tabWidget_->setTabText(idx, t);
+            }
+        } else {
+            outputPanel_->appendOutput(tr("Cannot save %1 before compile").arg(srcPath));
+            return;
+        }
+    }
+
+    // Pick the compiler from the selected toolchain + file extension.
+    // Headers compile as C++ by default.
+    const QString suf = QFileInfo(srcPath).suffix().toLower();
+    const bool isC = (suf == "c");
+    const bool useClang = actToolchainClang_->isChecked();
+    const QString compilerName = useClang
+        ? (isC ? QStringLiteral("clang.exe")    : QStringLiteral("clang++.exe"))
+        : (isC ? QStringLiteral("gcc.exe")      : QStringLiteral("g++.exe"));
+    const QString compilerExe = QDir(kMingwBin).filePath(compilerName);
+    const QString stem = QFileInfo(srcPath).completeBaseName();
+    const QString outExe = QDir(QFileInfo(srcPath).absolutePath())
+                              .filePath(stem + QStringLiteral(".exe"));
+    const QStringList args = {
+        QStringLiteral("-Wall"),
+        QStringLiteral("-Wextra"),
+        QStringLiteral("-g"),
+        srcPath,
+        QStringLiteral("-o"),
+        outExe,
+    };
+
+    // Lazily create the QProcess once and wire its handlers.
+    if (compiler_ == nullptr) {
+        compiler_ = new QProcess(this);
+        compiler_->setProcessChannelMode(QProcess::MergedChannels);
+        connect(compiler_, &QProcess::readyReadStandardOutput, this, [this] {
+            if (compiler_ == nullptr) return;
+            const QByteArray b = compiler_->readAllStandardOutput();
+            outputPanel_->appendOutput(QString::fromLocal8Bit(b));
+        });
+        connect(compiler_,
+                QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, [this](int code, QProcess::ExitStatus status) {
+            const int rc = (status == QProcess::NormalExit) ? code : -1;
+            outputPanel_->appendOutput(
+                rc == 0 ? tr("--- Build succeeded (exit 0) ---")
+                        : tr("--- Build failed (exit %1) ---").arg(rc));
+            if (actCompile_) actCompile_->setEnabled(true);
+        });
+        connect(compiler_, &QProcess::errorOccurred, this,
+                [this](QProcess::ProcessError e) {
+            if (e != QProcess::FailedToStart) return;
+            outputPanel_->appendOutput(
+                tr("Compiler failed to start. Check that %1 exists.")
+                    .arg(QDir(kMingwBin).filePath(QStringLiteral("<gcc|g++|clang|clang++>.exe"))));
+            if (actCompile_) actCompile_->setEnabled(true);
+        });
+    }
+
+    if (compiler_->state() != QProcess::NotRunning) {
+        outputPanel_->appendOutput(tr("A build is already running."));
+        return;
+    }
+
+    // The compiler + produced exe rely on MSYS2 UCRT64 runtime DLLs, so
+    // prepend that bin dir to the child's PATH (the IDE itself does not
+    // need it there to launch).
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("PATH"),
+               kMingwBin + QDir::listSeparator() + env.value(QStringLiteral("PATH")));
+    compiler_->setProcessEnvironment(env);
+    compiler_->setWorkingDirectory(QFileInfo(srcPath).absolutePath());
+
+    outputPanel_->appendOutput(
+        tr("--- Compiling: %1 %2 ---")
+            .arg(QFileInfo(compilerExe).fileName(),
+                 args.join(QStringLiteral(" "))));
+    actCompile_->setEnabled(false);
+    compiler_->start(compilerExe, args);
 }

@@ -15,6 +15,8 @@ class QLabel;
 class QTabWidget;
 class QComboBox;
 class QAction;
+class QActionGroup;
+class QProcess;
 class QTimer;
 namespace LightCpp::App {
 class LanguageServerClient;
@@ -43,6 +45,7 @@ private slots:
     void onAbout();
     void onSyntaxCheckToggled(bool enabled);
     void onLintTimerTimeout();
+    void onCompileCurrentFile();
 
 private:
     void createActions();
@@ -82,6 +85,9 @@ private:
     QAction* actAbout_;
     QAction* actOpenFolder_;
     QAction* actSyntaxCheck_;
+    QAction* actCompile_ = nullptr;        // single-file compile (F7)
+    QAction* actToolchainGcc_ = nullptr;   // mutually exclusive with Clang
+    QAction* actToolchainClang_ = nullptr;
 
     // --- syntax check (clangd over LSP) ---
     LightCpp::App::LanguageServerClient* lsp_;
@@ -96,6 +102,9 @@ private:
     /// ignored — otherwise an outdated empty result dismisses the popup
     /// that a newer response just filled.
     int latestCompletionId_ = 0;
+
+    // --- single-file compiler ---
+    QProcess* compiler_ = nullptr;   // lazily created; reused across builds
 
     // new-file counter
     int untitledCounter_ = 0;
