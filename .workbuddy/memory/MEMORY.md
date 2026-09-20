@@ -33,6 +33,8 @@ LightC++ IDE：显示名 "LightC++"，代码标识 `LightCpp`，最终二进制 
   - windeployqt6 自动部署 Qt DLL 到 `dist/` 目录，可独立运行。
   - **QScintilla/ADS 未安装**，用 QPlainTextEdit + QDockWidget 替代；如需安装 QScintilla：
     `pacman -S mingw-w64-ucrt-x86_64-qscintilla`。
+  - **行号绘制坑**：drawText 矩形高度必须 ≥ fontMetrics().height()，
+    传 0 则什么都不画（曾导致行号栏有背景无数字）。
 - `LightCppApp` 语法检查：通过 `LanguageServerClient` 用 LSP over stdio 跟 clangd 通信。
   - clangd 路径硬编码在 `MainWindow.cpp` 常量 `kClangdPath` = `E:/msys64/ucrt64/bin/clangd.exe`。
   - Tools 菜单"语法检查"开关启动/停止 LSP。
