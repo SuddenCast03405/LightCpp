@@ -83,6 +83,9 @@ LightC++ IDE：显示名 "LightC++"，代码标识 `LightCpp`，最终二进制 
 - 工具链 MSYS2 UCRT64：`E:\msys64\ucrt64\bin`（gcc 16.2 / cmake 4.3.3 / ninja 1.13）。
   **Qt6 已安装**（qt6-base 等，位于 `E:\msys64\ucrt64\lib\cmake\Qt6`），无 ICU。
   遗留编码（GBK/Big5/ShiftJIS/EUC-KR）通过 Win32 API 实现，不依赖 ICU。
+- **Git**：`D:\Program Files\Git For Windows\bin\git.exe`（MSVC 编译，无需其他组件）；
+  备选 `E:\msys64\ucrt64\bin\git.exe`。仓库级身份 lenovo / lenovo@local。
+- **工作流约定（用户要求）：每完成一次代码改动就 git commit 一次。**
 - 用 PowerShell 构建（Bash 环境 PATH 损坏），先 `$env:PATH = "E:\msys64\ucrt64\bin;" + $env:PATH`；
   需要命令输出时写文件再读。
 - MinGW 下测试可执行文件静态链接 GCC 运行时（`-static-libgcc -static-libstdc++`），否则 ctest 派生进程会缺 DLL。
