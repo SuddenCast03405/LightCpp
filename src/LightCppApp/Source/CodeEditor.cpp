@@ -582,7 +582,11 @@ void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event)
         if (block.isVisible() && bottom >= event->rect().top()) {
             const QString number = QString::number(blockNumber + 1);
             painter.setPen(numColor);
-            painter.drawText(0, top, lineNumberArea_->width() - 2, 0,
+            // The rect height must be at least one line box — an empty
+            // (height 0) rect makes QPainter skip drawing the text, which
+            // is why the gutter showed but the numbers did not.
+            painter.drawText(0, top, lineNumberArea_->width() - 2,
+                             fontMetrics().height(),
                              Qt::AlignRight | Qt::AlignVCenter, number);
 
             // Diagnostic marker on the left edge of the gutter.
