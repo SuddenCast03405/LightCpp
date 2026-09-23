@@ -1,14 +1,18 @@
-// FileExplorer — file-tree panel.
+// FileExplorer — file-tree panel (in-layout widget, not a dock).
 
 #include "LightCpp/App/FileExplorer.hpp"
 
+#include <QFont>
 #include <QHeaderView>
+#include <QLabel>
 #include <QTreeView>
+#include <QVBoxLayout>
 
 FileExplorer::FileExplorer(QWidget* parent)
-    : QDockWidget(tr("Explorer"), parent)
+    : QWidget(parent)
     , model_(new QFileSystemModel(this))
     , tree_(new QTreeView(this))
+    , header_(new QLabel(tr("EXPLORER"), this))
 {
     model_->setRootPath(QString());
     model_->setFilter(QDir::AllDirs | QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
@@ -26,8 +30,21 @@ FileExplorer::FileExplorer(QWidget* parent)
     // Narrow the name column.
     tree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
 
-    setWidget(tree_);
-    setObjectName("FileExplorer");
+    // A dock used to provide the caption bar; a plain widget needs its own
+    // section header so the panel still reads as a titled area.
+    QFont headerFont = header_->font();
+    headerFont.setBold(true);
+    headerFont.setPointSizeF(headerFont.pointSizeF() * 0.9);
+    header_->setFont(headerFont);
+    header_->setContentsMargins(6, 4, 6, 4);
+
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    layout->addWidget(header_);
+    layout->addWidget(tree_, 1);
+
+    setObjectName(QStringLiteral("FileExplorer"));
 
     connect(tree_, &QTreeView::doubleClicked,
             this, &FileExplorer::onDoubleClicked);

@@ -28,6 +28,7 @@
 #include <QPair>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QSplitter>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyle>
@@ -131,18 +132,39 @@ MainWindow::MainWindow(QWidget* parent)
     setWindowTitle(QStringLiteral("LightC++"));
     setWindowIcon(QIcon::fromTheme(QStringLiteral("accessories-text-editor")));
 
-    // --- central tab widget ---
+    // --- central widget: nested splitters ---------------------------------
+    // The explorer and the output panel used to be QDockWidgets, which could
+    // be dragged out into separate floating windows. They are plain widgets
+    // now, arranged so the shell is a single fixed layout:
+    //   +---------------------------+
+    //   | Explorer | Editors        |   <- horizontal splitter
+    //   +---------------------------+
+    //   | Output                    |   <- vertical splitter
+    //   +---------------------------+
     tabWidget_->setTabsClosable(true);
     tabWidget_->setMovable(true);
     tabWidget_->setDocumentMode(true);
-    setCentralWidget(tabWidget_);
 
-    // --- docks ---
-    addDockWidget(Qt::LeftDockWidgetArea, fileExplorer_);
-    addDockWidget(Qt::BottomDockWidgetArea, outputPanel_);
-    fileExplorer_->setMinimumWidth(200);
-    fileExplorer_->setMaximumWidth(400);
-    outputPanel_->setMaximumHeight(200);
+    auto* mainSplitter = new QSplitter(Qt::Horizontal, this);
+    mainSplitter->setChildrenCollapsible(false);  // panels can't be dragged shut
+    mainSplitter->addWidget(fileExplorer_);
+    mainSplitter->addWidget(tabWidget_);
+    mainSplitter->setStretchFactor(0, 0);
+    mainSplitter->setStretchFactor(1, 1);
+    mainSplitter->setSizes({260, 1020});
+
+    auto* outerSplitter = new QSplitter(Qt::Vertical, this);
+    outerSplitter->setChildrenCollapsible(false);
+    outerSplitter->addWidget(mainSplitter);
+    outerSplitter->addWidget(outputPanel_);
+    outerSplitter->setStretchFactor(0, 1);
+    outerSplitter->setStretchFactor(1, 0);
+    outerSplitter->setSizes({600, 190});
+
+    fileExplorer_->setMinimumWidth(160);
+    outputPanel_->setMinimumHeight(80);
+
+    setCentralWidget(outerSplitter);
 
     createActions();
     createMenuBar();
@@ -318,6 +340,22 @@ void MainWindow::createActions()
     actExit_->setShortcut(QKeySequence::Quit);
     connect(actExit_, &QAction::triggered, this, &QWidget::close);
 
+    // Panel visibility. The panels are part of the window layout, so these
+    // simply show/hide them — no docking, no floating windows.
+    actToggleExplorer_ = new QAction(tr("&Explorer Panel"), this);
+    actToggleExplorer_->setCheckable(true);
+    actToggleExplorer_->setChecked(true);
+    actToggleExplorer_->setShortcut(QKeySequence(QStringLiteral("Ctrl+B")));
+    connect(actToggleExplorer_, &QAction::toggled,
+            fileExplorer_, &QWidget::setVisible);
+
+    actToggleOutput_ = new QAction(tr("&Output Panel"), this);
+    actToggleOutput_->setCheckable(true);
+    actToggleOutput_->setChecked(true);
+    actToggleOutput_->setShortcut(QKeySequence(QStringLiteral("Ctrl+J")));
+    connect(actToggleOutput_, &QAction::toggled,
+            outputPanel_, &QWidget::setVisible);
+
     actSyntaxCheck_ = new QAction(tr("&Syntax Check"), this);
     actSyntaxCheck_->setCheckable(true);
     actSyntaxCheck_->setStatusTip(tr("Run clangd in the background and underline "
@@ -372,8 +410,8 @@ void MainWindow::createMenuBar()
     toolchainMenu->addAction(actToolchainClang_);
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
-    viewMenu->addAction(fileExplorer_->toggleViewAction());
-    viewMenu->addAction(outputPanel_->toggleViewAction());
+    viewMenu->addAction(actToggleExplorer_);
+    viewMenu->addAction(actToggleOutput_);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
     helpMenu->addAction(actAbout_);

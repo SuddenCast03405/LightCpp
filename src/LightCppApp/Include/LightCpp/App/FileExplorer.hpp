@@ -1,13 +1,20 @@
 #pragma once
 
-#include <QDockWidget>
 #include <QFileSystemModel>
 #include <QTreeView>
+#include <QWidget>
 #include <QString>
 
+class QLabel;
+
 /// File-explorer panel: a filtered QTreeView backed by QFileSystemModel.
+///
+/// Deliberately a plain QWidget (not a QDockWidget): the panel lives inside
+/// the main window's splitter layout and can never be undocked into a
+/// floating window of its own.
+///
 /// Emits fileActivated() when the user double-clicks a file.
-class FileExplorer : public QDockWidget {
+class FileExplorer : public QWidget {
     Q_OBJECT
 public:
     explicit FileExplorer(QWidget* parent = nullptr);
@@ -21,6 +28,7 @@ signals:
 private:
     QFileSystemModel* model_;
     QTreeView* tree_;
+    QLabel* header_;
     QString rootPath_;
 
 private slots:

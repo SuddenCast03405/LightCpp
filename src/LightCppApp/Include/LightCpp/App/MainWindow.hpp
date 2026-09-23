@@ -22,8 +22,12 @@ namespace LightCpp::App {
 class LanguageServerClient;
 }
 
-/// Main IDE window — menu bar, toolbar, dockable panels, tabbed editors
-/// and a status bar showing encoding / cursor / language.
+/// Main IDE window — menu bar, toolbar, tabbed editors and a status bar
+/// showing encoding / cursor / language.
+///
+/// The explorer and output panels are plain widgets embedded in nested
+/// QSplitters, so the whole shell behaves as one layout: no panel can be
+/// torn off into a floating window.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
@@ -84,6 +88,8 @@ private:
     QAction* actExit_;
     QAction* actAbout_;
     QAction* actOpenFolder_;
+    QAction* actToggleExplorer_ = nullptr;  // show/hide the explorer panel
+    QAction* actToggleOutput_ = nullptr;    // show/hide the output panel
     QAction* actSyntaxCheck_;
     QAction* actCompile_ = nullptr;        // single-file compile (F7)
     QAction* actToolchainGcc_ = nullptr;   // mutually exclusive with Clang

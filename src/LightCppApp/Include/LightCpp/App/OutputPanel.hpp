@@ -1,11 +1,18 @@
 #pragma once
 
-#include <QDockWidget>
 #include <QPlainTextEdit>
+#include <QWidget>
 
-/// Build / output panel dock.  A thin wrapper around QPlainTextEdit
-/// providing appendOutput() and clearOutput().
-class OutputPanel : public QDockWidget {
+class QLabel;
+class QToolButton;
+
+/// Build / output panel.  A thin wrapper around QPlainTextEdit providing
+/// appendOutput() and clearOutput().
+///
+/// Deliberately a plain QWidget (not a QDockWidget): the panel lives inside
+/// the main window's splitter layout and can never be undocked into a
+/// floating window of its own.
+class OutputPanel : public QWidget {
     Q_OBJECT
 public:
     explicit OutputPanel(QWidget* parent = nullptr);
@@ -14,5 +21,7 @@ public:
     void clearOutput();
 
 private:
+    QLabel* header_;
+    QToolButton* clearButton_;
     QPlainTextEdit* text_;
 };
