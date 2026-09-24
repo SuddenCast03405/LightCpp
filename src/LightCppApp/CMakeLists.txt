@@ -14,6 +14,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/MsvcToolchain.hpp
     Include/LightCpp/App/OutputPanel.hpp
     Include/LightCpp/App/MainWindow.hpp
+    Include/LightCpp/App/SettingsDialog.hpp
     Include/LightCpp/App/ToolchainHeaders.hpp
     Include/LightCpp/App/ToolchainPaths.hpp
     Source/BatchFormatter.cpp
@@ -28,6 +29,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/MsvcToolchain.cpp
     Source/OutputPanel.cpp
     Source/MainWindow.cpp
+    Source/SettingsDialog.cpp
 )
 
 add_executable(lightcpp ${LIGHTCPP_APP_SOURCES})

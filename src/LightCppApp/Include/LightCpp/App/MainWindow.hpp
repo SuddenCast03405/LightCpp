@@ -68,6 +68,9 @@ private slots:
     /// Re-read the configuration files from disk and re-apply everything
     /// that derives from them (Tools > Reload Settings).
     void onReloadSettings();
+    /// Open the settings dialog (Tools > Settings...). Accepted changes
+    /// trigger a full reload + re-apply, exactly like Reload Settings.
+    void onSettings();
     void onCompileCurrentFile();
     /// Compile the active file and, if the build succeeds, run the result.
     void onCompileAndRun();
@@ -187,6 +190,10 @@ private:
     /// (project root /config) and re-read + re-apply. Called when a folder
     /// or project is opened or closed.
     void syncSettingsOverlays();
+    /// The workspace's own config overlay directory — the open project's
+    /// root /config — or empty when there is nowhere to overlay. Shared by
+    /// syncSettingsOverlays() and the settings dialog.
+    [[nodiscard]] QString overlayConfigDirectory() const;
     /// true when `path` is above `limitMB` (0 = no limit).
     [[nodiscard]] bool fileExceeds(const QString& path, int limitMB) const;
     /// Log a disabled feature for an oversized file, once per file+feature.
@@ -314,6 +321,7 @@ private:
     QAction* actAbout_;
     QAction* actOpenFolder_;
     QAction* actReloadSettings_ = nullptr;  // re-read config/*.json
+    QAction* actSettings_ = nullptr;        // edit config/*.json in a dialog
     QAction* actOpenConfigDir_ = nullptr;   // open the config folder in Explorer
     QAction* actToggleExplorer_ = nullptr;  // show/hide the explorer panel
     QAction* actToggleOutput_ = nullptr;    // show/hide the output panel

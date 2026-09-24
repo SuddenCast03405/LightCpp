@@ -10,6 +10,7 @@
 #include "LightCpp/App/OutputPanel.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
+#include "LightCpp/App/SettingsDialog.hpp"
 #include "LightCpp/App/ToolchainPaths.hpp"
 
 #include "LightCpp/Text/Encoding.hpp"
@@ -25,6 +26,7 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDesktopServices>
+#include <QDialog>
 #include <QFileDialog>
 #include <QDir>
 #include <QDirIterator>
@@ -488,7 +490,14 @@ void MainWindow::createActions()
 
     // The build environment (compilers, debugger, clangd, ...) comes from the
     // settings' kits in config/*.json — there is no hard-coded GCC/Clang/MSVC
-    // menu any more. These two actions manage the configuration files instead.
+    // menu any more. These three actions manage the configuration files instead.
+    actSettings_ = new QAction(tr("&Settings..."), this);
+    actSettings_->setShortcut(QKeySequence::Preferences);
+    actSettings_->setStatusTip(
+        tr("Edit toolchains, kits, defaults and preferences (config/*.json)"));
+    connect(actSettings_, &QAction::triggered,
+            this, &MainWindow::onSettings);
+
     actReloadSettings_ = new QAction(tr("&Reload Settings"), this);
     actReloadSettings_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Alt+R")));
     actReloadSettings_->setStatusTip(
@@ -681,7 +690,10 @@ void MainWindow::createMenuBar()
     projectMenu->addSeparator();
     projectMenu->addAction(actCloseProject_);
 
-    auto* toolsMenu = menuBar()->addMenu(tr("&Tools"));    toolsMenu->addAction(actSyntaxCheck_);
+    auto* toolsMenu = menuBar()->addMenu(tr("&Tools"));
+    toolsMenu->addAction(actSettings_);
+    toolsMenu->addSeparator();
+    toolsMenu->addAction(actSyntaxCheck_);
     toolsMenu->addAction(actReloadSettings_);
     toolsMenu->addAction(actOpenConfigDir_);
     toolsMenu->addSeparator();
@@ -3107,14 +3119,31 @@ void MainWindow::onReloadSettings()
     }
 }
 
+void MainWindow::onSettings()
+{
+    LightCpp::App::SettingsDialog dialog(this);
+    dialog.setBaseDirectory(
+        LightCpp::Settings::SettingsStore::baseConfigDirectory());
+    const QString overlay = overlayConfigDirectory();
+    if (!overlay.isEmpty()) {
+        dialog.setOverlayDirectory(overlay);
+    }
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    // The dialog wrote config files: re-read + re-apply, which is exactly
+    // what Reload Settings does (and reports the same way).
+    onReloadSettings();
+}
+
 void MainWindow::syncSettingsOverlays()
 {
     // The workspace's own config directory overlays the executable's —
     // VSCode-style folder settings, but keyed the same way as the base.
+    const QString overlay = overlayConfigDirectory();
     QStringList overlayDirs;
-    const QString root = projectRootDirectory();
-    if (!root.isEmpty()) {
-        overlayDirs.append(QDir(root).filePath(QStringLiteral("config")));
+    if (!overlay.isEmpty()) {
+        overlayDirs.append(overlay);
     }
     settings_->setOverlayDirectories(overlayDirs);
     settings_->reload();
@@ -3128,6 +3157,15 @@ void MainWindow::syncSettingsOverlays()
     for (const QString& error : settings_->lastErrors()) {
         outputPanel_->appendBuildOutput(tr("Settings: %1").arg(error));
     }
+}
+
+QString MainWindow::overlayConfigDirectory() const
+{
+    const QString root = projectRootDirectory();
+    if (root.isEmpty()) {
+        return {};
+    }
+    return QDir(root).filePath(QStringLiteral("config"));
 }
 
 bool MainWindow::fileExceeds(const QString& path, int limitMB) const
