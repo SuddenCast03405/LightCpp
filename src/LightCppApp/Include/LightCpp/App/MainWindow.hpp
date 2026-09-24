@@ -10,7 +10,11 @@
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/Project/BuildConfiguration.hpp"
+#include "LightCpp/Project/CMakeProject.hpp"
+#include "LightCpp/Project/DevCppProject.hpp"
 #include "LightCpp/Text/Encoding.hpp"
+
+#include <optional>
 
 class CodeEditor;
 class FileExplorer;
@@ -72,6 +76,18 @@ private slots:
     void onFormatDocument();
     void onFormatted(int requestId, const QString& text);
     void onFormatFailed(int requestId, const QString& message);
+    /// Ask for a project file (CMakeLists.txt or a Dev-C++ .dev) and open it.
+    void onOpenProject();
+    /// Prepare the build tree. CMake needs this once per configuration; a
+    /// .dev project is configured by the file itself, so it only reports.
+    void onConfigureProject();
+    void onBuildProject();
+    void onRunProject();
+    void onCloseProject();
+    /// Load a project from an explicit path — the body of
+    /// File > Open Project..., separated out so it takes a path rather than
+    /// going through a dialog every time.
+    void openProjectFile(const QString& path);
 
 private:
     void createActions();
@@ -110,6 +126,34 @@ private:
     [[nodiscard]] static bool isCppLikeFile(const QString& path);
     /// LSP languageId for a path ("cpp", "c", ...).
     [[nodiscard]] static QString languageIdForFile(const QString& path);
+
+    // --- open project -----------------------------------------------------
+    /// One external command in a project build. A build is a short queue of
+    /// these (configure, then build) run one after another, because an early
+    /// step failing makes the later ones meaningless.
+    struct ProjectStep {
+        QString program;
+        QStringList arguments;
+        QString workingDirectory;
+        QString label;  // echoed into the Build Log before the step runs
+    };
+
+    /// Which kind of project is open, if any.
+    enum class ProjectKind { None, CMake, DevCpp };
+
+    /// The steps that make up "build the open project" for the selected
+    /// configuration, or an empty list with a reason in the Build Log.
+    [[nodiscard]] QList<ProjectStep> projectBuildSteps();
+    /// Start the queue produced by projectBuildSteps().
+    void startProjectBuildSteps();
+    /// Run the next queued step, or finish when the queue is empty.
+    void runNextProjectStep();
+    /// Tell the user the build ended and refresh what can be run.
+    void finishProjectBuild(bool succeeded, int exitCode);
+    /// Enable/disable the project actions for the current state.
+    void updateProjectActions();
+    /// Name for the window title and log lines.
+    [[nodiscard]] QString projectDisplayName() const;
 
     /// Source the compiler reads and binary it produces for one editor.
     /// Build and run share this, so "run" always looks exactly where the
@@ -161,6 +205,25 @@ private:
     QAction* actFoldAll_ = nullptr;
     QAction* actUnfoldAll_ = nullptr;
     QAction* actFormat_ = nullptr;         // clang-format the whole file
+    QAction* actOpenProject_ = nullptr;    // File > Open Project...
+    QAction* actConfigureProject_ = nullptr;
+    QAction* actBuildProject_ = nullptr;
+    QAction* actRunProject_ = nullptr;
+    QAction* actCloseProject_ = nullptr;
+
+    // --- open project state ---
+    ProjectKind projectKind_ = ProjectKind::None;
+    std::optional<LightCpp::Project::CMakeProject> cmakeProject_;
+    std::optional<LightCpp::Project::DevCppProject> devProject_;
+    /// The file the user opened; kept for the window title even when the
+    /// project model itself only needs the directory.
+    QString projectPath_;
+    /// Process running the current project build step; lazily created.
+    QProcess* projectProcess_ = nullptr;
+    /// Steps still to run. The one at the front is in flight.
+    QList<ProjectStep> projectSteps_;
+    /// Binary the last project build produced, i.e. what "Run Project" starts.
+    QString lastProjectExe_;
 
     /// MSVC located once at start-up. cl.exe cannot be launched bare — it needs
     /// INCLUDE/LIB pointing at both its own toolset and the Windows SDK, which

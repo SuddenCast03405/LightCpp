@@ -299,6 +299,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     resize(1280, 800);
     onNewFile();  // start with an empty editor
+    updateProjectActions();  // nothing is open yet, so most of Project is greyed out
 
     // Locate MSVC once. cl.exe needs INCLUDE/LIB built by hand, so this walks
     // the installed toolsets and the Windows SDK up front rather than failing
@@ -521,6 +522,37 @@ void MainWindow::createActions()
            "A .clang-format in the project wins; %1 is the fallback style.")
             .arg(QString::fromLatin1(LightCpp::App::CodeFormatter::kFallbackStyle)));
     connect(actFormat_, &QAction::triggered, this, &MainWindow::onFormatDocument);
+
+    // --- project actions -------------------------------------------------
+    actOpenProject_ = new QAction(tr("Open Pro&ject..."), this);
+    actOpenProject_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+O")));
+    actOpenProject_->setStatusTip(
+        tr("Open a CMakeLists.txt or a Dev-C++ .dev project"));
+    connect(actOpenProject_, &QAction::triggered, this, &MainWindow::onOpenProject);
+
+    actConfigureProject_ = new QAction(tr("&Configure Project"), this);
+    actConfigureProject_->setStatusTip(
+        tr("Create the build tree for the selected configuration with CMake"));
+    connect(actConfigureProject_, &QAction::triggered, this,
+            &MainWindow::onConfigureProject);
+
+    actBuildProject_ = new QAction(QIcon::fromTheme(QStringLiteral("run-build")),
+                                   tr("&Build Project"), this);
+    actBuildProject_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+B")));
+    actBuildProject_->setStatusTip(
+        tr("Configure if needed, then build the whole project"));
+    connect(actBuildProject_, &QAction::triggered, this, &MainWindow::onBuildProject);
+
+    actRunProject_ = new QAction(QIcon::fromTheme(QStringLiteral("media-playback-start")),
+                                 tr("Run Pro&ject"), this);
+    actRunProject_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+F5")));
+    actRunProject_->setStatusTip(
+        tr("Run the executable the last project build produced"));
+    connect(actRunProject_, &QAction::triggered, this, &MainWindow::onRunProject);
+
+    actCloseProject_ = new QAction(tr("&Close Project"), this);
+    actCloseProject_->setStatusTip(tr("Forget the open project and its build tree"));
+    connect(actCloseProject_, &QAction::triggered, this, &MainWindow::onCloseProject);
 }
 
 void MainWindow::createMenuBar()
@@ -545,8 +577,16 @@ void MainWindow::createMenuBar()
     foldingMenu->addAction(actFoldAll_);
     foldingMenu->addAction(actUnfoldAll_);
 
-    auto* toolsMenu = menuBar()->addMenu(tr("&Tools"));
-    toolsMenu->addAction(actSyntaxCheck_);
+    auto* projectMenu = menuBar()->addMenu(tr("&Project"));
+    projectMenu->addAction(actOpenProject_);
+    projectMenu->addSeparator();
+    projectMenu->addAction(actConfigureProject_);
+    projectMenu->addAction(actBuildProject_);
+    projectMenu->addAction(actRunProject_);
+    projectMenu->addSeparator();
+    projectMenu->addAction(actCloseProject_);
+
+    auto* toolsMenu = menuBar()->addMenu(tr("&Tools"));    toolsMenu->addAction(actSyntaxCheck_);
     toolsMenu->addSeparator();
     toolsMenu->addAction(actCompile_);
     toolsMenu->addAction(actCompileRun_);
@@ -580,6 +620,9 @@ void MainWindow::createToolBar()
     tb->addAction(actCompile_);
     tb->addAction(actCompileRun_);
     tb->addAction(actRun_);
+    tb->addSeparator();
+    tb->addAction(actBuildProject_);
+    tb->addAction(actRunProject_);
 
     // Everything past the spacer goes to the far right, which is where a
     // build configuration belongs: it is a setting, not an action.
@@ -1215,6 +1258,339 @@ void MainWindow::onFormatFailed(int requestId, const QString& message)
     outputPanel_->showChannel(OutputPanel::ChannelBuild);
     outputPanel_->appendBuildOutput(tr("Formatting failed: %1").arg(message));
     statusBar()->showMessage(tr("Formatting failed — see the Build Log"), 6000);
+}
+
+// ---------------------------------------------------------------------------
+// Project (CMake / Dev-C++)
+// ---------------------------------------------------------------------------
+void MainWindow::onOpenProject()
+{
+    // One dialog for both formats. Which one it is can be told from the name,
+    // and asking the user to say it would be asking them to make a distinction
+    // the file already makes.
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("Open Project"), QString(),
+        tr("Projects (CMakeLists.txt *.dev);;CMake (CMakeLists.txt);;"
+           "Dev-C++ (*.dev);;All files (*)"));
+    if (!path.isEmpty()) {
+        openProjectFile(path);
+    }
+}
+
+void MainWindow::onCloseProject()
+{
+    if (projectKind_ == ProjectKind::None) {
+        return;
+    }
+    projectKind_ = ProjectKind::None;
+    cmakeProject_.reset();
+    devProject_.reset();
+    projectPath_.clear();
+    lastProjectExe_.clear();
+    setWindowTitle(QStringLiteral("LightC++"));
+    updateProjectActions();
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+    outputPanel_->appendBuildOutput(tr("Project closed."));
+}
+
+void MainWindow::onConfigureProject()
+{
+    if (projectKind_ != ProjectKind::CMake || !cmakeProject_.has_value()) {
+        outputPanel_->showChannel(OutputPanel::ChannelBuild);
+        outputPanel_->appendBuildOutput(
+            tr("Only a CMake project needs configuring — a .dev project is "
+               "configured by the file itself."));
+        return;
+    }
+    const LightCpp::Project::BuildConfiguration config = buildConfiguration();
+    const LightCpp::Project::CMakeProject& project = *cmakeProject_;
+    projectSteps_ = {ProjectStep{
+        QStringLiteral("cmake"),
+        LightCpp::Project::configureArguments(project, config),
+        LightCpp::Project::buildDirectory(project, config),
+        tr("Configuring %1 [%2]").arg(project.sourceDir,
+                                      LightCpp::Project::toString(config)),
+    }};
+    startProjectBuildSteps();
+}
+
+void MainWindow::onBuildProject()
+{
+    projectSteps_ = projectBuildSteps();
+    if (!projectSteps_.isEmpty()) {
+        startProjectBuildSteps();
+    }
+}
+
+void MainWindow::onRunProject()
+{
+    if (projectKind_ == ProjectKind::None) {
+        outputPanel_->showChannel(OutputPanel::ChannelBuild);
+        outputPanel_->appendBuildOutput(tr("No project is open."));
+        return;
+    }
+    // Ask the build tree rather than trusting a remembered path: the user may
+    // have built outside the IDE, or switched configuration in between.
+    if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
+        const QString tree = LightCpp::Project::buildDirectory(*cmakeProject_,
+                                                               buildConfiguration());
+        if (const QString newest = LightCpp::Project::newestExecutable(tree);
+            !newest.isEmpty()) {
+            lastProjectExe_ = newest;
+        }
+    }
+    if (lastProjectExe_.isEmpty() || !QFileInfo::exists(lastProjectExe_)) {
+        outputPanel_->showChannel(OutputPanel::ChannelBuild);
+        outputPanel_->appendBuildOutput(
+            tr("Nothing to run yet — build the project first (%1).")
+                .arg(actBuildProject_->shortcut().toString()));
+        return;
+    }
+    startProgram(lastProjectExe_, QFileInfo(lastProjectExe_).absolutePath());
+}
+
+void MainWindow::openProjectFile(const QString& path)
+{
+    const QFileInfo info(path);
+    if (!info.exists() || !info.isFile()) {
+        outputPanel_->showChannel(OutputPanel::ChannelBuild);
+        outputPanel_->appendBuildOutput(tr("Cannot open project: %1 does not exist.").arg(path));
+        return;
+    }
+
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+
+    if (info.fileName().compare(QStringLiteral("CMakeLists.txt"),
+                                Qt::CaseInsensitive) == 0) {
+        auto project = LightCpp::Project::CMakeProject{info.absolutePath()};
+        cmakeProject_ = project;
+        devProject_.reset();
+        projectKind_ = ProjectKind::CMake;
+        projectPath_ = info.absoluteFilePath();
+        lastProjectExe_.clear();
+        outputPanel_->appendBuildOutput(
+            tr("CMake project opened: %1").arg(project.sourceDir));
+        outputPanel_->appendBuildOutput(
+            tr("Build trees: %1/<Debug|Release> (selected by the toolbar)")
+                .arg(LightCpp::Project::buildDirectory(project, buildConfiguration())));
+    } else if (info.suffix().compare(QStringLiteral("dev"), Qt::CaseInsensitive) == 0) {
+        QString error;
+        auto project = LightCpp::Project::loadDevProject(info.absoluteFilePath(), &error);
+        if (!project.has_value()) {
+            outputPanel_->appendBuildOutput(
+                tr("Cannot read %1: %2").arg(path, error));
+            return;
+        }
+        projectPath_ = info.absoluteFilePath();
+        lastProjectExe_ = project->outputPath();
+        devProject_ = project;
+        cmakeProject_.reset();
+        projectKind_ = ProjectKind::DevCpp;
+        outputPanel_->appendBuildOutput(
+            tr("Dev-C++ project opened: %1 [%2, %3 unit(s)]")
+                .arg(project->name.isEmpty() ? info.fileName() : project->name,
+                     project->targetLabel())
+                .arg(project->units.size()));
+        outputPanel_->appendBuildOutput(
+            tr("Output: %1").arg(lastProjectExe_));
+    } else {
+        outputPanel_->appendBuildOutput(
+            tr("Unrecognised project file: %1\n"
+               "Open a CMakeLists.txt or a Dev-C++ .dev file.")
+                .arg(info.fileName()));
+        return;
+    }
+
+    setWindowTitle(QStringLiteral("LightC++ — %1").arg(projectDisplayName()));
+    updateProjectActions();
+}
+
+QString MainWindow::projectDisplayName() const
+{
+    if (projectPath_.isEmpty()) {
+        return {};
+    }
+    const QFileInfo info(projectPath_);
+    if (projectKind_ == ProjectKind::CMake) {
+        return info.absolutePath();
+    }
+    if (devProject_.has_value() && !devProject_->name.isEmpty()) {
+        return devProject_->name;
+    }
+    return info.fileName();
+}
+
+QList<MainWindow::ProjectStep> MainWindow::projectBuildSteps()
+{
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+
+    const LightCpp::Project::BuildConfiguration config = buildConfiguration();
+
+    if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
+        const LightCpp::Project::CMakeProject& project = *cmakeProject_;
+        QList<ProjectStep> steps;
+        // Configure only when this configuration's tree does not exist yet.
+        // Re-running it would overwrite the cache the user may have edited.
+        if (!LightCpp::Project::isConfigured(project, config)) {
+            steps.append(ProjectStep{
+                QStringLiteral("cmake"),
+                LightCpp::Project::configureArguments(project, config),
+                LightCpp::Project::buildDirectory(project, config),
+                tr("Configuring %1 [%2]").arg(project.sourceDir,
+                                              LightCpp::Project::toString(config)),
+            });
+        }
+        steps.append(ProjectStep{
+            QStringLiteral("cmake"),
+            LightCpp::Project::buildArguments(project, config),
+            project.sourceDir,
+            tr("Building [%1]").arg(LightCpp::Project::toString(config)),
+        });
+        return steps;
+    }
+
+    if (projectKind_ == ProjectKind::DevCpp && devProject_.has_value()) {
+        const LightCpp::Project::DevCppProject& project = *devProject_;
+        if (project.useCustomMakefile) {
+            const QString make = QDir(kMingwBin).filePath(QStringLiteral("mingw32-make.exe"));
+            return {ProjectStep{
+                make, LightCpp::Project::makeArguments(project), project.projectDir,
+                tr("Running the project's own makefile: %1")
+                    .arg(project.customMakefile)}};
+        }
+        return {ProjectStep{
+            QDir(kMingwBin).filePath(QStringLiteral("g++.exe")),
+            LightCpp::Project::gnuBuildArguments(project, config,
+                                                 QDir(kMingwBin).filePath(
+                                                     QStringLiteral("g++.exe")),
+                                                 project.outputPath()),
+            project.projectDir,
+            // The number handed to the compiler, not the number of rows in the
+            // file: units can be switched off, and the log should describe what
+            // was actually built.
+            tr("Compiling %1 unit(s) [%2]")
+                .arg(project.buildUnitPaths().size())
+                .arg(LightCpp::Project::toString(config)),
+        }};
+    }
+
+    outputPanel_->appendBuildOutput(tr("No project is open."));
+    return {};
+}
+
+void MainWindow::startProjectBuildSteps()
+{
+    if (projectProcess_ != nullptr
+        && projectProcess_->state() != QProcess::NotRunning) {
+        outputPanel_->appendBuildOutput(tr("A project build is already running."));
+        projectSteps_.clear();
+        return;
+    }
+    if (projectSteps_.isEmpty()) {
+        return;
+    }
+
+    if (projectProcess_ == nullptr) {
+        projectProcess_ = new QProcess(this);
+        // One stream: CMake writes warnings to stderr and progress to stdout,
+        // and interleaving them in the order they happened reads better than
+        // two separate halves of the log.
+        projectProcess_->setProcessChannelMode(QProcess::MergedChannels);
+        connect(projectProcess_, &QProcess::readyReadStandardOutput, this, [this] {
+            if (projectProcess_ == nullptr) return;
+            outputPanel_->appendBuildOutput(
+                QString::fromLocal8Bit(projectProcess_->readAllStandardOutput()));
+        });
+        connect(projectProcess_,
+                QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, [this](int code, QProcess::ExitStatus status) {
+            if (projectProcess_ == nullptr) return;
+            if (status != QProcess::NormalExit || code != 0) {
+                finishProjectBuild(false, code);
+                return;
+            }
+            runNextProjectStep();  // next step, or done
+        });
+        connect(projectProcess_, &QProcess::errorOccurred, this, [this] {
+            if (projectProcess_ == nullptr) return;
+            if (projectProcess_->error() != QProcess::FailedToStart) {
+                return;
+            }
+            outputPanel_->appendBuildOutput(
+                tr("Cannot start %1. Is the toolchain installed and on PATH?")
+                    .arg(projectProcess_->program()));
+            finishProjectBuild(false, -1);
+        });
+    }
+    runNextProjectStep();
+}
+
+void MainWindow::runNextProjectStep()
+{
+    if (projectSteps_.isEmpty()) {
+        finishProjectBuild(true, 0);
+        return;
+    }
+    const ProjectStep step = projectSteps_.takeFirst();
+
+    QDir().mkpath(step.workingDirectory);
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+    outputPanel_->appendBuildOutput(
+        tr("--- %1 ---").arg(step.label.isEmpty() ? step.program : step.label));
+    outputPanel_->appendBuildOutput(
+        QStringLiteral("> %1 %2").arg(step.program, step.arguments.join(QLatin1Char(' '))));
+
+    // The toolchain's own bin directory has to be on PATH: cmake looks for the
+    // compiler through it, and the binaries it produces need the runtime DLLs
+    // that live there too.
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("PATH"),
+               kMingwBin + QDir::listSeparator() + env.value(QStringLiteral("PATH")));
+    projectProcess_->setProcessEnvironment(env);
+    projectProcess_->setWorkingDirectory(step.workingDirectory);
+    projectProcess_->start(step.program, step.arguments);
+}
+
+void MainWindow::finishProjectBuild(bool succeeded, int exitCode)
+{
+    projectSteps_.clear();
+    if (succeeded) {
+        outputPanel_->appendBuildOutput(tr("--- Project build succeeded ---"));
+        // Resolve what to run. The build tree is the authority: the IDE may not
+        // have been the one that produced the binary.
+        if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
+            lastProjectExe_ = LightCpp::Project::newestExecutable(
+                LightCpp::Project::buildDirectory(*cmakeProject_, buildConfiguration()));
+        } else if (devProject_.has_value()) {
+            lastProjectExe_ = devProject_->outputPath();
+        }
+        if (!lastProjectExe_.isEmpty()) {
+            outputPanel_->appendBuildOutput(tr("Run Project will start: %1").arg(lastProjectExe_));
+        }
+    } else {
+        outputPanel_->appendBuildOutput(
+            tr("--- Project build failed (exit %1) ---").arg(exitCode));
+    }
+    updateProjectActions();
+}
+
+void MainWindow::updateProjectActions()
+{
+    const bool hasProject = (projectKind_ != ProjectKind::None);
+    const bool hasRunTarget = hasProject && !lastProjectExe_.isEmpty()
+                              && QFileInfo::exists(lastProjectExe_);
+    if (actConfigureProject_ != nullptr) {
+        actConfigureProject_->setEnabled(projectKind_ == ProjectKind::CMake);
+    }
+    if (actBuildProject_ != nullptr) {
+        actBuildProject_->setEnabled(hasProject);
+    }
+    if (actRunProject_ != nullptr) {
+        actRunProject_->setEnabled(hasRunTarget);
+    }
+    if (actCloseProject_ != nullptr) {
+        actCloseProject_->setEnabled(hasProject);
+    }
 }
 
 void MainWindow::onLintTimerTimeout()
