@@ -19,11 +19,14 @@ LightC++ IDE；显示名 `LightC++`，代码标识 `LightCpp`，二进制 `light
   均 `setChildrenCollapsible(false)`；View 菜单用自建 checkable QAction（Explorer Ctrl+B / Output Ctrl+J）。
   目的：面板不能被拖成独立浮动窗体。
 - `CodeEditor`：QPlainTextEdit + 行号栏 + 当前行高亮 + `CppSyntaxHighlighter`，配色用 `palette()` 动态适配。
+  - **制表宽度 = 恰好 4 个等宽字符**：构造里 `setTabStopDistance(QFontMetricsF(font).horizontalAdvance(' ') * 4.0)`
+    （本机 32px）。Qt 默认 80px ≈ 10 字符宽，而且状态栏列号换算 `col += tabs*3` 一直假设 tab=4 —— 现在两者终于一致。
 - `FileExplorer` / `OutputPanel`：QWidget 子类，各带一行加粗小标题（EXPLORER / OUTPUT）替代 dock 标题栏。
-- **OutputPanel 三通道**：`ChannelServer=0` Clangd Log / `ChannelBuild=1` Build Log（默认）/ `ChannelProblems=2` Problems，
-  缓冲互不混淆。API `appendServerLog()` / `appendBuildOutput()` / `setProblems()` / `showChannel()` / `clearOutput()`
-  ——**`appendOutput()` 已删除**。combo 信号 `currentIndexChanged(int)` 须 lambda 转 Channel（int 不隐式转非作用域枚举）。
-  Problems 下拉项带实时计数；空时显示不可选的 "No problems detected."。
+- **OutputPanel 四通道**：`ChannelServer=0` Clangd Log / `ChannelBuild=1` Build Log（默认）/ `ChannelProgram=2`
+  Program Output（程序 stdout/stderr + `--- Running:`/`exited` 横幅）/ `ChannelProblems=3` Problems，缓冲互不混淆。
+  API `appendServerLog()` / `appendBuildOutput()` / `appendProgramOutput()` / `setProblems()` / `showChannel()` /
+  `clearOutput()`——**`appendOutput()` 已删除**。combo 信号 `currentIndexChanged(int)` 须 lambda 转 Channel
+  （int 不隐式转非作用域枚举）。Problems 下拉项带实时计数；空时显示不可选的 "No problems detected."。
 - **Problems**：按文件分组 QTreeWidget（父=文件名，子=`severity: msg [code]` + `Ln x, Col y`）；
   行 data UserRole=路径 / +1=行(0基) / +2=列(0基)；单击 emit `problemActivated(path,line,col)`。
   `MainWindow::onProblemActivated()` 先按 `lintPath()` 匹配 tab（未保存缓冲是虚拟路径，不能从磁盘重开）再 `gotoLocation()`。
@@ -65,8 +68,9 @@ LightC++ IDE；显示名 `LightC++`，代码标识 `LightCpp`，二进制 `light
 - **build 与 run 共用 `MainWindow::BuildTarget resolveBuildTarget(editor)`**，exe 恒在源码同目录同名；
   Untitled 源码写 `%TEMP%/lightcpp-compile/<tabstem>.cpp`。改路径规则只能改这个函数，否则"运行"找不到"编译"产物。
 - 编译 args `-Wall -Wextra -g <src> -o <exe>`；Compile & Run 在 `finished` 里 rc==0 才 `startProgram()`（`runAfterBuild_`）。
-- Run 在 exe 不存在时弹 QMessageBox 询问是否立即编译；exe 比源码旧只提醒仍照跑。
-- `compiler_` / `runner_` 懒创建复用，MergedChannels → Build Log；两者 PATH 都前置 `kMingwBin`。
+- Run 在 exe 不存在时弹 QMessageBox 询问是否立即编译；**exe 比源码旧也弹对话框**（不再只打一行提醒）。
+- **输出分流**：编译器输出 → Build Log；**程序输出（含 `--- Running:` / `--- Program exited ---` 横幅）→ Program Output**。
+  `compiler_` / `runner_` 懒创建复用，MergedChannels；两者 PATH 都前置 `kMingwBin`。
 - 被运行程序无终端：**必须在 `runner_->started()` 里 `closeWriteChannel()`** 给 stdin EOF，否则 scanf/getline 永久阻塞
   （`start()` 之后立刻 close 无效，那时通道未建立）。
 

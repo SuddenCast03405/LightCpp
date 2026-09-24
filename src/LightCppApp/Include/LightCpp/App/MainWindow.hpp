@@ -54,8 +54,9 @@ private slots:
     void onCompileCurrentFile();
     /// Compile the active file and, if the build succeeds, run the result.
     void onCompileAndRun();
-    /// Run the binary produced by an earlier build. Asks whether to build
-    /// first when nothing has been compiled yet.
+    /// Run the binary produced by an earlier build. Prompts to build first
+    /// when nothing has been compiled yet, or when the binary is older than
+    /// its source.
     void onRunCurrentFile();
     /// Kill a program started by onRunCurrentFile() / onCompileAndRun().
     void onStopProgram();
@@ -94,7 +95,7 @@ private:
         bool tempSource = false;  // true when srcPath lives in %TEMP%
     };
     [[nodiscard]] BuildTarget resolveBuildTarget(CodeEditor* editor) const;
-    /// Launch `exePath` with its output captured into the Build Log.
+    /// Launch `exePath`, capturing its output into the Program Output channel.
     void startProgram(const QString& exePath, const QString& workDir);
     /// Enable/disable the build and run actions for the current states.
     void updateRunActionStates();

@@ -23,12 +23,14 @@ struct ProblemEntry {
     QString code;
 };
 
-/// Output area.  Three switchable channels behind one drop-down:
+/// Output area.  Four switchable channels behind one drop-down:
 ///
-///   Clangd Log  — the language server's own log (stderr + window/logMessage)
-///   Build Log   — compiler output and IDE file operations
-///   Problems    — errors/warnings pushed by clangd, as a clickable list
-///                 that jumps to the offending source location
+///   Clangd Log      — the language server's own log (stderr + window/logMessage)
+///   Build Log       — compiler output and IDE file operations
+///   Program Output  — the run console: what the built program prints, plus the
+///                     run banner and its exit status
+///   Problems        — errors/warnings pushed by clangd, as a clickable list
+///                     that jumps to the offending source location
 ///
 /// Deliberately a plain QWidget (not a QDockWidget): the panel lives inside
 /// the main window's splitter layout and can never be undocked into a
@@ -38,9 +40,10 @@ class OutputPanel : public QWidget {
 public:
     /// Channel indices, matching the drop-down order.
     enum Channel {
-        ChannelServer = 0,    // clangd log
-        ChannelBuild = 1,     // compiler / IDE log
-        ChannelProblems = 2,  // diagnostics list
+        ChannelServer = 0,   // clangd log
+        ChannelBuild = 1,    // compiler / IDE log
+        ChannelProgram = 2,  // the program's own stdout/stderr
+        ChannelProblems = 3, // diagnostics list
     };
 
     explicit OutputPanel(QWidget* parent = nullptr);
@@ -49,6 +52,8 @@ public:
     void appendServerLog(const QString& text);
     /// Append a line to the compiler / IDE log.
     void appendBuildOutput(const QString& text);
+    /// Append a line of output produced by the running program.
+    void appendProgramOutput(const QString& text);
     /// Replace the Problems list. An empty list shows "no problems".
     void setProblems(const QList<ProblemEntry>& problems);
 
@@ -75,5 +80,6 @@ private:
     QStackedWidget* stack_;
     QPlainTextEdit* serverLog_;
     QPlainTextEdit* buildLog_;
+    QPlainTextEdit* programOutput_;
     QTreeWidget* problems_;
 };

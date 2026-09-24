@@ -5,6 +5,7 @@
 #include "LightCpp/App/CppSyntaxHighlighter.hpp"
 
 #include <QApplication>
+#include <QFontMetrics>
 #include <QHash>
 #include <QHelpEvent>
 #include <QKeyEvent>
@@ -59,6 +60,12 @@ CodeEditor::CodeEditor(QWidget* parent)
     }
     font.setStyleHint(QFont::Monospace);
     setFont(font);
+
+    // A tab is exactly four monospace cells. Qt's own default (80px) works
+    // out to about 10.5 cells at this size, which is not what C++ code is
+    // normally indented with — and it makes a visual column stop line up with
+    // nothing. Measured from a space so it stays correct if the font changes.
+    setTabStopDistance(QFontMetricsF(font).horizontalAdvance(QLatin1Char(' ')) * 4.0);
 
     // Attach the C++ highlighter to the underlying document.
     highlighter_ = new CppSyntaxHighlighter(document());

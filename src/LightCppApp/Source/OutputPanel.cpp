@@ -1,4 +1,4 @@
-// OutputPanel — switchable output area (clangd log / build log / problems).
+// OutputPanel — switchable output area (clangd / build / program / problems).
 
 #include "LightCpp/App/OutputPanel.hpp"
 
@@ -26,7 +26,7 @@ constexpr int kRolePath = Qt::UserRole;
 constexpr int kRoleLine = Qt::UserRole + 1;
 constexpr int kRoleColumn = Qt::UserRole + 2;
 
-/// A read-only log view, shared by the two text channels.
+/// A read-only log view, shared by the text channels.
 QPlainTextEdit* makeLogView(QWidget* parent)
 {
     auto* view = new QPlainTextEdit(parent);
@@ -82,6 +82,7 @@ OutputPanel::OutputPanel(QWidget* parent)
     , stack_(new QStackedWidget(this))
     , serverLog_(makeLogView(this))
     , buildLog_(makeLogView(this))
+    , programOutput_(makeLogView(this))
     , problems_(new QTreeWidget(this))
 {
     // --- header row: title, channel drop-down, clear ----------------------
@@ -93,9 +94,10 @@ OutputPanel::OutputPanel(QWidget* parent)
 
     // The drop-down switches which view is on screen; each channel keeps its
     // own buffer, so switching never mixes clangd chatter into build output.
-    channelCombo_->addItem(tr("Clangd Log"));   // ChannelServer
-    channelCombo_->addItem(tr("Build Log"));    // ChannelBuild
-    channelCombo_->addItem(tr("Problems"));     // ChannelProblems
+    channelCombo_->addItem(tr("Clangd Log"));       // ChannelServer
+    channelCombo_->addItem(tr("Build Log"));        // ChannelBuild
+    channelCombo_->addItem(tr("Program Output"));   // ChannelProgram
+    channelCombo_->addItem(tr("Problems"));         // ChannelProblems
     channelCombo_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     channelCombo_->setToolTip(tr("Choose what the output area shows"));
     connect(channelCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -118,9 +120,11 @@ OutputPanel::OutputPanel(QWidget* parent)
     // --- stacked views ---------------------------------------------------
     serverLog_->setPlaceholderText(tr("No language server output yet."));
     buildLog_->setPlaceholderText(tr("No build output yet."));
-    stack_->addWidget(serverLog_);   // ChannelServer
-    stack_->addWidget(buildLog_);    // ChannelBuild
-    stack_->addWidget(problems_);    // ChannelProblems
+    programOutput_->setPlaceholderText(tr("No program output yet."));
+    stack_->addWidget(serverLog_);      // ChannelServer
+    stack_->addWidget(buildLog_);       // ChannelBuild
+    stack_->addWidget(programOutput_);  // ChannelProgram
+    stack_->addWidget(problems_);       // ChannelProblems
 
     problems_->setColumnCount(2);
     problems_->setHeaderLabels({tr("Problem"), tr("Location")});
@@ -170,6 +174,11 @@ void OutputPanel::appendBuildOutput(const QString& text)
     buildLog_->appendPlainText(text);
 }
 
+void OutputPanel::appendProgramOutput(const QString& text)
+{
+    programOutput_->appendPlainText(text);
+}
+
 void OutputPanel::showChannel(Channel channel)
 {
     const int index = int(channel);
@@ -186,9 +195,10 @@ void OutputPanel::showChannel(Channel channel)
 void OutputPanel::clearOutput()
 {
     switch (stack_->currentIndex()) {
-    case ChannelServer: serverLog_->clear(); break;
-    case ChannelBuild:  buildLog_->clear(); break;
-    default:            setProblems({}); break;
+    case ChannelServer:  serverLog_->clear(); break;
+    case ChannelBuild:   buildLog_->clear(); break;
+    case ChannelProgram: programOutput_->clear(); break;
+    default:             setProblems({}); break;
     }
 }
 

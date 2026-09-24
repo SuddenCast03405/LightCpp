@@ -1160,13 +1160,13 @@ void MainWindow::onRunCurrentFile()
 {
     CodeEditor* ed = currentEditor();
     if (ed == nullptr) {
-        outputPanel_->showChannel(OutputPanel::ChannelBuild);
-        outputPanel_->appendBuildOutput(tr("No active file to run."));
+        outputPanel_->showChannel(OutputPanel::ChannelProgram);
+        outputPanel_->appendProgramOutput(tr("No active file to run."));
         return;
     }
     const BuildTarget target = resolveBuildTarget(ed);
     const QString exePath = target.exePath;
-    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+    outputPanel_->showChannel(OutputPanel::ChannelProgram);
 
     if (!QFileInfo::exists(exePath)) {
         // Nothing has been built yet — offer to build it instead of just
@@ -1174,7 +1174,7 @@ void MainWindow::onRunCurrentFile()
         const QString label = target.tempSource
                 ? tabWidget_->tabText(tabWidget_->indexOf(ed))
                 : QFileInfo(exePath).fileName();
-        outputPanel_->appendBuildOutput(
+        outputPanel_->appendProgramOutput(
             tr("Nothing to run yet: %1 has not been compiled.").arg(exePath));
         const auto reply = QMessageBox::question(
             this, tr("Not Compiled"),
@@ -1184,21 +1184,32 @@ void MainWindow::onRunCurrentFile()
         if (reply == QMessageBox::Yes) {
             onCompileAndRun();
         } else {
-            outputPanel_->appendBuildOutput(
+            outputPanel_->appendProgramOutput(
                 tr("Hint: Tools > Compile & Run (F5) builds it first."));
         }
         return;
     }
 
-    // The binary exists, but it may predate the current text.
+    // The binary exists, but it may predate the current text. Running a stale
+    // build is almost never what was meant, so ask instead of just noting it.
     const QFileInfo exeInfo(exePath);
     bool stale = ed->isModified();
     if (!stale && !target.tempSource) {
         stale = QFileInfo(target.srcPath).lastModified() > exeInfo.lastModified();
     }
     if (stale) {
-        outputPanel_->appendBuildOutput(
-            tr("Note: %1 is older than the source — press F5 to rebuild.")
+        const auto reply = QMessageBox::question(
+            this, tr("Source Changed"),
+            tr("\"%1\" was built before the source was last changed.\n\n"
+               "Rebuild it now?")
+                .arg(exeInfo.fileName()),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+        if (reply == QMessageBox::Yes) {
+            onCompileAndRun();
+            return;
+        }
+        outputPanel_->appendProgramOutput(
+            tr("Running the existing %1 without rebuilding.")
                 .arg(exeInfo.fileName()));
     }
     startProgram(exePath, QFileInfo(target.srcPath).absolutePath());
@@ -1209,15 +1220,15 @@ void MainWindow::onStopProgram()
     if (runner_ == nullptr || runner_->state() == QProcess::NotRunning) {
         return;
     }
-    outputPanel_->showChannel(OutputPanel::ChannelBuild);
-    outputPanel_->appendBuildOutput(tr("--- Stopping program ---"));
+    outputPanel_->showChannel(OutputPanel::ChannelProgram);
+    outputPanel_->appendProgramOutput(tr("--- Stopping program ---"));
     runner_->kill();
 }
 
 void MainWindow::startProgram(const QString& exePath, const QString& workDir)
 {
     if (exePath.isEmpty() || !QFileInfo::exists(exePath)) {
-        outputPanel_->appendBuildOutput(
+        outputPanel_->appendProgramOutput(
             tr("Cannot run: %1 does not exist.").arg(exePath));
         return;
     }
@@ -1227,7 +1238,7 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
         connect(runner_, &QProcess::readyReadStandardOutput, this, [this] {
             if (runner_ == nullptr) return;
             const QByteArray b = runner_->readAllStandardOutput();
-            outputPanel_->appendBuildOutput(QString::fromLocal8Bit(b));
+            outputPanel_->appendProgramOutput(QString::fromLocal8Bit(b));
         });
         // The program has no terminal, so hand it an immediate EOF on stdin:
         // otherwise a scanf()/getline() would block forever with no way to
@@ -1238,7 +1249,7 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
                 [this](QProcess::ProcessError e) {
             if (runner_ == nullptr) return;
             if (e == QProcess::FailedToStart) {
-                outputPanel_->appendBuildOutput(
+                outputPanel_->appendProgramOutput(
                     tr("Failed to start the program. It probably needs the "
                        "MSYS2 runtime DLLs next to it (or on PATH)."));
             }
@@ -1247,7 +1258,7 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
         connect(runner_,
                 QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                 this, [this](int code, QProcess::ExitStatus status) {
-            outputPanel_->appendBuildOutput(
+            outputPanel_->appendProgramOutput(
                 status == QProcess::NormalExit
                     ? tr("--- Program exited with code %1 ---").arg(code)
                     : tr("--- Program was killed ---"));
@@ -1256,8 +1267,8 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
     }
 
     if (runner_->state() != QProcess::NotRunning) {
-        outputPanel_->showChannel(OutputPanel::ChannelBuild);
-        outputPanel_->appendBuildOutput(tr("A program is already running."));
+        outputPanel_->showChannel(OutputPanel::ChannelProgram);
+        outputPanel_->appendProgramOutput(tr("A program is already running."));
         return;
     }
 
@@ -1269,8 +1280,8 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
     runner_->setProcessEnvironment(env);
     runner_->setWorkingDirectory(workDir);
 
-    outputPanel_->showChannel(OutputPanel::ChannelBuild);
-    outputPanel_->appendBuildOutput(
+    outputPanel_->showChannel(OutputPanel::ChannelProgram);
+    outputPanel_->appendProgramOutput(
         tr("--- Running: %1 ---").arg(QFileInfo(exePath).absoluteFilePath()));
     runner_->start(exePath, {});
     updateRunActionStates();
