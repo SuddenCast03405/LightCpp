@@ -2,6 +2,7 @@
 
 set(LIGHTCPP_APP_SOURCES
     main.cpp
+    Include/LightCpp/App/BatchFormatter.hpp
     Include/LightCpp/App/CodeEditor.hpp
     Include/LightCpp/App/CodeFormatter.hpp
     Include/LightCpp/App/CompletionPopup.hpp
@@ -14,6 +15,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/MainWindow.hpp
     Include/LightCpp/App/ToolchainHeaders.hpp
     Include/LightCpp/App/ToolchainPaths.hpp
+    Source/BatchFormatter.cpp
     Source/CodeEditor.cpp
     Source/CodeFormatter.cpp
     Source/CompletionPopup.cpp

@@ -2,9 +2,12 @@
 
 #include "LightCpp/App/FileExplorer.hpp"
 
+#include <QFileInfo>
 #include <QFont>
 #include <QHeaderView>
 #include <QLabel>
+#include <QMenu>
+#include <QPoint>
 #include <QTreeView>
 #include <QVBoxLayout>
 
@@ -48,6 +51,11 @@ FileExplorer::FileExplorer(QWidget* parent)
 
     connect(tree_, &QTreeView::doubleClicked,
             this, &FileExplorer::onDoubleClicked);
+
+    // Right-click offers batch formatting of the folder the click names.
+    tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(tree_, &QWidget::customContextMenuRequested,
+            this, &FileExplorer::onContextMenu);
 }
 
 void FileExplorer::setRootPath(const QString& path)
@@ -63,4 +71,29 @@ void FileExplorer::onDoubleClicked(const QModelIndex& index)
     if (QFileInfo(path).isFile()) {
         emit fileActivated(path);
     }
+}
+
+void FileExplorer::onContextMenu(const QPoint& pos)
+{
+    // Resolve whichever folder the click names: the directory itself when
+    // one was clicked, the file's parent when a file was, or the Explorer
+    // root for empty space.
+    QString target;
+    const QModelIndex index = tree_->indexAt(pos);
+    if (index.isValid()) {
+        const QString path = model_->filePath(index);
+        target = QFileInfo(path).isDir() ? path : QFileInfo(path).absolutePath();
+    } else {
+        target = rootPath_;
+    }
+    if (target.isEmpty()) {
+        return;
+    }
+    auto* menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    menu->addAction(tr("Format This Folder"),
+                    this, [this, target] { emit formatFolderRequested(target); });
+    // customContextMenuRequested delivers viewport-relative coordinates for
+    // scroll-area subclasses, so map from the viewport to the screen.
+    menu->popup(tree_->viewport()->mapToGlobal(pos));
 }

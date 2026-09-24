@@ -1,6 +1,7 @@
 // MainWindow — IDE shell implementation.
 
 #include "LightCpp/App/MainWindow.hpp"
+#include "LightCpp/App/BatchFormatter.hpp"
 #include "LightCpp/App/CodeEditor.hpp"
 #include "LightCpp/App/CodeFormatter.hpp"
 #include "LightCpp/App/FileExplorer.hpp"
@@ -24,6 +25,7 @@
 #include <QComboBox>
 #include <QFileDialog>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
 #include <QHash>
 #include <QHBoxLayout>
@@ -35,6 +37,7 @@
 #include <QPair>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QSet>
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QStatusBar>
@@ -285,6 +288,9 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::onCloseTab);
     connect(fileExplorer_, &FileExplorer::fileActivated,
             this, &MainWindow::onFileActivated);
+    // Right-click "Format This Folder" in the Explorer.
+    connect(fileExplorer_, &FileExplorer::formatFolderRequested,
+            this, &MainWindow::formatFolder);
     // Clicking a row in the Problems list jumps to the source location.
     connect(outputPanel_, &OutputPanel::problemActivated,
             this, &MainWindow::onProblemActivated);
@@ -533,6 +539,23 @@ void MainWindow::createActions()
             .arg(QString::fromLatin1(LightCpp::App::CodeFormatter::kFallbackStyle)));
     connect(actFormat_, &QAction::triggered, this, &MainWindow::onFormatDocument);
 
+    // --- batch formatting -----------------------------------------------
+    actFormatFolder_ = new QAction(tr("Format Fol&der..."), this);
+    actFormatFolder_->setStatusTip(
+        tr("Reindent every C/C++ file under a folder with clang-format. "
+           "A .clang-format in the tree wins; %1 is the fallback style. "
+           "At/above %2 files you are asked to confirm first.")
+            .arg(QString::fromLatin1(LightCpp::App::CodeFormatter::kFallbackStyle))
+            .arg(LightCpp::App::BatchFormatter::kWarnThreshold));
+    connect(actFormatFolder_, &QAction::triggered,
+            this, &MainWindow::onFormatFolder);
+
+    actFormatProject_ = new QAction(tr("Format Pro&ject Files"), this);
+    actFormatProject_->setStatusTip(
+        tr("Reindent every C/C++ file in the open project with clang-format."));
+    connect(actFormatProject_, &QAction::triggered,
+            this, &MainWindow::onFormatProject);
+
     // --- project actions -------------------------------------------------
     actOpenProject_ = new QAction(tr("Open Pro&ject..."), this);
     actOpenProject_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+O")));
@@ -620,6 +643,7 @@ void MainWindow::createMenuBar()
 
     auto* editMenu = menuBar()->addMenu(tr("&Edit"));
     editMenu->addAction(actFormat_);
+    editMenu->addAction(actFormatFolder_);
     editMenu->addSeparator();
     auto* foldingMenu = editMenu->addMenu(tr("&Folding"));
     foldingMenu->addAction(actFold_);
@@ -634,6 +658,8 @@ void MainWindow::createMenuBar()
     projectMenu->addAction(actConfigureProject_);
     projectMenu->addAction(actBuildProject_);
     projectMenu->addAction(actRunProject_);
+    projectMenu->addSeparator();
+    projectMenu->addAction(actFormatProject_);
     projectMenu->addSeparator();
     projectMenu->addAction(actCloseProject_);
 
@@ -1334,6 +1360,249 @@ void MainWindow::onFormatFailed(int requestId, const QString& message)
 }
 
 // ---------------------------------------------------------------------------
+// Batch formatting (clang-format -i over a folder / the project)
+// ---------------------------------------------------------------------------
+void MainWindow::onFormatFolder()
+{
+    const QString dir =
+        QFileDialog::getExistingDirectory(this, tr("Format Folder"));
+    if (!dir.isEmpty()) {
+        formatFolder(dir);
+    }
+}
+
+void MainWindow::onFormatProject()
+{
+    formatFolder(projectRootDirectory());
+}
+
+void MainWindow::formatFolder(const QString& dir)
+{
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+    if (dir.isEmpty() || !QFileInfo(dir).isDir()) {
+        outputPanel_->appendBuildOutput(
+            tr("Format folder: %1 is not a directory.").arg(dir));
+        return;
+    }
+    if (!LightCpp::App::CodeFormatter::isAvailable()) {
+        const QString message = tr("clang-format was not found next to the "
+                                   "compilers (%1) or on PATH.")
+                                    .arg(LightCpp::App::kMingwBin);
+        outputPanel_->appendBuildOutput(message);
+        statusBar()->showMessage(message, 6000);
+        return;
+    }
+
+    const QStringList files = collectFormatFiles(dir);
+    if (files.isEmpty()) {
+        outputPanel_->appendBuildOutput(
+            tr("Format folder: no C/C++ files under %1.").arg(dir));
+        return;
+    }
+
+    // Buffers with unsaved edits are skipped, not rewritten: clang-format
+    // would change the disk copy out from under them, and a later save
+    // would throw that formatting away anyway. The user's edits win.
+    const QSet<QString> dirty = openModifiedFilePaths();
+    QStringList runnable;
+    runnable.reserve(files.size());
+    for (const QString& file : files) {
+        if (!dirty.contains(QFileInfo(file).absoluteFilePath())) {
+            runnable.append(file);
+        }
+    }
+    const int skipped = files.size() - runnable.size();
+
+    // At/above the threshold a batch is a large diff — ask before rewriting
+    // a whole tree the user may only have meant to look at.
+    if (runnable.size() >= LightCpp::App::BatchFormatter::kWarnThreshold) {
+        QString text =
+            tr("About to reformat %1 files under\n%2\n\n"
+               "This rewrites the files in place. Continue?")
+                .arg(runnable.size())
+                .arg(QDir::toNativeSeparators(dir));
+        if (skipped > 0) {
+            text += tr("\n\n%1 open file(s) with unsaved changes will be "
+                       "skipped.")
+                        .arg(skipped);
+        }
+        const QMessageBox::StandardButton answer = QMessageBox::question(
+            this, tr("Format Many Files"), text,
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) {
+            outputPanel_->appendBuildOutput(
+                tr("Batch format cancelled (%1 files).").arg(runnable.size()));
+            return;
+        }
+    }
+
+    if (batchFormatter_ == nullptr) {
+        batchFormatter_ = new LightCpp::App::BatchFormatter(this);
+        connect(batchFormatter_, &LightCpp::App::BatchFormatter::progress,
+                this, &MainWindow::onBatchProgress);
+        connect(batchFormatter_, &LightCpp::App::BatchFormatter::finished,
+                this, &MainWindow::onBatchFinished);
+    }
+
+    batchFormattedPaths_.clear();
+    if (skipped > 0) {
+        outputPanel_->appendBuildOutput(
+            tr("Skipping %1 open file(s) with unsaved changes.").arg(skipped));
+    }
+    outputPanel_->appendBuildOutput(
+        tr("--- Formatting %1 files under %2 ---")
+            .arg(runnable.size())
+            .arg(QDir::toNativeSeparators(dir)));
+    latestBatchRequestId_ = batchFormatter_->formatFiles(runnable, dir);
+    statusBar()->showMessage(tr("Formatting %1/%2...")
+                                 .arg(0)
+                                 .arg(runnable.size()));
+}
+
+void MainWindow::onBatchProgress(int done, int total, const QString& file,
+                                 bool success)
+{
+    // Successes are collected so the matching open tabs can be reloaded at
+    // the end; failures are already listed in the finished() summary, so no
+    // per-file log line here.
+    if (success) {
+        batchFormattedPaths_.append(file);
+    }
+    statusBar()->showMessage(tr("Formatting %1/%2: %3")
+                                 .arg(done)
+                                 .arg(total)
+                                 .arg(QFileInfo(file).fileName()));
+}
+
+void MainWindow::onBatchFinished(int requestId, int formatted, int failed,
+                                 const QStringList& failures)
+{
+    if (requestId != latestBatchRequestId_) {
+        return;  // a superseded batch reporting late
+    }
+    latestBatchRequestId_ = 0;
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+    outputPanel_->appendBuildOutput(
+        tr("--- Batch format finished: %1 formatted, %2 failed ---")
+            .arg(formatted)
+            .arg(failed));
+    for (const QString& failure : failures) {
+        outputPanel_->appendBuildOutput(failure);
+    }
+    reloadFormattedOpenTabs(batchFormattedPaths_);
+    batchFormattedPaths_.clear();
+    if (failed == 0) {
+        statusBar()->showMessage(
+            tr("Batch format finished: %1 file(s)").arg(formatted), 6000);
+    } else {
+        statusBar()->showMessage(
+            tr("Batch format finished with %1 failure(s) — see the Build Log")
+                .arg(failed),
+            6000);
+    }
+}
+
+QStringList MainWindow::collectFormatFiles(const QString& dir)
+{
+    const QString root = QDir(dir).absolutePath();
+    QStringList files;
+    QDirIterator it(root, QDir::Files | QDir::NoDotAndDotDot,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString path = it.next();
+        // Build output and vendored dependencies are not ours to reformat:
+        // skipping them keeps the batch fast and the diff reviewable. Only
+        // directory components are excluded — the chosen root itself is
+        // never excluded, so an explicit pick wins.
+        const QString relative = QDir(root).relativeFilePath(path);
+        QStringList parts =
+            relative.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        if (!parts.isEmpty()) {
+            parts.removeLast();  // drop the file name
+        }
+        bool excluded = false;
+        for (const QString& part : parts) {
+            if (part.startsWith(QLatin1Char('.'))
+                || part == QLatin1String("build")
+                || part == QLatin1String("CMakeFiles")
+                || part == QLatin1String("third_party")
+                || part == QLatin1String("node_modules")) {
+                excluded = true;
+                break;
+            }
+        }
+        if (excluded || !isCppLikeFile(path)) {
+            continue;
+        }
+        files.append(QFileInfo(path).absoluteFilePath());
+    }
+    // Sorted so the Build Log reads the same on every run.
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+void MainWindow::reloadFormattedOpenTabs(const QStringList& paths)
+{
+    if (paths.isEmpty()) {
+        return;
+    }
+    QSet<QString> rewritten;
+    rewritten.reserve(paths.size());
+    for (const QString& path : paths) {
+        rewritten.insert(QFileInfo(path).absoluteFilePath());
+    }
+    for (int i = 0; i < tabWidget_->count(); ++i) {
+        auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i));
+        // Modified buffers keep the user's edits — the batch skipped their
+        // files, so there is nothing on disk to pick up either.
+        if (ed == nullptr || ed->isModified()) {
+            continue;
+        }
+        const QString path = ed->filePath();
+        if (path.isEmpty()
+            || !rewritten.contains(QFileInfo(path).absoluteFilePath())) {
+            continue;
+        }
+        // Re-read with the tab's own encoding: the batch only reflowed the
+        // bytes clang-format accepted, so the encoding the file was opened
+        // with is still the right one.
+        using namespace LightCpp::Text;
+        const auto parsed = fromName(ed->encodingLabel().toUtf8());
+        if (!parsed.has_value()) {
+            continue;
+        }
+        const TextFileResult result = readTextFileWithEncoding(path, *parsed);
+        if (!result.hasValue()) {
+            outputPanel_->appendBuildOutput(
+                tr("Reload after format failed for %1: %2")
+                    .arg(path, toString(result.error())));
+            continue;
+        }
+        // loadUtf8 clears the modified flag; the textChanged handler then
+        // re-pushes the document to clangd through the lint debounce.
+        ed->loadUtf8(result.value().utf8);
+    }
+}
+
+QSet<QString> MainWindow::openModifiedFilePaths() const
+{
+    QSet<QString> result;
+    for (int i = 0; i < tabWidget_->count(); ++i) {
+        auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i));
+        if (ed == nullptr || !ed->isModified()) {
+            continue;
+        }
+        // Untitled buffers have no path — they were never going to be in a
+        // folder listing anyway.
+        const QString path = ed->filePath();
+        if (!path.isEmpty()) {
+            result.insert(QFileInfo(path).absoluteFilePath());
+        }
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // Project (CMake / Dev-C++)
 // ---------------------------------------------------------------------------
 void MainWindow::onOpenFolder()
@@ -1748,6 +2017,9 @@ void MainWindow::updateProjectActions()
     }
     if (actCloseProject_ != nullptr) {
         actCloseProject_->setEnabled(hasProject);
+    }
+    if (actFormatProject_ != nullptr) {
+        actFormatProject_->setEnabled(hasProject);
     }
 }
 

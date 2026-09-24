@@ -28,6 +28,7 @@ class QActionGroup;
 class QProcess;
 class QTimer;
 namespace LightCpp::App {
+class BatchFormatter;
 class CodeFormatter;
 class GitClient;
 class LanguageServerClient;
@@ -78,6 +79,19 @@ private slots:
     void onFormatDocument();
     void onFormatted(int requestId, const QString& text);
     void onFormatFailed(int requestId, const QString& message);
+    /// Ask for a folder and clang-format every C/C++ file under it. Above
+    /// BatchFormatter::kWarnThreshold files a confirmation is asked first.
+    void onFormatFolder();
+    /// clang-format every C/C++ file under the open project's root.
+    void onFormatProject();
+    /// Shared body: collect files, apply the threshold, run the batch.
+    /// Connected to the Explorer's context-menu request too, so the right-
+    /// click path and the menu path land in the same place.
+    void formatFolder(const QString& dir);
+    void onBatchProgress(int done, int total, const QString& file,
+                         bool success);
+    void onBatchFinished(int requestId, int formatted, int failed,
+                         const QStringList& failures);
     /// Ask for a project file (CMakeLists.txt or a Dev-C++ .dev) and open it.
     void onOpenProject();
     /// Ask for a folder. What happens next depends on what is in it: a folder
@@ -152,6 +166,16 @@ private:
     [[nodiscard]] static bool isCppLikeFile(const QString& path);
     /// LSP languageId for a path ("cpp", "c", ...).
     [[nodiscard]] static QString languageIdForFile(const QString& path);
+    /// C/C++ source files under `dir`, excluding build trees and vendored
+    /// dependencies. Sorted for stable log output.
+    [[nodiscard]] static QStringList collectFormatFiles(const QString& dir);
+    /// Re-read open, unmodified tabs whose files were just rewritten on
+    /// disk, so the editor stays in step with the formatting that happened
+    /// behind it. Modified buffers are left alone — the user's edits win.
+    void reloadFormattedOpenTabs(const QStringList& paths);
+    /// Paths of files open in a tab with unsaved changes — skipped on a
+    /// disk-format batch so a later save does not throw the formatting away.
+    [[nodiscard]] QSet<QString> openModifiedFilePaths() const;
 
     // --- open project -----------------------------------------------------
     /// One external command in a project build. A build is a short queue of
@@ -254,6 +278,8 @@ private:
     QAction* actFoldAll_ = nullptr;
     QAction* actUnfoldAll_ = nullptr;
     QAction* actFormat_ = nullptr;         // clang-format the whole file
+    QAction* actFormatFolder_ = nullptr;   // clang-format a folder
+    QAction* actFormatProject_ = nullptr;  // clang-format the open project
     QAction* actOpenProject_ = nullptr;    // File > Open Project...
     QAction* actConfigureProject_ = nullptr;
     QAction* actBuildProject_ = nullptr;
@@ -343,6 +369,15 @@ private:
     /// buffer it describes even if the user switched tabs meanwhile.
     QPointer<CodeEditor> formatTarget_;
     int latestFormatRequest_ = 0;
+
+    // --- batch formatting (clang-format -i) ---
+    LightCpp::App::BatchFormatter* batchFormatter_ = nullptr;
+    /// Id of the batch in flight; a late `finished` for an earlier one is
+    /// dropped so it cannot clobber the summary of the current run.
+    int latestBatchRequestId_ = 0;
+    /// Paths that were actually written on disk by the last batch — used to
+    /// reload the open, clean tabs that match them.
+    QStringList batchFormattedPaths_;
 
     // new-file counter
     int untitledCounter_ = 0;
