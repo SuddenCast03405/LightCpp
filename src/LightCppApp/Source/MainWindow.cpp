@@ -569,6 +569,60 @@ void MainWindow::createToolBar()
     tb->addAction(actCompile_);
     tb->addAction(actCompileRun_);
     tb->addAction(actRun_);
+
+    // Everything past the spacer goes to the far right, which is where a
+    // build configuration belongs: it is a setting, not an action.
+    auto* spacer = new QWidget(tb);
+    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    tb->addWidget(spacer);
+    tb->addWidget(createBuildConfigurationWidget());
+}
+
+QWidget* MainWindow::createBuildConfigurationWidget()
+{
+    auto* container = new QWidget(this);
+    auto* layout = new QHBoxLayout(container);
+    layout->setContentsMargins(0, 0, 4, 0);
+    layout->setSpacing(6);
+
+    layout->addWidget(new QLabel(tr("Configuration:"), container));
+
+    configCombo_ = new QComboBox(container);
+    // The names are the CMAKE_BUILD_TYPE spellings, so what the toolbar says
+    // is exactly what gets passed to CMake and printed in the build log.
+    for (const LightCpp::Project::BuildConfiguration config :
+         {LightCpp::Project::BuildConfiguration::Debug,
+          LightCpp::Project::BuildConfiguration::Release}) {
+        configCombo_->addItem(LightCpp::Project::toString(config),
+                              QVariant(int(config)));
+    }
+    // Debug is the default because that is what a single file was always
+    // compiled with; Release stays one click away and never surprises anyone
+    // who is mid-debug.
+    configCombo_->setCurrentIndex(
+        configCombo_->findData(int(LightCpp::Project::BuildConfiguration::Debug)));
+    configCombo_->setToolTip(
+        tr("Flags used when compiling.\n"
+           "Debug adds debug info and leaves optimisation off;\n"
+           "Release optimises and defines NDEBUG."));
+    connect(configCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
+        outputPanel_->appendBuildOutput(tr("Build configuration: %1")
+                                            .arg(LightCpp::Project::toString(
+                                                buildConfiguration())));
+    });
+    layout->addWidget(configCombo_);
+    return container;
+}
+
+LightCpp::Project::BuildConfiguration MainWindow::buildConfiguration() const
+{
+    if (configCombo_ == nullptr) {
+        return LightCpp::Project::BuildConfiguration::Debug;
+    }
+    // Parsed back through the same function CMake settings are read with, so
+    // an unexpected label degrades to the default instead of crashing.
+    return LightCpp::Project::buildConfigurationFromName(configCombo_->currentText())
+        .value_or(LightCpp::Project::BuildConfiguration::Debug);
 }
 
 void MainWindow::createStatusBar()
@@ -1221,6 +1275,10 @@ void MainWindow::onCompileCurrentFile()
         const QString objPath = QDir(objDir).filePath(
             QFileInfo(srcPath).completeBaseName() + QStringLiteral(".obj"));
 
+        // /nologo /W4 /EHsc are the usual notice-level settings; /MT links the
+        // C runtime statically so the exe runs on its own, playing the same
+        // role as -static-libgcc -static-libstdc++ on the MinGW side. No /std:
+        // — the compiler's own default is what gets run.
         args = {QStringLiteral("/nologo"), QStringLiteral("/W4"),
                 QStringLiteral("/EHsc"), QStringLiteral("/MT")};
         if (!isC) {
@@ -1229,11 +1287,11 @@ void MainWindow::onCompileCurrentFile()
             // g++ for headers.
             args << QStringLiteral("/TP");
         }
-        // No /std: — the compiler's own default is what gets run.
-        // /MT statically links the C runtime so the exe runs on its own,
-        // playing the same role as -static-libgcc -static-libstdc++ on the
-        // MinGW side. No /Zi: it would drop a multi-megabyte .pdb next to the
-        // source, and this path is for compiling and running, not debugging.
+        // Debug is /Od alone, without /Zi: this path is for compiling and
+        // running, not for attaching a debugger, and the linker would drop a
+        // multi-megabyte .pdb next to the source. Release adds /O2 /DNDEBUG.
+        args += LightCpp::Project::flagsFor(buildConfiguration(),
+                                            LightCpp::Project::CompilerFamily::Msvc);
         args << (QStringLiteral("/Fe") + QDir::toNativeSeparators(outExe))
              << (QStringLiteral("/Fo") + QDir::toNativeSeparators(objPath))
              << QDir::toNativeSeparators(srcPath);
@@ -1252,14 +1310,12 @@ void MainWindow::onCompileCurrentFile()
             : (isC ? QStringLiteral("gcc.exe")      : QStringLiteral("g++.exe"));
         compilerExe = QDir(kMingwBin).filePath(compilerName);
         toolDirs << kMingwBin;
-        args = {
-            QStringLiteral("-Wall"),
-            QStringLiteral("-Wextra"),
-            QStringLiteral("-g"),
-            srcPath,
-            QStringLiteral("-o"),
-            outExe,
-        };
+        // -g for Debug, -O2 -DNDEBUG for Release; both are in the same place
+        // the project builds read their flags from.
+        args = {QStringLiteral("-Wall"), QStringLiteral("-Wextra")};
+        args += LightCpp::Project::flagsFor(buildConfiguration(),
+                                            LightCpp::Project::CompilerFamily::Gnu);
+        args << srcPath << QStringLiteral("-o") << outExe;
     }
 
     // Lazily create the QProcess once and wire its handlers.

@@ -9,6 +9,7 @@
 
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
+#include "LightCpp/Project/BuildConfiguration.hpp"
 #include "LightCpp/Text/Encoding.hpp"
 
 class CodeEditor;
@@ -70,6 +71,14 @@ private:
     void createMenuBar();
     void createToolBar();
     void createStatusBar();
+    /// The Debug/Release picker that sits at the far right of the toolbar.
+    /// Owns configCombo_, so it has to be built before buildConfiguration()
+    /// returns anything but the default.
+    QWidget* createBuildConfigurationWidget();
+    /// The configuration currently selected in the toolbar. Also decides the
+    /// flags of a single-file compile, so "Debug" means the same thing
+    /// whether the file is built on its own or as part of a project.
+    [[nodiscard]] LightCpp::Project::BuildConfiguration buildConfiguration() const;
 
     CodeEditor* currentEditor() const;
     CodeEditor* openFileInTab(const QString& path);
@@ -183,6 +192,8 @@ private:
     bool runAfterBuild_ = false;
     /// Binary produced by the most recent build, i.e. what "Run" launches.
     QString lastBuildExe_;
+    /// Debug/Release, at the far right of the toolbar.
+    QComboBox* configCombo_ = nullptr;
 
     // new-file counter
     int untitledCounter_ = 0;
