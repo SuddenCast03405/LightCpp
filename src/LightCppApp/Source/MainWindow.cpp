@@ -1394,7 +1394,7 @@ void MainWindow::onOpenProject()
         tr("Projects (CMakeLists.txt *.dev);;CMake (CMakeLists.txt);;"
            "Dev-C++ (*.dev);;All files (*)"));
     if (!path.isEmpty()) {
-        openProjectFile(path);
+        openProjectFile(path, true);
     }
 }
 
