@@ -35,8 +35,24 @@ public:
 
     /// The command line for one run, with `assumeFileName` naming the buffer's
     /// file (empty when it has none). Separate from format() so the flags can
-    /// be inspected without a clang-format installed.
+    /// be inspected without a clang-format installed. Uses the compiled-in
+    /// fallback style.
     [[nodiscard]] static QStringList argumentsFor(const QString& assumeFileName);
+
+    /// The executable this instance runs: the settings-provided path when
+    /// set, else the compiled-in location.
+    [[nodiscard]] QString resolvedToolPath() const;
+    /// The --fallback-style this instance passes: the configured style when
+    /// set (and not "file", which is what -style=file already does), else
+    /// kFallbackStyle.
+    [[nodiscard]] QString resolvedFallbackStyle() const;
+
+    /// Point this instance at a specific clang-format (the settings'
+    /// clangFormatPath). Empty restores the compiled-in default.
+    void setToolPath(const QString& path) { toolPathOverride_ = path; }
+    /// Override the fallback style (formatting.globalStyle / a kit's
+    /// clangFormatStyle). "file" and empty keep the built-in default.
+    void setFallbackStyle(const QString& style) { fallbackStyle_ = style; }
 
     /// Format `text`. The answer arrives as formatted() or failed(), carrying
     /// the returned id. A second call supersedes the first.
@@ -53,6 +69,9 @@ private:
 
     QProcess* process_ = nullptr;
     QTimer* timeout_ = nullptr;
+    /// Settings-provided overrides; empty = the compiled-in defaults.
+    QString toolPathOverride_;
+    QString fallbackStyle_;
     /// Id of the run currently in progress, or 0 when the process is idle.
     int inFlightId_ = 0;
     int nextId_ = 1;

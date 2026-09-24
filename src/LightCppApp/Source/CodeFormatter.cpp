@@ -32,6 +32,26 @@ bool CodeFormatter::isAvailable()
     return !toolPath().isEmpty();
 }
 
+QString CodeFormatter::resolvedToolPath() const
+{
+    if (!toolPathOverride_.isEmpty()) {
+        return toolPathOverride_;
+    }
+    return toolPath();
+}
+
+QString CodeFormatter::resolvedFallbackStyle() const
+{
+    // "file" means the same thing here as everywhere else: discovery of a
+    // .clang-format is already what -style=file does, so the fallback only
+    // needs a real preset name — keep the built-in one.
+    if (!fallbackStyle_.isEmpty()
+        && fallbackStyle_.compare(QLatin1String("file"), Qt::CaseInsensitive) != 0) {
+        return fallbackStyle_;
+    }
+    return QString::fromLatin1(kFallbackStyle);
+}
+
 QStringList CodeFormatter::argumentsFor(const QString& assumeFileName)
 {
     // `-style=file` makes clang-format look for the nearest .clang-format and
@@ -77,7 +97,7 @@ int CodeFormatter::format(const QString& text, const QString& assumeFileName)
         process_->waitForFinished(1000);
     }
 
-    const QString tool = toolPath();
+    const QString tool = resolvedToolPath();
     if (tool.isEmpty()) {
         // Queued, so the caller is guaranteed to get the id back before the
         // failure arrives — otherwise there would be nothing to match it to.
@@ -116,7 +136,16 @@ int CodeFormatter::format(const QString& text, const QString& assumeFileName)
 
     inFlightId_ = id;
     process_->setProgram(tool);
-    process_->setArguments(argumentsFor(assumeFileName));
+    // Instance arguments: same shape as the static helper, but with the
+    // configured fallback style.
+    QStringList args{
+        QStringLiteral("-style=file"),
+        QStringLiteral("--fallback-style=") + resolvedFallbackStyle(),
+    };
+    if (!assumeFileName.isEmpty()) {
+        args << (QStringLiteral("--assume-filename=") + assumeFileName);
+    }
+    process_->setArguments(args);
     process_->start();
     // Waited for on purpose: writing to stdin only works once the channel
     // exists, and a start that fails here has a clearer message than the one

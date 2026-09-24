@@ -214,6 +214,14 @@ void LanguageServerClient::start()
                      QStringLiteral("--clang-tidy=false"),
                      QStringLiteral("--pch-storage=memory")};
 
+    // The settings' clangd fallback style, when it names a real preset.
+    // "file" would make clangd look for a .clang-format it usually cannot
+    // find, which only changes its format-on-type answers for the worse.
+    if (!fallbackStyle_.isEmpty()
+        && fallbackStyle_.compare(QLatin1String("file"), Qt::CaseInsensitive) != 0) {
+        args.append(QStringLiteral("--fallback-style=") + fallbackStyle_);
+    }
+
     // clangd has no flag for "use this compiler's headers"; include paths reach
     // it only through a compilation database. Synthesising a one-file database
     // and pointing clangd at it is the documented way to do this without

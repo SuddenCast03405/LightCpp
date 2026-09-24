@@ -3,6 +3,7 @@
 #include "LightCpp/App/CodeFormatter.hpp"
 #include "LightCpp/App/ToolchainPaths.hpp"
 
+#include <QFileInfo>
 #include <QProcess>
 #include <QTimer>
 
@@ -65,7 +66,15 @@ int BatchFormatter::formatFiles(const QStringList& filePaths,
         return id;
     }
 
-    if (!CodeFormatter::isAvailable()) {
+    // Availability follows the same resolution startNext() will use: a
+    // settings-provided path when set, else the compiled-in location.
+    const QString batchTool = toolPathOverride_.isEmpty()
+                                  ? QString()
+                                  : toolPathOverride_;
+    const bool toolAvailable = !batchTool.isEmpty()
+                                   ? QFileInfo::exists(batchTool)
+                                   : CodeFormatter::isAvailable();
+    if (!toolAvailable) {
         // clang-format is missing for the whole batch; every file counts as
         // failed so the summary names the cause once rather than per file.
         failed_ = total_;
@@ -121,13 +130,22 @@ void BatchFormatter::startNext()
     // inherit the flag.
     errorSeen_ = false;
     currentFile_ = files_.first();
-    const QString tool = CodeFormatter::toolPath();
+    const QString tool = toolPathOverride_.isEmpty() ? CodeFormatter::toolPath()
+                                                     : toolPathOverride_;
+    const QString fallbackStyle = fallbackStyle_.isEmpty()
+                                          || fallbackStyle_.compare(
+                                                 QLatin1String("file"),
+                                                 Qt::CaseInsensitive)
+                                             == 0
+                                      ? QString::fromLatin1(
+                                            CodeFormatter::kFallbackStyle)
+                                      : fallbackStyle_;
     // -style=file discovers the nearest .clang-format; the fallback covers
     // trees without one. -i writes the formatted text back in place.
     QStringList args{
         QStringLiteral("-i"),
         QStringLiteral("-style=file"),
-        QStringLiteral("--fallback-style=") + QString::fromLatin1(CodeFormatter::kFallbackStyle),
+        QStringLiteral("--fallback-style=") + fallbackStyle,
         currentFile_,
     };
     process_->setWorkingDirectory(workingDir_);

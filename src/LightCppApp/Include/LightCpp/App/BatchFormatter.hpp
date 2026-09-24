@@ -40,6 +40,14 @@ public:
 
     [[nodiscard]] bool isRunning() const;
 
+    /// Point the batch at a specific clang-format (the settings'
+    /// clangFormatPath). Empty restores the compiled-in default. Must be
+    /// set before formatFiles() starts a run.
+    void setToolPath(const QString& path) { toolPathOverride_ = path; }
+    /// Override the --fallback-style passed per file ("file"/empty keep the
+    /// built-in default). Same rules as CodeFormatter.
+    void setFallbackStyle(const QString& style) { fallbackStyle_ = style; }
+
 signals:
     /// `done` files have been processed out of `total`; `currentFile` is the
     /// one just finished, and `success` says whether it was rewritten on
@@ -60,6 +68,9 @@ private:
 
     QProcess* process_ = nullptr;
     QTimer* timeout_ = nullptr;
+    /// Settings-provided overrides; empty = the compiled-in defaults.
+    QString toolPathOverride_;
+    QString fallbackStyle_;
     QStringList files_;        // the queue; front is in flight
     QString currentFile_;      // file clang-format is running on right now
     QString workingDir_;

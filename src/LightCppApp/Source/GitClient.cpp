@@ -9,7 +9,7 @@
 
 namespace LightCpp::App {
 
-QString GitClient::toolPath()
+QString GitClient::defaultToolPath()
 {
     if (QFileInfo::exists(kGitPath)) {
         return kGitPath;
@@ -17,9 +17,17 @@ QString GitClient::toolPath()
     return QStandardPaths::findExecutable(QStringLiteral("git"));
 }
 
+QString GitClient::toolPath() const
+{
+    if (!toolPathOverride_.isEmpty()) {
+        return toolPathOverride_;
+    }
+    return defaultToolPath();
+}
+
 bool GitClient::isAvailable()
 {
-    return !toolPath().isEmpty();
+    return !defaultToolPath().isEmpty();
 }
 
 GitClient::GitClient(QObject* parent)

@@ -82,12 +82,7 @@ CodeEditor::CodeEditor(QWidget* parent)
     }
     font.setStyleHint(QFont::Monospace);
     setFont(font);
-
-    // A tab is exactly four monospace cells. Qt's own default (80px) works
-    // out to about 10.5 cells at this size, which is not what C++ code is
-    // normally indented with — and it makes a visual column stop line up with
-    // nothing. Measured from a space so it stays correct if the font changes.
-    setTabStopDistance(QFontMetricsF(font).horizontalAdvance(QLatin1Char(' ')) * 4.0);
+    applyTabWidthForCurrentFont();
 
     // Attach the C++ highlighter to the underlying document.
     highlighter_ = new CppSyntaxHighlighter(document());
@@ -139,6 +134,44 @@ CodeEditor::CodeEditor(QWidget* parent)
 }
 
 CodeEditor::~CodeEditor() = default;
+
+void CodeEditor::setEditorFont(const QFont& font)
+{
+    setFont(font);
+    applyTabWidthForCurrentFont();
+    // The gutter width is derived from the font metrics, so it has to be
+    // recomputed after the font changes.
+    updateLineNumberAreaWidth(0);
+    lineNumberArea_->update();
+}
+
+void CodeEditor::setSyntaxHighlightEnabled(bool enabled)
+{
+    if (syntaxHighlightEnabled_ == enabled) {
+        return;
+    }
+    syntaxHighlightEnabled_ = enabled;
+    if (highlighter_ == nullptr) {
+        return;
+    }
+    if (enabled) {
+        highlighter_->setDocument(document());
+        highlighter_->rehighlight();
+    } else {
+        // Detaching the document leaves the text plain; the highlighter
+        // object itself stays alive for a later re-enable.
+        highlighter_->setDocument(nullptr);
+    }
+}
+
+void CodeEditor::applyTabWidthForCurrentFont()
+{
+    // A tab is exactly four monospace cells. Qt's own default (80px) works
+    // out to about 10.5 cells at this size, which is not what C++ code is
+    // normally indented with — and it makes a visual column stop line up with
+    // nothing. Measured from a space so it stays correct if the font changes.
+    setTabStopDistance(QFontMetricsF(font()).horizontalAdvance(QLatin1Char(' ')) * 4.0);
+}
 
 void CodeEditor::loadUtf8(const QByteArray& utf8)
 {

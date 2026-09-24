@@ -25,9 +25,17 @@ public:
     explicit GitClient(QObject* parent = nullptr);
     ~GitClient() override;
 
-    /// The git executable, or empty when there is none.
-    [[nodiscard]] static QString toolPath();
+    /// The git executable: the path set for this client when there is one
+    /// (from the settings), else the compiled-in default, else empty.
+    [[nodiscard]] QString toolPath() const;
+    /// The compiled-in git location (MSYS2, then PATH). Used when no
+    /// settings-provided path has been set.
+    [[nodiscard]] static QString defaultToolPath();
     [[nodiscard]] static bool isAvailable();
+
+    /// Point this client at a specific git executable (the settings'
+    /// gitPath). Empty restores the compiled-in default.
+    void setToolPath(const QString& path) { toolPathOverride_ = path; }
 
     /// Directory git runs in. Git walks up from there itself, so a
     /// subdirectory of a repository is fine.
@@ -70,6 +78,8 @@ private:
     QList<Job> queue_;
     Job current_;
     QString workingDirectory_;
+    /// The git executable to use; empty = the compiled-in default.
+    QString toolPathOverride_;
 };
 
 }  // namespace LightCpp::App

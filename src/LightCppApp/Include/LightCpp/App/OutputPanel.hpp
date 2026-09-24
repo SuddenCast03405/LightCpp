@@ -64,6 +64,10 @@ public:
     /// Bring `channel` to the front.
     void showChannel(Channel channel);
 
+    /// Apply the settings' output font to the log channels and the Problems
+    /// list. Invalid (unset) fonts are ignored.
+    void setOutputFont(const QFont& font);
+
     /// Clear the channel currently on screen.
     void clearOutput();
 

@@ -37,6 +37,19 @@ public:
     explicit CodeEditor(QWidget* parent = nullptr);
     ~CodeEditor() override;
 
+    /// Apply the editor font from the settings: the widget font, the tab
+    /// width (four monospace cells of the new font) and the gutter metrics.
+    void setEditorFont(const QFont& font);
+
+    /// Switch the C++ highlighter on or off for this document. Used for
+    /// files above the configured large-file threshold, where tokenising
+    /// every keystroke costs more than the colouring is worth.
+    void setSyntaxHighlightEnabled(bool enabled);
+    [[nodiscard]] bool isSyntaxHighlightEnabled() const noexcept
+    {
+        return syntaxHighlightEnabled_;
+    }
+
     void setFilePath(const QString& path) { filePath_ = path; }
     [[nodiscard]] const QString& filePath() const noexcept { return filePath_; }
 
@@ -144,6 +157,8 @@ private slots:
     void highlightCurrentLine();
 
 private:
+    /// Reset the tab width to four monospace cells of the current font.
+    void applyTabWidthForCurrentFont();
     int lineNumberAreaWidth() const;
     void lineNumberAreaPaintEvent(QPaintEvent* event);
     /// Rebuild the extra selections (current-line highlight + diagnostic
@@ -228,6 +243,7 @@ private:
 
     LineNumberArea* lineNumberArea_;
     CppSyntaxHighlighter* highlighter_;
+    bool syntaxHighlightEnabled_ = true;
     LightCpp::App::CompletionPopup* popup_;
     /// Fires ~200ms after the last identifier keystroke to request
     /// "as-you-type" completion (no trigger char needed).

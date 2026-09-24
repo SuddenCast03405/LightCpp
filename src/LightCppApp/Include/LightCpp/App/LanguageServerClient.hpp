@@ -71,6 +71,19 @@ public:
                                   QObject* parent = nullptr);
     ~LanguageServerClient() override;
 
+    /// Change the executable to launch. Takes effect at the next start();
+    /// used when the settings name a clangd other than the compiled-in one.
+    void setServerPath(const QString& path) { serverPath_ = path; }
+    [[nodiscard]] const QString& serverPath() const noexcept
+    {
+        return serverPath_;
+    }
+
+    /// The --fallback-style passed to clangd (used by its built-in
+    /// formatting). "file" and empty keep clangd's own default. Only read
+    /// at start(), like the toolchain headers.
+    void setFallbackStyle(const QString& style) { fallbackStyle_ = style; }
+
     /// Launch the server and perform the initialize handshake.
     /// Safe to call again after stop(); re-starts a fresh process.
     ///
@@ -174,6 +187,8 @@ private:
 
     QString serverPath_;
     QString rootPath_;
+    /// Style passed as clangd's --fallback-style; empty/"file" = its own.
+    QString fallbackStyle_;
     /// Headers the server should resolve against; empty means "its own".
     ToolchainHeaders headers_;
     QProcess* process_ = nullptr;
