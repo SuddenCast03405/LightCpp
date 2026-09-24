@@ -1,14 +1,16 @@
 # LightCppProject: everything the IDE knows about a project on disk.
 #
-# Build configurations, the CMake and Dev-C++ project models, and git status
-# parsing. Qt Core only — no widgets — so all of it can be unit-tested without
-# a display, which is the point: these are the parts where a wrong answer is
-# silent (a flag table, an INI dialect, a porcelain parser).
+# Build configurations, the CMake and Dev-C++ project models, git status
+# parsing, and recognising what a directory contains. Qt Core only — no
+# widgets — so all of it can be unit-tested without a display, which is the
+# point: these are the parts where a wrong answer is silent (a flag table, an
+# INI dialect, a porcelain parser, "is this folder a project").
 
 add_library(LightCppProject STATIC
     Source/BuildConfiguration.cpp
     Source/CMakeProject.cpp
     Source/DevCppProject.cpp
+    Source/FolderContents.cpp
     Source/GitStatus.cpp
 )
 

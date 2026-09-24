@@ -4,7 +4,7 @@
 LightC++ IDE；显示名 `LightC++`，代码标识 `LightCpp`，二进制 `lightcpp`。规范见 `要求.md`
 （C++20、Qt 6.5+、目标态 QScintilla+ADS、CMake 3.24+CPM、spdlog、GTest/gcov）。
 用户自称"用户"，称我为"AI/智能体"。**每次代码改动都要 git commit。**
-- **纯逻辑/数据层一律单独成静态库 + GTest**（`LightCppCore` / `LightCppProject` ）。这些逻辑出错是静默的，
+- **纯逻辑/数据层一律单独成静态库 + GTest**（`LightCppCore` / `LightCppProject`）。这些逻辑出错是静默的，
   必须在无显示环境下可测。
 - CMake 目标统一 `LightCpp` 前缀；严格警告放 `LightCppWarnings` INTERFACE 目标，只链自有目标。
 - C++20 基线，**不用 std::expected 等 C++23 特性**；第三方走 CPM.cmake（已本地化，可离线构建）。
@@ -20,6 +20,7 @@ LightC++ IDE；显示名 `LightC++`，代码标识 `LightCpp`，二进制 `light
 - 跑 Qt 程序需 `E:\msys64\ucrt64\bin` 在 PATH；MinGW 测试可执行文件加 `-static-libgcc -static-libstdc++`。
 - 残留 `dist/lightcpp.exe` 进程会让 CMake post-build 拷贝报 "Permission denied" 使 build exit=1（链接其实已成功）
   ——先 `Stop-Process` 再构建。
+- `E:\msys64\ucrt64\bin\gdb.exe` 启动即 `0xc0000135`（缺 DLL），**不可用于排查**；定位崩溃用二分探针程序。
 
 ## 本机操作坑（必读）
 - **构建用 PowerShell**：Bash 环境 PATH 坏（`ls`/`head`/`wc` not found）。先
@@ -35,16 +36,24 @@ LightC++ IDE；显示名 `LightC++`，代码标识 `LightCpp`，二进制 `light
 - **无头 UI 冒烟测试**：配方见 skill `lightcpp-build-verify`。
   **`MainWindow` 构造时会 `onNewFile()` 开一个 Untitled-1 标签**，"找那个编辑器"不能取
   `findChildren<CodeEditor*>().first()`，必须按文件路径匹配。
+- **断言要用计数，不要用 `contains`**：日志面板跨阶段累积，`"open folder: X"` 会被 `"open folder: XY"` 满足
+  （`"--- git diff ---"` 是 `"--- git diff (exit 128) ---"` 的子串）。比较阶段前后的**新增**行数。
+- **析构期陷阱（本会话实证）**：`deleteLater()` 依赖事件循环，而窗口析构发生在 `exec()` 返回**之后**——
+  排队对象永不析构、活过父对象，Qt 报 `"Called object is not of the correct type"`。异步对象析构要**先清队列**
+  再 `disconnect` + `kill` + `waitForFinished`（`GitClient` 就这么修的）；能同步删就直接 `delete` 别 `deleteLater`。
 
 ## 静态库模块
 - `LightCppCore`（刻意无 Qt）：`Core::Text` UTF-8 解码/校验/读文件 + 自带 `Result<T,E>`（避开 C++23 expected）；
-  `Core::Fold` 代码折叠区域计算（见下）。
+  `Core::Fold` 代码折叠区域计算。
 - `LightCppProject`（仅 Qt6::Core，无 widgets，别名 `LightCpp::Project`）：`BuildConfiguration` / `CMakeProject` /
-  `DevCppProject` / `GitStatus`。
+  `DevCppProject` / `GitStatus` / **`FolderContents`**。
+  - `FolderContents`：`isDirectory(path)` + `projectFileIn(dir) -> optional<ProjectFile{filePath,isCMake}>`。
+    **只检查直接子级**（不像 `findCMakeProject()` 上溯）——用户点开某个文件夹，就是点名要它当根，
+    偷偷爬上一层会打开他没要的东西。`CMakeLists.txt` 优先于 `*.dev`，多个 `.dev` 按 `QDir::Name|IgnoreCase` 取第一。
 - `LightCppText`（Qt6::Core）：`detectEncoding()` = BOM → NUL 结构 → UTF-8 校验 → **本地 ANSI fallback**
-  （zh-CN→GBK、ja-JP→Shift-JIS、ko-KR→EUC-KR、en-US→Windows-1252），不再走 legacy 评分；
-  `convertToUtf8()` Unicode 族走 QStringConverter、遗留编码走 Win32 MultiByteToWideChar；
-  另有 `readDetectedTextFile()` / `readTextFileWithEncoding()` / `localAnsiEncoding()` / `localAnsiDisplayName()`。
+  （zh-CN→GBK、ja-JP→Shift-JIS、ko-KR→EUC-KR、en-US→Windows-1252）；`convertToUtf8()` Unicode 族走
+  QStringConverter、遗留编码走 Win32 MultiByteToWideChar；另有 `readDetectedTextFile()` /
+  `readTextFileWithEncoding()` / `localAnsiEncoding()` / `localAnsiDisplayName()`。
   UTF-16/32 解码后须手工拒绝未配对代理（Qt decoder 太宽松）。
 - `lightcpp-enc` CLI：检测编码 / `--out` 转 UTF-8 / `--list`。
 
@@ -101,17 +110,18 @@ Problems 下拉项带实时计数；空时显示不可选的 "No problems detect
 ## LSP（over stdio，clangd）
 - `kClangdPath` = `E:/msys64/ucrt64/bin/clangd.exe`（集中于 `ToolchainPaths.hpp`）；**默认开启**。
 - **握手 response 不能写死 `id == 1`**：`stop()`+`start()` 后计数器已走到 3，写死 1 会让新进程永远收不到
-  `initialized` → 不发 didOpen → 诊断再也不出现（"关掉再打开就废了"）。用成员 `initializeRequestId_`。
+  `initialized` → 不发 didOpen → 诊断再也不出现。用成员 `initializeRequestId_`。
 - stderr 用 `setProcessChannelMode(SeparateChannels)` 按行转发，连同 `window/logMessage`/`showMessage` 进 Clangd Log。
 - 300ms 防抖发 didChange（全文同步）→ `publishDiagnostics` 画波浪线 + 行号区红/黄点。诊断输出只在
   errors/warnings 计数变化时打印（防刷屏）。
 - **补全/跳转前必须先 changeDocument 推最新全文**（lint 防抖滞后会让 clangd 位置错位返回空——"只有 include
   补全有结果"的根因）。
-- 补全触发字符 `. : > < "`；标识符输入与 Backspace 在 popup 开/关两分支都重启 120ms 空闲定时器（每次编辑都请求，
-  这是奇偶交替 bug 的修复关键）。**过期响应守卫** `latestCompletionId_` 只认最新请求，旧响应（常为空）一律忽略，
-  否则会关掉新弹窗。`pendingCompletions_` 用 `QPointer<CodeEditor>` 防悬空。
+- 补全触发字符 `. : > < "`；标识符输入与 Backspace 在 popup 开/关两分支都重启 120ms 空闲定时器。
+  **过期响应守卫** `latestCompletionId_` 只认最新请求，旧响应（常为空）一律忽略；`pendingCompletions_`
+  用 `QPointer<CodeEditor>` 防悬空。
 - `stop()` 顺序坑：先 `process_ = nullptr` 再 `waitForFinished` 会让 finished lambda 访问 nullptr；
-  修复：stop 开头 `process_->disconnect(this)`，finished lambda 用 `sender()`。
+  修复：stop 开头 `process_->disconnect(this)`，finished lambda 用 `sender()`；销毁用 `delete proc;`
+  而非 `deleteLater()`（事件循环可能已停）。
 - **零宽诊断归一化** `normalizedDiagnostic()`：clangd 对 `#include` 缺参数报零宽 range 且落在下一空行第 0 列，
   归一化归属到上一行行尾；波浪线/红点/悬停三处共用；零宽画波浪线取行尾最后一个可见字符。
 - **诊断悬停 tooltip**：`QTextCharFormat::setToolTip` 对 extra selection 无效（覆盖层不参与文本布局）；
@@ -146,6 +156,14 @@ Problems 下拉项带实时计数；空时显示不可选的 "No problems detect
   单元索引从 0 开始**合法**（只有负数无效）；`Compile=0`/`Link=0` 的单元丢弃；头文件不传给编译器；
   **不强制 `-std=`**（用项目自己的 `CppCompiler=-std=c++11`）；所有单元在**单次 `g++` 调用**里编译
   （不生成 makefile ⇒ 源码树不留 `.o`）；可选 `windres` 图标步骤。构建队列走 `QProcess::MergedChannels`。
+- **打开文件夹 / 打开项目**：`onOpenFolder()`（`Ctrl+K`）→ `openFolder(dir)`：`isDirectory` 校验 →
+  `fileExplorer_->setRootPath(dir)` → `projectFileIn(dir)`；有描述符则 `openProjectFile(path, true)`，
+  否则若 `projectKind_ != None` 先 `clearProjectState()`（否则 Build 会继续构建用户已离开的项目）
+  并记 "was left behind"。
+  `openProjectFile(path, showInExplorer=false)` 只在 `showInExplorer` 时把 Explorer 根设为
+  `projectRootDirectory()`——**打开单个文件不动 Explorer**。
+  `projectRootDirectory()`：CMake→`cmakeProject_->sourceDir`；DevCpp→`devProject_->projectDir`；否则 `projectPath_` 的父目录。
+  `onCloseProject()` 与 `openFolder()` 共用私有 `clearProjectState()`；它**不重置 Explorer 根**（用户选的目录比项目活得久）。
 - **格式化** `CodeFormatter` 走 `clang-format.exe`。**实测结论（反直觉，别猜）**：`-style=Microsoft` 会**完全忽略**
   项目里的 `.clang-format`；`-style=file` 没有配置文件时**回退到 LLVM 而不是 Microsoft**。唯一同时满足两者的写法：
   **`-style=file --fallback-style=Microsoft`**。另加 `--assume-filename=<当前文件名>`；15 秒单次超时；
@@ -156,19 +174,26 @@ Problems 下拉项带实时计数；空时显示不可选的 "No problems detect
   **`startNext()` 必须先判断进程是否已在跑再启动**：`run()` 每次都调它，不判断就会覆盖 `current_`
   并被 QProcess 拒绝第二次 `start()` —— 命令静默消失、正在跑的那条的输出被挂到新命令名下
   （症状：打开别的目录的文件后，状态栏一直报旧仓库）。排空靠 `finished`/`errorOccurred` 回调再次调 `startNext()`。
+  **析构必须先 `queue_.clear(); current_ = Job{};`** 再断开 + kill，否则关机途中 `startNext()` 会启动下一条
+  → `QProcess: Destroyed while process is still running`。
   子进程环境设 `LC_ALL=C`（解析器依赖 git 英文措辞）与 `GIT_TERMINAL_PROMPT=0`；**`git status` 失败只发空
   summary，不报错**（"不是仓库"就是靠这个判定的，所以它绝不能打成错误横幅）。`GitStatus` 解析
   `git status --porcelain=v1 -b -uall`；状态字母白名单 `" MADRCUT?!"`
-  （否则 `"not porcelain at all"` 这类垃圾行会被当成条目）；ahead/behind 靠英文关键词，**无法识别的措辞让计数保持 0**
-  （git 未承诺这些词稳定）；反引号路径做 C 反转义（八进制转义保留，路径只用于显示）。
+  （否则 `"not porcelain at all"` 这类垃圾行会被当成条目）；ahead/behind 靠英文关键词，**无法识别的措辞让计数保持 0**；
+  反引号路径做 C 反转义（八进制转义保留，路径只用于显示）。
   `MainWindow`：Git 菜单（刷新状态/暂存全部/取消暂存全部/提交…/显示日志/差异工作树/差异暂存/初始化仓库）
   + 状态栏 `statusGit_` 标签（objectName=`statusGit`，便于无头测试定位）；
   `syncGitWorkingDirectory()` 在构造、切 tab、打开项目、关闭项目时调用。
   冒烟测试 `_git_smoke.cpp`（43 项）在临时目录里跑完整链路：非仓库识别 → init → 队列 → stage → commit → log → diff。
+- **冒烟测试套路**：仓库根下 `_*_smoke.cpp`/`_*_probe.cpp` 均已 gitignore；链接
+  `build/msys2-ucrt64/src/LightCppApp/CMakeFiles/lightcpp.dir` 下除 `main.cpp.obj` 外的全部 `.obj` +
+  `libLightCpp*.a`，include 加 `src/LightCppProject/Include`。`_folder_smoke.cpp` 22 项覆盖
+  空文件夹 / CMake 文件夹 / `.dev` 文件夹 / 只含子项目的外层文件夹 / 直接打开描述符 / 打开文件不动 Explorer /
+  关项目保留根 / 非目录被拒。
 
 ## MSVC 支持（`LightCpp::App::Msvc`）
 - `MsvcToolchain.hpp/.cpp`：`detect()` 定位工具链、`clangdHeaders()` 产出 clangd 配置。cl.exe **不能裸跑**，
-  必须手工给 INCLUDE / LIB / PATH；**刻意不用 `vcvarsall.bat`**（要 cmd.exe + reg.exe，本机沙箱把 reg.exe 列黑名单，且慢）。
+  必须手工给 INCLUDE / LIB / PATH；**刻意不用 `vcvarsall.bat`**（要 cmd.exe + reg.exe，本机把 reg.exe 列黑名单，且慢）。
 - 检测顺序：`vswhere.exe -all -prerelease -products * -format json`（**必须带 `-prerelease`** 才看得到 18.x 预览版；
   `-property A -property B` 只回最后一个，不可用）→ `HKLM\...\VisualStudio\SxS\VS7`（VS2002–2019）→ VS6 的
   `...\VisualStudio\6.0\Setup\VC\ProductDir` + `VC98`。按分数（VS 主版本×1000）取最新。

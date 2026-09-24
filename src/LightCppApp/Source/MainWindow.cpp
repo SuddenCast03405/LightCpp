@@ -13,6 +13,8 @@
 #include "LightCpp/Text/Encoding.hpp"
 #include "LightCpp/Text/TextFile.hpp"
 
+#include "LightCpp/Project/FolderContents.hpp"
+
 #include <algorithm>
 
 #include <QAction>
@@ -380,14 +382,10 @@ void MainWindow::createActions()
     connect(actNew_, &QAction::triggered, this, &MainWindow::onNewFile);
 
     actOpenFolder_ = new QAction(QIcon::fromTheme(QStringLiteral("folder-open")), tr("Open &Folder..."), this);
-    connect(actOpenFolder_, &QAction::triggered, [this] {
-        const QString dir = QFileDialog::getExistingDirectory(
-            this, tr("Open Folder"));
-        if (!dir.isEmpty()) {
-            fileExplorer_->setRootPath(dir);
-            outputPanel_->appendBuildOutput(tr("Opened folder: %1").arg(dir));
-        }
-    });
+    actOpenFolder_->setShortcut(QKeySequence(QStringLiteral("Ctrl+K")));
+    actOpenFolder_->setStatusTip(
+        tr("Show a folder in the Explorer; open it as a project if it holds one"));
+    connect(actOpenFolder_, &QAction::triggered, this, &MainWindow::onOpenFolder);
 
     actOpen_ = new QAction(QIcon::fromTheme(QStringLiteral("document-open")), tr("&Open..."), this);
     actOpen_->setShortcut(QKeySequence::Open);
@@ -1338,6 +1336,54 @@ void MainWindow::onFormatFailed(int requestId, const QString& message)
 // ---------------------------------------------------------------------------
 // Project (CMake / Dev-C++)
 // ---------------------------------------------------------------------------
+void MainWindow::onOpenFolder()
+{
+    const QString dir = QFileDialog::getExistingDirectory(this, tr("Open Folder"));
+    if (!dir.isEmpty()) {
+        openFolder(dir);
+    }
+}
+
+void MainWindow::openFolder(const QString& dir)
+{
+    if (!LightCpp::Project::isDirectory(dir)) {
+        outputPanel_->showChannel(OutputPanel::ChannelBuild);
+        outputPanel_->appendBuildOutput(
+            tr("Cannot open folder: %1 is not a directory.").arg(dir));
+        return;
+    }
+
+    // A folder the user picked by hand is a root in its own right, so the
+    // Explorer is pointed at it *before* anything is decided about projects.
+    // If it turns out to hold one, openProjectFile() moves the root down to
+    // where the project actually starts.
+    fileExplorer_->setRootPath(dir);
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+    outputPanel_->appendBuildOutput(tr("Opened folder: %1").arg(dir));
+
+    const auto descriptor = LightCpp::Project::projectFileIn(dir);
+    if (!descriptor.has_value()) {
+        // Moving to a folder that is not a project leaves the previous project
+        // behind: Build would otherwise keep building something the user has
+        // visibly navigated away from.
+        if (projectKind_ != ProjectKind::None) {
+            const QString previous = projectRootDirectory();
+            clearProjectState();
+            outputPanel_->appendBuildOutput(
+                tr("Project closed: %1 was left behind.").arg(previous));
+        }
+        outputPanel_->appendBuildOutput(
+            tr("No CMakeLists.txt or .dev project here — showing the folder "
+               "on its own."));
+        return;
+    }
+
+    // Passing showInExplorer: the descriptor's directory is the project root,
+    // which is the folder worth showing — and for a .dev it is the same
+    // directory, so a project always ends up rooted at its own folder.
+    openProjectFile(descriptor->filePath, true);
+}
+
 void MainWindow::onOpenProject()
 {
     // One dialog for both formats. Which one it is can be told from the name,
@@ -1357,6 +1403,17 @@ void MainWindow::onCloseProject()
     if (projectKind_ == ProjectKind::None) {
         return;
     }
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+    clearProjectState();
+    outputPanel_->appendBuildOutput(tr("Project closed."));
+}
+
+void MainWindow::clearProjectState()
+{
+    // Remember where the project was before the state is torn down: the
+    // Explorer is still rooted there, and the user's folder should survive
+    // closing the project they opened inside it.
+    const QString root = projectRootDirectory();
     projectKind_ = ProjectKind::None;
     cmakeProject_.reset();
     devProject_.reset();
@@ -1364,9 +1421,15 @@ void MainWindow::onCloseProject()
     lastProjectExe_.clear();
     setWindowTitle(QStringLiteral("LightC++"));
     updateProjectActions();
-    outputPanel_->showChannel(OutputPanel::ChannelBuild);
-    outputPanel_->appendBuildOutput(tr("Project closed."));
     syncGitWorkingDirectory();
+    if (!root.isEmpty() && fileExplorer_ != nullptr
+        && fileExplorer_->rootPath() == root) {
+        // Nothing was opened *around* the project, so there is no outer folder
+        // to fall back to — the Explorer keeps showing where the user was
+        // rather than emptying itself out.
+        outputPanel_->appendBuildOutput(
+            tr("The Explorer still shows %1.").arg(root));
+    }
 }
 
 void MainWindow::onConfigureProject()
@@ -1425,7 +1488,7 @@ void MainWindow::onRunProject()
     startProgram(lastProjectExe_, QFileInfo(lastProjectExe_).absolutePath());
 }
 
-void MainWindow::openProjectFile(const QString& path)
+void MainWindow::openProjectFile(const QString& path, bool showInExplorer)
 {
     const QFileInfo info(path);
     if (!info.exists() || !info.isFile()) {
@@ -1477,9 +1540,27 @@ void MainWindow::openProjectFile(const QString& path)
         return;
     }
 
+    // The Explorer follows the project rather than the descriptor: a CMake
+    // project found by climbing lives at its source dir, and showing the file
+    // that was named would hide the tree the user is about to work in.
+    if (showInExplorer) {
+        fileExplorer_->setRootPath(projectRootDirectory());
+    }
+
     setWindowTitle(QStringLiteral("LightC++ — %1").arg(projectDisplayName()));
     updateProjectActions();
     syncGitWorkingDirectory();
+}
+
+QString MainWindow::projectRootDirectory() const
+{
+    if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
+        return cmakeProject_->sourceDir;
+    }
+    if (projectKind_ == ProjectKind::DevCpp && devProject_.has_value()) {
+        return devProject_->projectDir;
+    }
+    return projectPath_.isEmpty() ? QString() : QFileInfo(projectPath_).absolutePath();
 }
 
 QString MainWindow::projectDisplayName() const

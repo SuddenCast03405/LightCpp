@@ -80,6 +80,10 @@ private slots:
     void onFormatFailed(int requestId, const QString& message);
     /// Ask for a project file (CMakeLists.txt or a Dev-C++ .dev) and open it.
     void onOpenProject();
+    /// Ask for a folder. What happens next depends on what is in it: a folder
+    /// holding a project descriptor is opened as that project, and anything
+    /// else simply fills the Explorer. See openFolder().
+    void onOpenFolder();
     /// Prepare the build tree. CMake needs this once per configuration; a
     /// .dev project is configured by the file itself, so it only reports.
     void onConfigureProject();
@@ -89,8 +93,16 @@ private slots:
     /// Load a project from an explicit path — the body of
     /// File > Open Project..., separated out so it takes a path rather than
     /// going through a dialog every time.
-    void openProjectFile(const QString& path);
-
+    ///
+    /// `showInExplorer` points the Explorer at the project's own root
+    /// directory. Opening a *file* leaves the user's chosen folder on screen
+    /// (there is no folder to replace it with), but opening a *folder* that
+    /// turns out to hold a project deeper down should show that project's
+    /// root, which is what the user was really looking for.
+    void openProjectFile(const QString& path, bool showInExplorer = false);
+    /// Open a folder: show it in the Explorer, and if a project descriptor
+    /// sits directly inside it, open that project too.
+    void openFolder(const QString& dir);
     // --- git ---------------------------------------------------------------
     void onGitRefresh();
     void onGitStageAll();
@@ -168,6 +180,13 @@ private:
     void updateProjectActions();
     /// Name for the window title and log lines.
     [[nodiscard]] QString projectDisplayName() const;
+    /// The directory the project lives in — what the Explorer shows while a
+    /// project is open. Falls back to the descriptor's own directory.
+    [[nodiscard]] QString projectRootDirectory() const;
+    /// Forget the open project and put the window back to having none. The
+    /// Explorer is deliberately left alone: it is showing a directory the user
+    /// chose, which outlives whichever project happened to be inside it.
+    void clearProjectState();
 
     // --- git ---------------------------------------------------------------
     /// Directory git should run in: the open project, else the active file's
