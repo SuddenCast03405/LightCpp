@@ -8,6 +8,7 @@
 #include <QString>
 
 #include "LightCpp/App/LanguageServerClient.hpp"
+#include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/Text/Encoding.hpp"
 
 class CodeEditor;
@@ -126,6 +127,15 @@ private:
     QAction* actStopRun_ = nullptr;        // kill the running program (Shift+F5)
     QAction* actToolchainGcc_ = nullptr;   // mutually exclusive with Clang
     QAction* actToolchainClang_ = nullptr;
+    QAction* actToolchainMsvc_ = nullptr;
+
+    /// MSVC located once at start-up. cl.exe cannot be launched bare — it needs
+    /// INCLUDE/LIB pointing at both its own toolset and the Windows SDK, which
+    /// normally vcvarsall.bat would set up. See MsvcToolchain.hpp.
+    LightCpp::App::Msvc::Toolchain msvcToolchain_;
+    /// Compiler launched by the most recent build, so the failure message can
+    /// name the path that was actually missing.
+    QString lastCompilerPath_;
 
     // --- syntax check (clangd over LSP) ---
     LightCpp::App::LanguageServerClient* lsp_;

@@ -51,6 +51,9 @@ LightC++ IDE；显示名 `LightC++`，代码标识 `LightCpp`，二进制 `light
 - **诊断悬停 tooltip**：`QTextCharFormat::setToolTip` 对 extra selection 无效（覆盖层不参与文本布局）；
   改为重写 `event()` 拦 `QEvent::ToolTip`，`cursorForPosition` 与 `diagnostics_` 比较，零宽接受整行，重叠取最严重。
 - 未保存文档分配虚拟路径 `QDir::tempPath()/lightcpp-untitled/Untitled-N.cpp` 以便 lint；保存后 didClose 旧路径 + didOpen 真实路径。
+  **该目录必须真实存在**：clangd 会把 VFS 工作目录设成文档的父目录，目录不存在时每来一次 didOpen 就报
+  `VFS: failed to set CWD to .../lightcpp-untitled: No such file or directory`（不影响功能但刷日志）。
+  `onNewFile()` 里 `QDir().mkpath()` 一下即可修复；注意 `QDir::tempPath()` 在本机 MSYS2 环境里是 `E:/msys64/tmp`。
 
 ## 括号自动配对（CodeEditor，2026-09-24）
 - `autoCloseBracket(typed)` 插两半、光标居中；已有右半边时**跳过**它；有选区时**包裹**选区（保留选区）。
@@ -64,15 +67,42 @@ LightC++ IDE；显示名 `LightC++`，代码标识 `LightCpp`，二进制 `light
 - 验证脚本 `%TEMP%\lightcpp_smoke\bracket_smoke.cpp`，31 项断言。
 
 ## 单文件编译 / 运行（Tools 菜单）
-- Compile Current File(F7) / Compile && Run(F5) / Run(Ctrl+F5) / Stop(Shift+F5)；Toolchain 子菜单 GCC/Clang 互斥，默认 GCC。
+- Compile Current File(F7) / Compile && Run(F5) / Run(Ctrl+F5) / Stop(Shift+F5)；
+  **Toolchain 子菜单 GCC / Clang / MSVC（cl.exe）三选一**，默认 GCC。
 - **build 与 run 共用 `MainWindow::BuildTarget resolveBuildTarget(editor)`**，exe 恒在源码同目录同名；
   Untitled 源码写 `%TEMP%/lightcpp-compile/<tabstem>.cpp`。改路径规则只能改这个函数，否则"运行"找不到"编译"产物。
-- 编译 args `-Wall -Wextra -g <src> -o <exe>`；Compile & Run 在 `finished` 里 rc==0 才 `startProgram()`（`runAfterBuild_`）。
+- GCC/Clang args `-Wall -Wextra -g <src> -o <exe>`（**没有 `-std=`**，用编译器默认）；子进程 PATH 前置 `kMingwBin`。
+- Compile & Run 在 `finished` 里 rc==0 才 `startProgram()`（`runAfterBuild_`）。
 - Run 在 exe 不存在时弹 QMessageBox 询问是否立即编译；**exe 比源码旧也弹对话框**（不再只打一行提醒）。
 - **输出分流**：编译器输出 → Build Log；**程序输出（含 `--- Running:` / `--- Program exited ---` 横幅）→ Program Output**。
-  `compiler_` / `runner_` 懒创建复用，MergedChannels；两者 PATH 都前置 `kMingwBin`。
+  `compiler_` / `runner_` 懒创建复用，MergedChannels；PATH 前置各自的工具链 bin 目录（`toolDirs`）。
 - 被运行程序无终端：**必须在 `runner_->started()` 里 `closeWriteChannel()`** 给 stdin EOF，否则 scanf/getline 永久阻塞
   （`start()` 之后立刻 close 无效，那时通道未建立）。
+
+### MSVC 支持（`LightCpp::App::Msvc`，2026-09-24）
+- `MsvcToolchain.hpp/.cpp`：`detect()` 定位工具链，`standardArgument()` 决定 `/std:`。
+  cl.exe **不能裸跑**，必须手工给 INCLUDE / LIB / PATH；**刻意不用 `vcvarsall.bat`**——它要拉
+  cmd.exe + reg.exe（本机沙箱把 reg.exe 列入黑名单，跑了直接被拒），而且慢。
+- 检测顺序：`vswhere.exe -all -prerelease -products * -format json`（VS2017+，**必须带 `-prerelease`
+  才看得到 VS 2026 / 18.x 预览版**）→ `HKLM\...\VisualStudio\SxS\VS7`（VS2002–2019）→ VS6 自己的键
+  `...\VisualStudio\6.0\Setup\VC\ProductDir` + 经典 `VC98` 路径。按分数（VS 主版本×1000）取最新。
+- 三种目录布局：VS2017+ `VC\Tools\MSVC\<ver>\bin\Hostx64\{x64,x86}`；
+  VS2002–2015 `VC\bin\amd64\cl.exe` + `VC\lib\amd64`；VC6 `VC98\Bin` + `VC98\Lib`（仅 x86）。
+- Windows SDK 位置读 `HKLM\SOFTWARE\Microsoft\Windows Kits\Installed Roots` 的 **`KitsRoot10`**
+  （本机在 `D:\Windows Kits\10`，**不在** `C:\Program Files (x86)\Windows Kits\10`，别猜路径）。
+  再取版本号最高的 `Include\10.*`，拼 `ucrt/shared/um` 与 `Lib\<ver>\{ucrt,um}\<arch>`。
+- 编译参数：`/nologo /W4 /EHsc /MT [/TP]` + `/std:` + `/Fe<exe> /Fo<obj> <src>`。
+  - `/MT` 静态链接 CRT，等价于 MinGW 侧的 `-static-libgcc -static-libstdc++`，产物不依赖 VC 运行库。
+  - **`/TP`**：cl 按扩展名判语言，`.h` 会被当 C；加 `/TP` 才与"头文件按 C++ 编"的既有行为一致。
+  - **不加 `/Zi`**：它会在源码目录里掉一个 6 MB `.pdb` + 3 MB `.ilk`；这条路径是编译运行，不是调试。
+  - `/std:` 按 cl 小版本降级：≥29 → c++20、≥14 → c++17、≥11 → c++latest、更老（含 VS2015）→ 一个都不传
+    （传了是硬错误）。小版本取自工具集目录名 `14.30.30705` 的 30。
+- **.obj 定向到 `%TEMP%/lightcpp-compile/msvc/`**（cl 无法不产生 .obj，而 `/Fe` 又能保证 exe 落在源码旁），
+  这样用户源码目录里只有 `.cpp` 和 `.exe`。`/Fe`/`/Fo` 用**拼接式**（`/Fepath`）而不是 `/Fe:path`，兼容性更好。
+- 菜单项在找不到工具链时 **disable + 把原因写进 statusTip**；编译横幅带上 `[MSVC 19.30 (Visual Studio 17.0, toolset 14.30.30705)]`，
+  因为装了多个 VS 时只写 cl.exe 根本说不清是哪个。
+- **本机只有 VS 2022 Professional（17.0 / toolset 14.30.30705 / cl 19.30，Windows SDK 10.0.19041.0）**；
+  没有 18.x，也没有 VC6。VC6/legacy 两条布局路径是照文档写的，**没有实物验证过**。
 
 ## 工程约定
 - CMake 目标统一 `LightCpp` 前缀；严格警告放 `LightCppWarnings` INTERFACE 目标，只链自有目标。
@@ -90,6 +120,9 @@ LightC++ IDE；显示名 `LightC++`，代码标识 `LightCpp`，二进制 `light
   **坑**：PowerShell 工具不回显 stdout/stderr；`cmd *> file` 写成 UTF-16（Read 判定为二进制）。
   正确姿势：`$out = & cmd ... 2>&1; $out | Out-File -Encoding utf8 file` 再 Read。
   git 提交信息含换行/引号时不要 `-m`：用 `[System.IO.File]::WriteAllText(..., UTF8Encoding($false))` 写消息文件 + `git commit -F`。
+- **沙箱限制（会拦住整类做法，先知道能省很多时间）**：PowerShell 工具**禁止调用 `cmd.exe`**（连 `.bat` 里出现
+  `if errorlevel` 都会被静态拦下）；`reg.exe` 在程序黑名单里，一跑就整条命令被拒。所以 `vcvarsall.bat`、任何
+  依赖 cmd 的 `call ... && ...` 在这里都不可行，必须在 C++/PowerShell 里把环境自己搭出来。
 - 跑 Qt 程序需 `E:\msys64\ucrt64\bin` 在 PATH；MinGW 测试可执行文件加 `-static-libgcc -static-libstdc++`（否则 ctest 派生进程缺 DLL）。
 - **无头 UI 冒烟测试配方**（改 GUI / clangd 后跑）：写自带 `main()` 的 cpp（QApplication + 真实 MainWindow/OutputPanel），
   用 `E:/msys64/ucrt64/bin/g++.exe` 编译，`-I` 上 `src/LightCppApp/Include`、`src/LightCppText/Include`、`src/LightCppCore/Include`、

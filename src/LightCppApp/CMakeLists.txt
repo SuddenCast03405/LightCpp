@@ -7,6 +7,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/CppSyntaxHighlighter.hpp
     Include/LightCpp/App/FileExplorer.hpp
     Include/LightCpp/App/LanguageServerClient.hpp
+    Include/LightCpp/App/MsvcToolchain.hpp
     Include/LightCpp/App/OutputPanel.hpp
     Include/LightCpp/App/MainWindow.hpp
     Source/CodeEditor.cpp
@@ -14,6 +15,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/CppSyntaxHighlighter.cpp
     Source/FileExplorer.cpp
     Source/LanguageServerClient.cpp
+    Source/MsvcToolchain.cpp
     Source/OutputPanel.cpp
     Source/MainWindow.cpp
 )

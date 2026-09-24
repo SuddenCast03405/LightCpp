@@ -5,6 +5,7 @@
 #include "LightCpp/App/FileExplorer.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
+#include "LightCpp/App/MsvcToolchain.hpp"
 
 #include "LightCpp/Text/Encoding.hpp"
 #include "LightCpp/Text/TextFile.hpp"
@@ -281,6 +282,18 @@ MainWindow::MainWindow(QWidget* parent)
     resize(1280, 800);
     onNewFile();  // start with an empty editor
 
+    // Locate MSVC once. cl.exe needs INCLUDE/LIB built by hand, so this walks
+    // the installed toolsets and the Windows SDK up front rather than failing
+    // mid-build; the menu entry reports the outcome either way.
+    msvcToolchain_ = LightCpp::App::Msvc::detect();
+    if (msvcToolchain_.isValid()) {
+        actToolchainMsvc_->setStatusTip(
+            tr("Use %1").arg(msvcToolchain_.label));
+    } else {
+        actToolchainMsvc_->setEnabled(false);
+        actToolchainMsvc_->setStatusTip(msvcToolchain_.problem);
+    }
+
     // Syntax checking is on by default — the Tools menu entry stays
     // checkable so it can still be switched off.
     actSyntaxCheck_->setChecked(true);
@@ -385,7 +398,7 @@ void MainWindow::createActions()
     actCompile_ = new QAction(tr("Compil&e Current File"), this);
     actCompile_->setShortcut(QKeySequence(Qt::Key_F7));
     actCompile_->setStatusTip(tr("Compile the active file with the selected "
-                                  "toolchain (gcc/g++/clang/clang++)"));
+                                  "toolchain (gcc / g++ / clang / clang++ / cl.exe)"));
     connect(actCompile_, &QAction::triggered,
             this, &MainWindow::onCompileCurrentFile);
 
@@ -414,7 +427,7 @@ void MainWindow::createActions()
     connect(actStopRun_, &QAction::triggered,
             this, &MainWindow::onStopProgram);
 
-    // Toolchain choice: GCC vs Clang. C/C++ (g++ vs gcc etc.) is chosen
+    // Toolchain choice: GCC / Clang / MSVC. C/C++ (g++ vs gcc etc.) is chosen
     // automatically from the file extension at compile time.
     auto* toolchainGroup = new QActionGroup(this);
     toolchainGroup->setExclusive(true);
@@ -425,8 +438,11 @@ void MainWindow::createActions()
     actToolchainClang_ = new QAction(tr("&Clang (clang++/clang)"), this);
     actToolchainClang_->setCheckable(true);
     actToolchainClang_->setStatusTip(tr("Use Clang from MSYS2 UCRT64"));
+    actToolchainMsvc_ = new QAction(tr("&MSVC (cl.exe)"), this);
+    actToolchainMsvc_->setCheckable(true);
     toolchainGroup->addAction(actToolchainGcc_);
     toolchainGroup->addAction(actToolchainClang_);
+    toolchainGroup->addAction(actToolchainMsvc_);
 
     actAbout_ = new QAction(tr("&About LightC++..."), this);
     connect(actAbout_, &QAction::triggered, this, &MainWindow::onAbout);
@@ -455,6 +471,7 @@ void MainWindow::createMenuBar()
     auto* toolchainMenu = toolsMenu->addMenu(tr("&Toolchain"));
     toolchainMenu->addAction(actToolchainGcc_);
     toolchainMenu->addAction(actToolchainClang_);
+    toolchainMenu->addAction(actToolchainMsvc_);
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(actToggleExplorer_);
@@ -514,9 +531,15 @@ void MainWindow::onNewFile()
     ed->setEncodingLabel(QStringLiteral("UTF-8"));
     // Give unsaved buffers a virtual .cpp path so the language server can
     // check them: clangd keys everything off file URIs and the extension
-    // decides the parse mode. The file itself never touches the disk.
-    ed->setLintPath(QStringLiteral("%1/lightcpp-untitled/%2.cpp")
-                        .arg(QDir::tempPath(), title));
+    // decides the parse mode. The file itself never touches the disk, but the
+    // directory has to exist — clangd sets its VFS working directory to the
+    // document's parent and otherwise fails with
+    //   "failed to set CWD to .../lightcpp-untitled: No such file or directory"
+    // on every didOpen, which it then retries for each diagnostic.
+    const QString virtualDir = QDir(QDir::tempPath())
+                                   .filePath(QStringLiteral("lightcpp-untitled"));
+    QDir().mkpath(virtualDir);
+    ed->setLintPath(QDir(virtualDir).filePath(title + QStringLiteral(".cpp")));
     updateEncodingCombo(ed);
 }
 
@@ -1068,20 +1091,78 @@ void MainWindow::onCompileCurrentFile()
     // Headers compile as C++ by default.
     const QString suf = QFileInfo(srcPath).suffix().toLower();
     const bool isC = (suf == "c");
-    const bool useClang = actToolchainClang_->isChecked();
-    const QString compilerName = useClang
-        ? (isC ? QStringLiteral("clang.exe")    : QStringLiteral("clang++.exe"))
-        : (isC ? QStringLiteral("gcc.exe")      : QStringLiteral("g++.exe"));
-    const QString compilerExe = QDir(kMingwBin).filePath(compilerName);
     const QString outExe = target.exePath;
-    const QStringList args = {
-        QStringLiteral("-Wall"),
-        QStringLiteral("-Wextra"),
-        QStringLiteral("-g"),
-        srcPath,
-        QStringLiteral("-o"),
-        outExe,
-    };
+
+    QString compilerExe;
+    QStringList args;
+    QStringList toolDirs;  // prepended to the child's PATH
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+
+    if (actToolchainMsvc_->isChecked()) {
+        if (!msvcToolchain_.isValid()) {
+            outputPanel_->showChannel(OutputPanel::ChannelBuild);
+            outputPanel_->appendBuildOutput(
+                tr("No MSVC toolchain available: %1").arg(msvcToolchain_.problem));
+            runAfterBuild_ = false;
+            return;
+        }
+        compilerExe = msvcToolchain_.clPath;
+        toolDirs << msvcToolchain_.binDir;
+
+        // cl always emits a .obj and there is no flag that suppresses it, so it
+        // is sent to temp rather than left in the user's source tree. The .exe
+        // must still land next to the source — "Run" looks there.
+        const QString objDir = QDir(QDir::tempPath())
+                                   .filePath(QStringLiteral("lightcpp-compile/msvc"));
+        QDir().mkpath(objDir);
+        const QString objPath = QDir(objDir).filePath(
+            QFileInfo(srcPath).completeBaseName() + QStringLiteral(".obj"));
+
+        args = {QStringLiteral("/nologo"), QStringLiteral("/W4"),
+                QStringLiteral("/EHsc"), QStringLiteral("/MT")};
+        if (!isC) {
+            // cl infers the language from the extension, so a .h would compile
+            // as C. /TP forces C++, matching what the GCC path does by picking
+            // g++ for headers.
+            args << QStringLiteral("/TP");
+        }
+        const QString standard = LightCpp::App::Msvc::standardArgument(msvcToolchain_);
+        if (!standard.isEmpty()) {
+            // Omitted entirely for compilers that predate /std: (VS 2015 and
+            // older), where passing it is a hard error.
+            args << standard;
+        }
+        // /MT statically links the C runtime so the exe runs on its own,
+        // playing the same role as -static-libgcc -static-libstdc++ on the
+        // MinGW side. No /Zi: it would drop a multi-megabyte .pdb next to the
+        // source, and this path is for compiling and running, not debugging.
+        args << (QStringLiteral("/Fe") + QDir::toNativeSeparators(outExe))
+             << (QStringLiteral("/Fo") + QDir::toNativeSeparators(objPath))
+             << QDir::toNativeSeparators(srcPath);
+
+        // Exactly what vcvarsall.bat would otherwise have computed. Set rather
+        // than appended so a stale environment inherited from a VS dev prompt
+        // cannot point the compiler at a different toolset.
+        env.insert(QStringLiteral("INCLUDE"),
+                   msvcToolchain_.includeDirs.join(QLatin1Char(';')));
+        env.insert(QStringLiteral("LIB"),
+                   msvcToolchain_.libDirs.join(QLatin1Char(';')));
+    } else {
+        const bool useClang = actToolchainClang_->isChecked();
+        const QString compilerName = useClang
+            ? (isC ? QStringLiteral("clang.exe")    : QStringLiteral("clang++.exe"))
+            : (isC ? QStringLiteral("gcc.exe")      : QStringLiteral("g++.exe"));
+        compilerExe = QDir(kMingwBin).filePath(compilerName);
+        toolDirs << kMingwBin;
+        args = {
+            QStringLiteral("-Wall"),
+            QStringLiteral("-Wextra"),
+            QStringLiteral("-g"),
+            srcPath,
+            QStringLiteral("-o"),
+            outExe,
+        };
+    }
 
     // Lazily create the QProcess once and wire its handlers.
     if (compiler_ == nullptr) {
@@ -1117,7 +1198,9 @@ void MainWindow::onCompileCurrentFile()
             if (e != QProcess::FailedToStart) return;
             outputPanel_->appendBuildOutput(
                 tr("Compiler failed to start. Check that %1 exists.")
-                    .arg(QDir(kMingwBin).filePath(QStringLiteral("<gcc|g++|clang|clang++>.exe"))));
+                    .arg(lastCompilerPath_.isEmpty()
+                             ? QDir(kMingwBin).filePath(QStringLiteral("<gcc|g++|clang|clang++>.exe"))
+                             : lastCompilerPath_));
             runAfterBuild_ = false;
             updateRunActionStates();
         });
@@ -1130,21 +1213,27 @@ void MainWindow::onCompileCurrentFile()
         return;
     }
 
-    // The compiler + produced exe rely on MSYS2 UCRT64 runtime DLLs, so
-    // prepend that bin dir to the child's PATH (the IDE itself does not
-    // need it there to launch).
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    // Each toolchain needs its own bin directory on the child's PATH: the
+    // MinGW compilers and the binaries they produce both need the UCRT64
+    // runtime DLLs, and cl.exe needs its own alongside it.
     env.insert(QStringLiteral("PATH"),
-               kMingwBin + QDir::listSeparator() + env.value(QStringLiteral("PATH")));
+               toolDirs.join(QDir::listSeparator()) + QDir::listSeparator()
+                   + env.value(QStringLiteral("PATH")));
     compiler_->setProcessEnvironment(env);
     compiler_->setWorkingDirectory(QFileInfo(srcPath).absolutePath());
 
     outputPanel_->showChannel(OutputPanel::ChannelBuild);
+    // Name the toolset as well as the compiler: with more than one MSVC
+    // installed, cl.exe alone does not say which one produced these errors.
+    QString compilerBanner = QFileInfo(compilerExe).fileName();
+    if (actToolchainMsvc_->isChecked()) {
+        compilerBanner += QStringLiteral(" [%1]").arg(msvcToolchain_.label);
+    }
     outputPanel_->appendBuildOutput(
         tr("--- Compiling: %1 %2 ---")
-            .arg(QFileInfo(compilerExe).fileName(),
-                 args.join(QStringLiteral(" "))));
+            .arg(compilerBanner, args.join(QStringLiteral(" "))));
     lastBuildExe_ = outExe;
+    lastCompilerPath_ = compilerExe;
     compiler_->start(compilerExe, args);
     updateRunActionStates();
 }
