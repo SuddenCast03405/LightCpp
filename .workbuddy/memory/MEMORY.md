@@ -17,13 +17,35 @@ LightC++ IDE：显示名 "LightC++"，代码标识 `LightCpp`，最终二进制 
   - `localAnsiEncoding()` / `localAnsiDisplayName()`：查询本地 ANSI 代码页及显示名。
   - UTF-16/32 解码后额外检测未配对代理并拒绝（Qt decoder 宽松，需手动校验）。
 - `lightcpp-enc` CLI 工具：检测文件编码、`--out` 转 UTF-8、`--list` 列出支持的编码。
-- `lightcpp` GUI 应用（Qt6 Widgets，纯文本阶段）：暗色主题 IDE 外壳。
-  - `MainWindow`：菜单栏(File/View/Help)、工具栏(New/Open/Save/SaveAll/编码选择器)、
-    左侧文件树(QFileSystemModel + QTreeView)、中央编辑器标签页(QTabWidget)、
-    底部输出面板、状态栏(文件路径/语言/编码/光标位置)。
+- `lightcpp` GUI 应用（Qt6 Widgets，纯文本阶段）：原生外观 IDE 外壳。
+  - `MainWindow`：菜单栏(File/Tools/View/Help)、工具栏(New/Open/Save/SaveAll/Compile)、
+    状态栏(文件路径/语言/编码/光标位置)。
+  - **布局（2026-09-23 起）：嵌套 QSplitter，无 QDockWidget**。
+    外边距结构：外层垂直 splitter = [ 内层水平 splitter(Explorer | 编辑器标签页) , 底部 Output ]。
+    两个 splitter 都 `setChildrenCollapsible(false)`（面板不能被拖到 0 宽/高）。
+    View 菜单用自建 checkable QAction 控制显隐（Explorer Ctrl+B / Output Ctrl+J），
+    不再用 `QDockWidget::toggleViewAction()`。
+    —— 目的：侧边栏与底部面板属于同一套窗口布局，不能被拖出成独立浮动窗体。
   - `CodeEditor`：QPlainTextEdit 子类 + 行号栏 + 当前行高亮 + `CppSyntaxHighlighter`。
   - `CppSyntaxHighlighter`：QSyntaxHighlighter 子类，C/C++ 关键字/类型/字符串/注释/数字/函数/预处理指令。
-  - `FileExplorer` / `OutputPanel`：QDockWidget 子类。
+  - `FileExplorer` / `OutputPanel`：**QWidget 子类**（曾是 QDockWidget），内部各带一行
+    小标题（`EXPLORER` / `OUTPUT`，加粗小字号 QLabel）替代原 dock 标题栏。
+  - **OutputPanel 是三通道面板**（标题行右侧 `QComboBox` 选通道 + `QStackedWidget` 切页）：
+    `ChannelServer=0` Clangd Log / `ChannelBuild=1` Build Log（默认显示）/ `ChannelProblems=2` Problems。
+    每个通道各有缓冲，互不混淆。API：`appendServerLog()` / `appendBuildOutput()` /
+    `setProblems()` / `showChannel()` / `clearOutput()`——**`appendOutput()` 已删除**，
+    新增输出请按语义选 server 还是 build 通道。
+    Problems 下拉项文本带实时计数；空列表显示不可选的 "No problems detected."。
+    combo 信号是 `currentIndexChanged(int)`，须用 lambda 转 `Channel`（int→非作用域枚举不隐式转换）。
+  - **Problems 列表**：按文件分组的 QTreeWidget（父行=文件名，子行=`severity: msg [code]` + `Ln x, Col y`），
+    行内 data 角色 UserRole=路径 / +1=行(0基) / +2=列(0基)，单击 emit
+    `problemActivated(path, line, column)`。`MainWindow::onProblemActivated()` 先按各 tab 的
+    `lintPath()` 匹配（未保存缓冲是虚拟临时路径，不能从磁盘重开），再 `CodeEditor::gotoLocation()`。
+    `MainWindow` 用 `diagnosticsByFile_`(键=lintPath) 汇总，`rebuildProblems()` 展平并按
+    (path,line,col) 排序后交给面板；关 tab / 保存换路径 / 关 clangd 时同步清理。
+  - `CodeEditor` 还提供：`normalizedDiagnostics()`（与波浪线一致的归一化位置）、
+    `setDiagnostics()` 会 emit `diagnosticsChanged(lintPath(), 归一化列表)`、
+    `gotoLocation(line, col)`（0 基，居中并取得焦点）。
   - 打开文件时调用 `readDetectedTextFile()` 自动检测编码并转换，状态栏显示编码信息。
   - **无自定义主题**：使用 Qt 默认原生外观，不设 QPalette / StyleSheet。
     CodeEditor 行号栏/当前行高亮使用 `palette().color()` 动态适配。
@@ -37,6 +59,11 @@ LightC++ IDE：显示名 "LightC++"，代码标识 `LightCpp`，最终二进制 
     传 0 则什么都不画（曾导致行号栏有背景无数字）。
 - `LightCppApp` 语法检查：通过 `LanguageServerClient` 用 LSP over stdio 跟 clangd 通信。
   - clangd 路径硬编码在 `MainWindow.cpp` 常量 `kClangdPath` = `E:/msys64/ucrt64/bin/clangd.exe`。
+  - **clangd 默认开启**：构造函数末尾 `actSyntaxCheck_->setChecked(true)`；Tools 菜单项仍可关掉。
+  - `LanguageServerClient::serverLog(QString)`：clangd 的 **stderr**（显式
+    `setProcessChannelMode(SeparateChannels)`）按行转发 + `window/logMessage`/`window/showMessage`
+    （带 [error]/[warn]/[info] 前缀）→ Output 面板的 Clangd Log 通道。
+    服务端启动失败会自动切到该通道。
   - Tools 菜单"语法检查"开关启动/停止 LSP。
   - 文本变化 800ms 防抖后发 `textDocument/didChange`（全文同步）。
   - 接收 `textDocument/publishDiagnostics` → 在 CodeEditor 上画波浪下划线 + 行号区红/黄点。
@@ -72,7 +99,7 @@ LightC++ IDE：显示名 "LightC++"，代码标识 `LightCpp`，最终二进制 
   - **stop() 顺序坑**：`process_ = nullptr` 后再 `waitForFinished` 会触发 finished lambda
     访问 nullptr。修复：stop 开头 `process_->disconnect(this)` 断开所有信号；
     finished lambda 用 `sender()` 不依赖成员指针。
-- 测试目标 `LightCppCoreTests`（28 例）+ `LightCppTextTests`（34 例），共 62 例全部通过。
+- 测试目标 `LightCppCoreTests` + `LightCppTextTests`，ctest 共 67 例全部通过（2026-09-23 验证）。
 
 ## 工程约定（已在本仓库建立）
 - CMake 目标统一 `LightCpp` 前缀；严格警告放在 `LightCppWarnings` INTERFACE 目标上，只链接自有目标。
@@ -80,6 +107,20 @@ LightC++ IDE：显示名 "LightC++"，代码标识 `LightCpp`，最终二进制 
 - 第三方依赖走 CPM.cmake；本仓库把 CPM.cmake 与 googletest 源码本地化（`cmake/`、`third_party/`），可离线构建。
 - 纯逻辑/数据层用 std::string/std::vector/std::optional；与 Qt 交互层才用 QString/QByteArray（待 Qt 就位）。
 - 文件 I/O、解析等一律放到后台线程，UI 用 queued 信号槽更新（核心层保持无状态可测）。
+- **改 GUI 后要验证**：`QSyntaxHighlighter` 里的正则不 valid 会被**静默跳过**
+  （只往 stderr 打 "invalid QRegularExpression"，界面看不出异常）——改正则必须用
+  `QRegularExpression::isValid()` 断言一次（历史上数字高亮因此哑掉很久，2026-09-24 修复）。
+- **无头 UI 冒烟测试**（改 GUI / clangd 集成后推荐跑；2026-09-24 实践验证过）：
+  1) 写一个自带 `main()` 的测试 cpp（`QApplication` + 真实 `MainWindow`/`OutputPanel`）；
+  2) 用 `E:/msys64/ucrt64/bin/g++.exe` 编译，`-I` 上 `src/LightCppApp/Include`、`src/LightCppText/Include`、
+     `src/LightCppCore/Include`、`E:/msys64/ucrt64/include/qt6{,/QtCore,/QtGui,/QtWidgets}`；
+  3) **链接参数**：`build/msys2-ucrt64/src/LightCppApp/CMakeFiles/lightcpp.dir/` 下
+     除 `main.cpp.obj` 外的全部 .obj（含 `lightcpp_autogen/mocs_compilation.cpp.obj`，它提供 moc）
+     + `libLightCppText.a` + `libLightCppCore.a` + `-lQt6Widgets -lQt6Gui -lQt6Core`（`-L E:/msys64/ucrt64/lib`）
+     + `-static-libgcc -static-libstdc++`。这样不必自己跑 moc。
+  4) `QT_QPA_PLATFORM=offscreen` 运行，用 `QTimer::singleShot` 分阶段断言；驱动私有槽用
+     `QMetaObject::invokeMethod(&w, "onFileActivated", Q_ARG(QString, path))`。
+  注意：应用链接的是动态 Qt，运行时需 `E:\msys64\ucrt64\bin` 在 PATH。
 
 ## 本机环境
 - 工具链 MSYS2 UCRT64：`E:\msys64\ucrt64\bin`（gcc 16.2 / cmake 4.3.3 / ninja 1.13）。
@@ -88,8 +129,12 @@ LightC++ IDE：显示名 "LightC++"，代码标识 `LightCpp`，最终二进制 
 - **Git**：`D:\Program Files\Git For Windows\bin\git.exe`（MSVC 编译，无需其他组件）；
   备选 `E:\msys64\ucrt64\bin\git.exe`。仓库级身份 lenovo / lenovo@local。
 - **工作流约定（用户要求）：每完成一次代码改动就 git commit 一次。**
-- 用 PowerShell 构建（Bash 环境 PATH 损坏），先 `$env:PATH = "E:\msys64\ucrt64\bin;" + $env:PATH`；
-  需要命令输出时写文件再读。
+- 用 PowerShell 构建（Bash 环境 PATH 损坏，`ls`/`head` 等 not found），先 `$env:PATH = "E:\msys64\ucrt64\bin;" + $env:PATH`；
+  需要命令输出时写文件再读。**坑**：PowerShell 工具不回显 stdout/stderr（`Write-Output` 也看不到），
+  且 `cmd *> file` 会写成 UTF-16（Read 工具判定为二进制）；正确姿势是
+  `$out = & cmd ... 2>&1; $out | Out-File -Encoding utf8 file` 再用 Read。
+  git 提交信息含换行/双引号时不要 `git commit -m`（会被拆成多个 pathspec），
+  改用 `[System.IO.File]::WriteAllText(..., UTF8Encoding($false))` 写消息文件 + `git commit -F`。
 - MinGW 下测试可执行文件静态链接 GCC 运行时（`-static-libgcc -static-libstdc++`），否则 ctest 派生进程会缺 DLL。
 - 运行 Qt 程序需 `E:\msys64\ucrt64\bin` 在 PATH 中（Qt6Core.dll 等依赖）。
 - **单文件编译**：Tools → Compile Current File（F7）+ Toolchain 子菜单
