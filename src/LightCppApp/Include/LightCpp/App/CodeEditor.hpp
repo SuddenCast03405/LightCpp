@@ -2,6 +2,7 @@
 
 #include <QPlainTextEdit>
 #include <QTextCharFormat>
+#include <QTextCursor>
 
 #include "LightCpp/App/LanguageServerClient.hpp"
 
@@ -120,6 +121,24 @@ private:
     /// of the previous line — this moves the anchor there.
     [[nodiscard]] LightCpp::App::LspDiagnostic
     normalizedDiagnostic(const LightCpp::App::LspDiagnostic& d) const;
+
+    // --- bracket auto-pairing ------------------------------------------
+    /// Handle a typed bracket/quote key. Inserts the closing half, wraps a
+    /// selection, or steps over a closing bracket that is already there.
+    /// Returns true when the keystroke was consumed.
+    bool autoCloseBracket(QChar typed);
+    /// Delete both halves of an empty pair — `(|)` + Backspace removes the
+    /// pair instead of leaving a stray `)`. Returns true when handled.
+    bool backspaceEmptyPair();
+    /// The closing character that pairs with `opener`, or a null QChar when
+    /// `opener` is not an auto-paired character.
+    [[nodiscard]] static QChar closingBracketFor(QChar opener);
+    [[nodiscard]] static bool isClosingBracket(QChar ch);
+    [[nodiscard]] static bool isQuote(QChar ch);
+    /// Character immediately before / after `cursor`, or a null QChar when
+    /// the cursor sits at the very start / end of the document.
+    [[nodiscard]] static QChar characterBefore(const QTextCursor& cursor);
+    [[nodiscard]] static QChar characterAfter(const QTextCursor& cursor);
 
     LineNumberArea* lineNumberArea_;
     CppSyntaxHighlighter* highlighter_;

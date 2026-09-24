@@ -10,6 +10,8 @@ build/
 # Local temp files used for build/test output capture
 _*.txt
 _*.py
+_*.cpp
+_*.exe
 _check.txt
 
 # Coverage artifacts

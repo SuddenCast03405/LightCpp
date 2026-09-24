@@ -322,10 +322,193 @@ void CodeEditor::dismissPopup()
     popup_->dismiss();
 }
 
+// ---------------------------------------------------------------------------
+// Bracket auto-pairing
+// ---------------------------------------------------------------------------
+QChar CodeEditor::closingBracketFor(QChar opener)
+{
+    switch (opener.unicode()) {
+    case '(':  return QLatin1Char(')');
+    case '[':  return QLatin1Char(']');
+    case '{':  return QLatin1Char('}');
+    case '"':  return QLatin1Char('"');
+    case '\'': return QLatin1Char('\'');
+    default:   return QChar();
+    }
+}
+
+bool CodeEditor::isClosingBracket(QChar ch)
+{
+    return ch == QLatin1Char(')') || ch == QLatin1Char(']')
+           || ch == QLatin1Char('}');
+}
+
+bool CodeEditor::isQuote(QChar ch)
+{
+    return ch == QLatin1Char('"') || ch == QLatin1Char('\'');
+}
+
+QChar CodeEditor::characterBefore(const QTextCursor& cursor)
+{
+    if (cursor.document() == nullptr || cursor.position() <= 0) {
+        return QChar();
+    }
+    return cursor.document()->characterAt(cursor.position() - 1);
+}
+
+QChar CodeEditor::characterAfter(const QTextCursor& cursor)
+{
+    if (cursor.document() == nullptr
+        || cursor.position() >= cursor.document()->characterCount() - 1) {
+        return QChar();
+    }
+    return cursor.document()->characterAt(cursor.position());
+}
+
+bool CodeEditor::autoCloseBracket(QChar typed)
+{
+    if (isReadOnly()) {
+        return false;
+    }
+    const QChar closer = closingBracketFor(typed);
+    const bool isOpener = !closer.isNull();
+    const bool isCloser = isClosingBracket(typed);
+    const bool quote = isQuote(typed);
+    if (!isOpener && !isCloser) {
+        return false;  // not a bracket or quote — not our business
+    }
+
+    QTextCursor cursor = textCursor();
+
+    // A quote only pairs at the start of a token. After a letter or digit it
+    // is C++ punctuation rather than a delimiter — the digit separator in
+    // `1'000`, or an apostrophe inside a comment — and pairing it would just
+    // insert a character the user has to delete again.
+    // The rule only applies to typing into the middle of existing text: a
+    // selection is always wrapped, whatever precedes it.
+    if (quote && !cursor.hasSelection()) {
+        const QChar prev = characterBefore(cursor);
+        const bool prevIsWord = prev.isLetterOrNumber()
+                                || prev == QLatin1Char('_');
+        // …unless the closing quote of an existing pair is being typed,
+        // where stepping over it is still the right thing to do.
+        if (prevIsWord && characterAfter(cursor) != typed) {
+            return false;
+        }
+    }
+
+    // --- a selection gets wrapped: (foo) / "foo" --------------------------
+    if (cursor.hasSelection()) {
+        if (isCloser) {
+            return false;  // typing `)` over a selection replaces it normally
+        }
+        const int start = cursor.selectionStart();
+        const int end = cursor.selectionEnd();
+        // Insert around the selection instead of re-inserting the selected
+        // text: QTextCursor::selectedText() turns paragraph breaks into
+        // U+2029, which would corrupt multi-line selections.
+        cursor.beginEditBlock();
+        cursor.setPosition(start);
+        cursor.insertText(QString(typed));
+        cursor.setPosition(end + 1);
+        cursor.insertText(QString(closer));
+        cursor.setPosition(start + 1);
+        cursor.setPosition(end + 1, QTextCursor::KeepAnchor);
+        cursor.endEditBlock();
+        setTextCursor(cursor);
+        return true;
+    }
+
+    // --- step over a closing half that is already there -------------------
+    // This is what makes typing the auto-inserted `)` end up after it
+    // instead of producing `())`.
+    if (characterAfter(cursor) == typed && (isCloser || quote)) {
+        cursor.movePosition(QTextCursor::NextCharacter);
+        setTextCursor(cursor);
+        return true;
+    }
+
+    if (isCloser) {
+        return false;  // a lone `)` types normally
+    }
+
+    // --- insert both halves, caret in between ----------------------------
+    cursor.beginEditBlock();
+    cursor.insertText(QString(typed));
+    cursor.insertText(QString(closer));
+    cursor.movePosition(QTextCursor::PreviousCharacter);
+    cursor.endEditBlock();
+    setTextCursor(cursor);
+    return true;
+}
+
+bool CodeEditor::backspaceEmptyPair()
+{
+    if (isReadOnly()) {
+        return false;
+    }
+    QTextCursor cursor = textCursor();
+    if (cursor.hasSelection()) {
+        return false;
+    }
+    const QChar prev = characterBefore(cursor);
+    const QChar next = characterAfter(cursor);
+    if (prev.isNull() || next.isNull()) {
+        return false;
+    }
+    // Only a genuinely empty pair is removed: `(|)` goes away as a unit,
+    // while `{` … `}` spanning real content is left alone.
+    if (closingBracketFor(prev) != next) {
+        return false;
+    }
+    // Select from the opener through the closer. Both directions are needed:
+    // moving backwards alone would stop at the start of the document and
+    // leave a stray closing bracket behind.
+    const int pos = cursor.position();
+    cursor.beginEditBlock();
+    cursor.setPosition(pos - 1);
+    cursor.setPosition(pos + 1, QTextCursor::KeepAnchor);
+    cursor.removeSelectedText();
+    cursor.endEditBlock();
+    setTextCursor(cursor);
+    return true;
+}
+
 void CodeEditor::keyPressEvent(QKeyEvent* event)
 {
     const int key = event->key();
     const QString text = event->text();
+
+    // --- bracket auto-pairing --------------------------------------------
+    // Runs before the completion logic so an auto-inserted pair behaves like
+    // ordinary typing ("()" with the caret in between, one undo step).
+    const bool plainTextKey = !text.isEmpty()
+                              && !(event->modifiers()
+                                   & (Qt::ControlModifier | Qt::AltModifier
+                                      | Qt::MetaModifier));
+    if (plainTextKey && autoCloseBracket(text.at(0))) {
+        completionIdleTimer_->stop();
+        if (text.at(0) == QLatin1Char('"')) {
+            // `"` doubles as clangd's include-completion trigger, so ask
+            // from inside the fresh pair instead of falling through (which
+            // would insert a second quote). Outside an #include clangd
+            // answers with an empty list, which is harmless.
+            requestCompletionAtCursor(QStringLiteral("\""));
+        } else if (popup_ && popup_->isVisible()) {
+            dismissPopup();
+        }
+        return;
+    }
+
+    // Backspace between the two halves of an empty pair removes both.
+    if (key == Qt::Key_Backspace && !event->isAutoRepeat()
+        && backspaceEmptyPair()) {
+        completionIdleTimer_->stop();
+        if (popup_ && popup_->isVisible()) {
+            dismissPopup();
+        }
+        return;
+    }
 
     // Characters that ask clangd for a fresh completion list. `.` `:` `>`
     // cover member/namespace/pointer access; `<` and `"` trigger clangd's
