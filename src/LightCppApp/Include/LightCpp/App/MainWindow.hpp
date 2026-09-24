@@ -2,10 +2,12 @@
 
 #include <QMainWindow>
 #include <QHash>
+#include <QList>
 #include <QMap>
 #include <QPointer>
 #include <QString>
 
+#include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/Text/Encoding.hpp"
 
 class CodeEditor;
@@ -50,6 +52,9 @@ private slots:
     void onSyntaxCheckToggled(bool enabled);
     void onLintTimerTimeout();
     void onCompileCurrentFile();
+    /// Jump to the source position of a Problems-list entry.
+    /// `line` / `column` are 0-based.
+    void onProblemActivated(const QString& filePath, int line, int column);
 
 private:
     void createActions();
@@ -66,6 +71,8 @@ private:
     void reloadWithEncoding(LightCpp::Text::TextEncoding encoding);
     /// Push the editor's current text to the language server (debounced).
     void scheduleLint(CodeEditor* editor);
+    /// Rebuild the Output panel's Problems list from diagnosticsByFile_.
+    void rebuildProblems();
     /// true when the file extension is handled by the language server.
     [[nodiscard]] static bool isCppLikeFile(const QString& path);
     /// LSP languageId for a path ("cpp", "c", ...).
@@ -108,6 +115,10 @@ private:
     /// ignored — otherwise an outdated empty result dismisses the popup
     /// that a newer response just filled.
     int latestCompletionId_ = 0;
+
+    /// Latest diagnostics per document, keyed by the editor's lint path
+    /// (a virtual temp path for unsaved buffers). Feeds the Problems list.
+    QHash<QString, QList<LightCpp::App::LspDiagnostic>> diagnosticsByFile_;
 
     // --- single-file compiler ---
     QProcess* compiler_ = nullptr;   // lazily created; reused across builds

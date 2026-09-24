@@ -107,6 +107,11 @@ signals:
     /// The initialize handshake completed; documents can now be opened.
     void serverStarted();
 
+    /// A line of the server's own log: its stderr output plus any
+    /// "window/logMessage" / "window/showMessage" notifications it pushes.
+    /// Intended for the IDE's clangd log channel.
+    void serverLog(const QString& message);
+
     /// The server process failed to start or died unexpectedly.
     void serverFailed(const QString& message);
 

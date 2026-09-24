@@ -176,8 +176,12 @@ MainWindow::MainWindow(QWidget* parent)
     lintDebounceTimer_->setInterval(kLintDebounceMs);
     connect(lintDebounceTimer_, &QTimer::timeout,
             this, &MainWindow::onLintTimerTimeout);
+    // The server's own log (stderr + window/logMessage) goes to its own
+    // channel, so it never drowns out compiler output.
+    connect(lsp_, &LightCpp::App::LanguageServerClient::serverLog,
+            outputPanel_, &OutputPanel::appendServerLog);
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverStarted, [this] {
-        outputPanel_->appendOutput(tr("Syntax check: clangd started"));
+        outputPanel_->appendServerLog(tr("clangd started"));
         // Open the documents that are already in tabs. Use lintPath so
         // unsaved (untitled) buffers get their virtual path pushed too.
         for (int i = 0; i < tabWidget_->count(); ++i) {
@@ -215,7 +219,7 @@ MainWindow::MainWindow(QWidget* parent)
         const auto prev = lastCounts.value(key, qMakePair(-1, -1));
         if (prev.first != errors || prev.second != warnings) {
             lastCounts.insert(key, qMakePair(errors, warnings));
-            outputPanel_->appendOutput(
+            outputPanel_->appendServerLog(
                 tr("%1: %2 error(s), %3 warning(s)")
                     .arg(QFileInfo(filePath).fileName())
                     .arg(errors).arg(warnings));
@@ -246,7 +250,9 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverFailed,
             this, [this](const QString& message) {
-        outputPanel_->appendOutput(tr("Syntax check error: %1").arg(message));
+        outputPanel_->appendServerLog(tr("language server error: %1").arg(message));
+        // Surface the reason instead of leaving the user with a silent pane.
+        outputPanel_->showChannel(OutputPanel::ChannelServer);
         actSyntaxCheck_->setChecked(false);
     });
 
@@ -255,6 +261,9 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::onCloseTab);
     connect(fileExplorer_, &FileExplorer::fileActivated,
             this, &MainWindow::onFileActivated);
+    // Clicking a row in the Problems list jumps to the source location.
+    connect(outputPanel_, &OutputPanel::problemActivated,
+            this, &MainWindow::onProblemActivated);
     connect(tabWidget_, &QTabWidget::currentChanged, [this](int) {
         if (auto* ed = currentEditor()) {
             statusLanguage_->setText(languageFromSuffix(ed->filePath()));
@@ -271,6 +280,10 @@ MainWindow::MainWindow(QWidget* parent)
 
     resize(1280, 800);
     onNewFile();  // start with an empty editor
+
+    // Syntax checking is on by default — the Tools menu entry stays
+    // checkable so it can still be switched off.
+    actSyntaxCheck_->setChecked(true);
 }
 
 MainWindow::~MainWindow() = default;
@@ -320,7 +333,7 @@ void MainWindow::createActions()
             this, tr("Open Folder"));
         if (!dir.isEmpty()) {
             fileExplorer_->setRootPath(dir);
-            outputPanel_->appendOutput(tr("Opened folder: %1").arg(dir));
+            outputPanel_->appendBuildOutput(tr("Opened folder: %1").arg(dir));
         }
     });
 
@@ -506,12 +519,12 @@ void MainWindow::onSaveFile()
         }
         statusFile_->setText(path);
         statusLanguage_->setText(languageFromSuffix(path));
-        outputPanel_->appendOutput(tr("Saved: %1").arg(path));
+        outputPanel_->appendBuildOutput(tr("Saved: %1").arg(path));
         // Re-sync the language server: the buffer moved from its virtual
         // (untitled) path to the real location, and the extension may have
         // changed the parse mode.
+        const QString oldLint = ed->lintPath();
         if (lsp_->isRunning()) {
-            const QString oldLint = ed->lintPath();
             if (!oldLint.isEmpty() && QFileInfo(oldLint).absoluteFilePath()
                                        != QFileInfo(path).absoluteFilePath()) {
                 lsp_->closeDocument(oldLint);
@@ -521,6 +534,13 @@ void MainWindow::onSaveFile()
                 lsp_->openDocument(path, languageIdForFile(path),
                                    ed->toPlainText());
             }
+        }
+        // The problem list is keyed by lint path — re-key it, otherwise the
+        // entries would end up orphaned under the old virtual path.
+        const QString newLint = ed->lintPath();
+        if (oldLint != newLint && diagnosticsByFile_.contains(oldLint)) {
+            diagnosticsByFile_.insert(newLint, diagnosticsByFile_.take(oldLint));
+            rebuildProblems();
         }
     } else {
         QMessageBox::warning(this, tr("Save Error"),
@@ -558,6 +578,10 @@ void MainWindow::onCloseTab(int index)
         if (!lintPath.isEmpty() && lsp_->isRunning()
             && isCppLikeFile(lintPath)) {
             lsp_->closeDocument(lintPath);
+        }
+        // The buffer is going away — drop its Problems entries too.
+        if (diagnosticsByFile_.remove(lintPath) > 0) {
+            rebuildProblems();
         }
     }
     tabWidget_->removeTab(index);
@@ -640,6 +664,23 @@ CodeEditor* MainWindow::createEditorTab(const QString& title)
         scheduleLint(editor);
     });
 
+    // Diagnostics flow: clangd -> editor (squiggles) -> problem list. The
+    // editor normalises positions before reporting, so the list and the
+    // underlines always agree.
+    connect(editor, &CodeEditor::diagnosticsChanged,
+            this, [this](const QString& path,
+                          const QList<LightCpp::App::LspDiagnostic>& diagnostics) {
+        if (path.isEmpty()) {
+            return;
+        }
+        if (diagnostics.isEmpty()) {
+            diagnosticsByFile_.remove(path);
+        } else {
+            diagnosticsByFile_.insert(path, diagnostics);
+        }
+        rebuildProblems();
+    });
+
     // Forward manual / trigger-char completion requests from the editor
     // to clangd. The requestId is tracked in pendingCompletions_ so the
     // async response can be routed back to the right popup.
@@ -689,7 +730,7 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
     using namespace LightCpp::Text;
     const TextFileResult result = readDetectedTextFile(path);
     if (!result.hasValue()) {
-        outputPanel_->appendOutput(
+        outputPanel_->appendBuildOutput(
             tr("Error opening %1: %2")
                 .arg(path, toString(result.error())));
         return nullptr;
@@ -703,7 +744,7 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
     setEncodingInfo(editor, toName(content.encoding));
     statusFile_->setText(path);
     statusLanguage_->setText(languageFromSuffix(path));
-    outputPanel_->appendOutput(
+    outputPanel_->appendBuildOutput(
         tr("Opened: %1  [%2, %3 bytes%4]")
             .arg(path)
             .arg(toName(content.encoding))
@@ -734,7 +775,7 @@ void MainWindow::reloadWithEncoding(LightCpp::Text::TextEncoding encoding)
     const TextFileResult result =
         readTextFileWithEncoding(ed->filePath(), encoding);
     if (!result.hasValue()) {
-        outputPanel_->appendOutput(
+        outputPanel_->appendBuildOutput(
             tr("Reload failed for %1: %2")
                 .arg(ed->filePath(), toString(result.error())));
         // Restore the combo to the editor's previous label so the UI stays
@@ -746,7 +787,7 @@ void MainWindow::reloadWithEncoding(LightCpp::Text::TextEncoding encoding)
     const TextFileContent& content = result.value();
     ed->loadUtf8(content.utf8);
     setEncodingInfo(ed, toName(encoding));
-    outputPanel_->appendOutput(
+    outputPanel_->appendBuildOutput(
         tr("Reloaded: %1  [%2]")
             .arg(ed->filePath())
             .arg(toName(encoding)));
@@ -793,11 +834,11 @@ void MainWindow::onSyntaxCheckToggled(bool enabled)
 {
     if (enabled) {
         lsp_->start();
-        outputPanel_->appendOutput(
+        outputPanel_->appendServerLog(
             tr("Starting language server: %1").arg(kClangdPath));
     } else {
         lsp_->stop();
-        outputPanel_->appendOutput(tr("Language server stopped"));
+        outputPanel_->appendServerLog(tr("Language server stopped"));
         // Clear all diagnostic markers and any pending completion popups.
         pendingCompletions_.clear();
         for (int i = 0; i < tabWidget_->count(); ++i) {
@@ -806,6 +847,66 @@ void MainWindow::onSyntaxCheckToggled(bool enabled)
                 ed->dismissPopup();
             }
         }
+        // The server is gone, so its diagnostics are no longer meaningful.
+        diagnosticsByFile_.clear();
+        rebuildProblems();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Problems list
+// ---------------------------------------------------------------------------
+void MainWindow::rebuildProblems()
+{
+    QList<ProblemEntry> problems;
+    for (auto it = diagnosticsByFile_.constBegin();
+         it != diagnosticsByFile_.constEnd(); ++it) {
+        for (const LightCpp::App::LspDiagnostic& d : it.value()) {
+            ProblemEntry entry;
+            entry.filePath = it.key();
+            entry.line = d.startLine;
+            entry.column = d.startColumn;
+            entry.severity = d.severity;
+            entry.message = d.message;
+            entry.code = d.code;
+            problems.append(entry);
+        }
+    }
+    // Stable order: by file, then by position. QHash iteration is arbitrary,
+    // so sorting is what keeps the list from jumping around between updates.
+    std::sort(problems.begin(), problems.end(),
+              [](const ProblemEntry& a, const ProblemEntry& b) {
+        if (a.filePath != b.filePath) {
+            return a.filePath.compare(b.filePath, Qt::CaseInsensitive) < 0;
+        }
+        if (a.line != b.line) return a.line < b.line;
+        return a.column < b.column;
+    });
+    outputPanel_->setProblems(problems);
+}
+
+void MainWindow::onProblemActivated(const QString& filePath, int line, int column)
+{
+    // A diagnostic may belong to an unsaved buffer, whose "path" is a virtual
+    // temp location rather than a real file — look for an open tab first and
+    // only fall back to loading from disk.
+    for (int i = 0; i < tabWidget_->count(); ++i) {
+        auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i));
+        if (ed == nullptr) {
+            continue;
+        }
+        if (QFileInfo(ed->lintPath()).absoluteFilePath()
+                == QFileInfo(filePath).absoluteFilePath()) {
+            tabWidget_->setCurrentIndex(i);
+            ed->gotoLocation(line, column);
+            return;
+        }
+    }
+    if (CodeEditor* ed = openFileInTab(filePath)) {
+        ed->gotoLocation(line, column);
+    } else {
+        outputPanel_->appendBuildOutput(
+            tr("Cannot jump to %1: the file could not be opened.").arg(filePath));
     }
 }
 
@@ -853,7 +954,7 @@ void MainWindow::onCompileCurrentFile()
 {
     CodeEditor* ed = currentEditor();
     if (ed == nullptr) {
-        outputPanel_->appendOutput(tr("No active file to compile."));
+        outputPanel_->appendBuildOutput(tr("No active file to compile."));
         return;
     }
     // The compiler needs real bytes on disk. For an unsaved Untitled buffer
@@ -875,7 +976,7 @@ void MainWindow::onCompileCurrentFile()
         if (QFile f(srcPath); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
             f.write(ed->toUtf8());
         } else {
-            outputPanel_->appendOutput(tr("Cannot write temp file: %1").arg(srcPath));
+            outputPanel_->appendBuildOutput(tr("Cannot write temp file: %1").arg(srcPath));
             return;
         }
     } else if (ed->isModified()) {
@@ -889,7 +990,7 @@ void MainWindow::onCompileCurrentFile()
                 tabWidget_->setTabText(idx, t);
             }
         } else {
-            outputPanel_->appendOutput(tr("Cannot save %1 before compile").arg(srcPath));
+            outputPanel_->appendBuildOutput(tr("Cannot save %1 before compile").arg(srcPath));
             return;
         }
     }
@@ -922,13 +1023,13 @@ void MainWindow::onCompileCurrentFile()
         connect(compiler_, &QProcess::readyReadStandardOutput, this, [this] {
             if (compiler_ == nullptr) return;
             const QByteArray b = compiler_->readAllStandardOutput();
-            outputPanel_->appendOutput(QString::fromLocal8Bit(b));
+            outputPanel_->appendBuildOutput(QString::fromLocal8Bit(b));
         });
         connect(compiler_,
                 QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                 this, [this](int code, QProcess::ExitStatus status) {
             const int rc = (status == QProcess::NormalExit) ? code : -1;
-            outputPanel_->appendOutput(
+            outputPanel_->appendBuildOutput(
                 rc == 0 ? tr("--- Build succeeded (exit 0) ---")
                         : tr("--- Build failed (exit %1) ---").arg(rc));
             if (actCompile_) actCompile_->setEnabled(true);
@@ -936,7 +1037,7 @@ void MainWindow::onCompileCurrentFile()
         connect(compiler_, &QProcess::errorOccurred, this,
                 [this](QProcess::ProcessError e) {
             if (e != QProcess::FailedToStart) return;
-            outputPanel_->appendOutput(
+            outputPanel_->appendBuildOutput(
                 tr("Compiler failed to start. Check that %1 exists.")
                     .arg(QDir(kMingwBin).filePath(QStringLiteral("<gcc|g++|clang|clang++>.exe"))));
             if (actCompile_) actCompile_->setEnabled(true);
@@ -944,7 +1045,7 @@ void MainWindow::onCompileCurrentFile()
     }
 
     if (compiler_->state() != QProcess::NotRunning) {
-        outputPanel_->appendOutput(tr("A build is already running."));
+        outputPanel_->appendBuildOutput(tr("A build is already running."));
         return;
     }
 
@@ -957,7 +1058,7 @@ void MainWindow::onCompileCurrentFile()
     compiler_->setProcessEnvironment(env);
     compiler_->setWorkingDirectory(QFileInfo(srcPath).absolutePath());
 
-    outputPanel_->appendOutput(
+    outputPanel_->appendBuildOutput(
         tr("--- Compiling: %1 %2 ---")
             .arg(QFileInfo(compilerExe).fileName(),
                  args.join(QStringLiteral(" "))));

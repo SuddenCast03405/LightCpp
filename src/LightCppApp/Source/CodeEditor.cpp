@@ -272,6 +272,33 @@ void CodeEditor::setDiagnostics(const QList<LightCpp::App::LspDiagnostic>& diagn
 {
     diagnostics_ = diagnostics;
     updateExtraSelections();
+    // Publish the normalised positions: the problem list must point at the
+    // same line the squiggle landed on.
+    emit diagnosticsChanged(lintPath(), normalizedDiagnostics());
+}
+
+QList<LightCpp::App::LspDiagnostic> CodeEditor::normalizedDiagnostics() const
+{
+    QList<LightCpp::App::LspDiagnostic> out;
+    out.reserve(diagnostics_.size());
+    for (const LightCpp::App::LspDiagnostic& d : diagnostics_) {
+        out.append(normalizedDiagnostic(d));
+    }
+    return out;
+}
+
+void CodeEditor::gotoLocation(int line, int column)
+{
+    const QTextBlock block = document()->findBlockByNumber(qMax(line, 0));
+    if (!block.isValid()) {
+        return;
+    }
+    const int maxColumn = int(qMax<qsizetype>(block.length() - 1, 0));
+    QTextCursor cursor(block);
+    cursor.setPosition(block.position() + qBound(0, column, maxColumn));
+    setTextCursor(cursor);
+    centerCursor();
+    setFocus(Qt::OtherFocusReason);
 }
 
 // ---------------------------------------------------------------------------

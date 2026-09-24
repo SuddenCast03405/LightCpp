@@ -56,11 +56,19 @@ public:
 
     /// Replace the current set of language-server diagnostics and
     /// re-render decorations. An empty list clears all markers.
+    /// Emits diagnosticsChanged() so the host can refresh its problem list.
     void setDiagnostics(const QList<LightCpp::App::LspDiagnostic>& diagnostics);
     [[nodiscard]] const QList<LightCpp::App::LspDiagnostic>& diagnostics() const noexcept
     {
         return diagnostics_;
     }
+    /// The stored diagnostics with the same position normalisation that the
+    /// underlines use, so a problem list reports the line the user sees.
+    [[nodiscard]] QList<LightCpp::App::LspDiagnostic> normalizedDiagnostics() const;
+
+    /// Move the caret to (line, column) — both 0-based, as reported by the
+    /// language server — scroll it into view and take focus.
+    void gotoLocation(int line, int column);
 
 public slots:
     /// Show the completion popup with `items` at the editor cursor's
@@ -74,6 +82,11 @@ signals:
     /// `line` / `column` are 0-based; `triggerChar` is the character
     /// that caused the request (".", ":", ">") or empty for Ctrl+Space.
     void completionRequested(int line, int column, const QString& triggerChar);
+
+    /// The diagnostic set of this buffer changed. `path` is lintPath(),
+    /// and the diagnostics are already position-normalised.
+    void diagnosticsChanged(const QString& path,
+                            const QList<LightCpp::App::LspDiagnostic>& diagnostics);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;

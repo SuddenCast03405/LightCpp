@@ -83,6 +83,9 @@ void LanguageServerClient::start()
     buffer_.clear();
 
     process_ = new QProcess(this);
+    // Keep stderr separate: clangd logs its progress there and the IDE shows
+    // it in the "Clangd Log" channel.
+    process_->setProcessChannelMode(QProcess::SeparateChannels);
     // The server usually lives in a toolchain directory whose DLLs must be
     // on PATH for the process to start (MSYS2 clangd links against its
     // sibling DLLs). Extend the child environment with the server's own
@@ -96,6 +99,14 @@ void LanguageServerClient::start()
 
     connect(process_, &QProcess::readyReadStandardOutput,
             this, &LanguageServerClient::onReadyRead);
+    connect(process_, &QProcess::readyReadStandardError, this, [this] {
+        if (process_ == nullptr) return;
+        const QString text = QString::fromLocal8Bit(process_->readAllStandardError());
+        // Emit line by line so the log pane never gets a half-written line.
+        for (const QString& line : text.split(u'\n', Qt::SkipEmptyParts)) {
+            emit serverLog(line.trimmed());
+        }
+    });
     connect(process_, &QProcess::errorOccurred,
             this, [this](QProcess::ProcessError error) {
         if (process_ == nullptr) return;  // already being torn down
@@ -497,9 +508,26 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
 
     if (method == "textDocument/publishDiagnostics") {
         handlePublishDiagnostics(message.value("params").toObject());
+        return;
     }
-    // Other notifications (window/logMessage, $/progress, ...) are ignored —
-    // this client only cares about diagnostics and completion.
+    if (method == "window/logMessage" || method == "window/showMessage") {
+        // Server-side chatter: surface it in the clangd log channel.
+        const QJsonObject params = message.value("params").toObject();
+        const QString text = params.value("message").toString().trimmed();
+        if (!text.isEmpty()) {
+            QString prefix;
+            switch (params.value("type").toInt(4)) {
+            case 1: prefix = QStringLiteral("[error] "); break;
+            case 2: prefix = QStringLiteral("[warn] "); break;
+            case 3: prefix = QStringLiteral("[info] "); break;
+            default: break;
+            }
+            emit serverLog(prefix + text);
+        }
+        return;
+    }
+    // Other notifications ($/progress, telemetry, ...) are ignored — this
+    // client only cares about diagnostics, completion and the server log.
 }
 
 void LanguageServerClient::handlePublishDiagnostics(const QJsonObject& params)
