@@ -2,10 +2,12 @@
 
 #include "LightCpp/App/MainWindow.hpp"
 #include "LightCpp/App/CodeEditor.hpp"
+#include "LightCpp/App/CodeFormatter.hpp"
 #include "LightCpp/App/FileExplorer.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
+#include "LightCpp/App/ToolchainPaths.hpp"
 
 #include "LightCpp/Text/Encoding.hpp"
 #include "LightCpp/Text/TextFile.hpp"
@@ -45,13 +47,10 @@ Q_DECLARE_METATYPE(LightCpp::Text::TextEncoding)
 
 namespace {
 
-/// Path to the language server used for syntax checking.
-/// TEMPORARY: hardcoded per project phase; will become a setting later.
-const QString kClangdPath = QStringLiteral("E:/msys64/ucrt64/bin/clangd.exe");
-
-/// Toolchain directory for single-file compilation (MSYS2 UCRT64). Contains
-/// gcc/g++/clang/clang++ plus their runtime DLLs.
-const QString kMingwBin = QStringLiteral("E:/msys64/ucrt64/bin");
+// The tool paths live in ToolchainPaths.hpp so the compiler, the language
+// server and the formatter cannot disagree about where the toolchain is.
+using LightCpp::App::kClangdPath;
+using LightCpp::App::kMingwBin;
 
 /// How long the editor stays idle before the new text is pushed to the
 /// language server (ms). 300ms keeps up with fast typing without spamming
@@ -512,6 +511,16 @@ void MainWindow::createActions()
             ed->unfoldAll();
         }
     });
+
+    // --- code formatting ------------------------------------------------
+    actFormat_ = new QAction(tr("&Format Document"), this);
+    actFormat_->setShortcuts({QKeySequence(QStringLiteral("Shift+Alt+F")),
+                              QKeySequence(QStringLiteral("Ctrl+Shift+I"))});
+    actFormat_->setStatusTip(
+        tr("Reindent and rebrace the whole file with clang-format.\n"
+           "A .clang-format in the project wins; %1 is the fallback style.")
+            .arg(QString::fromLatin1(LightCpp::App::CodeFormatter::kFallbackStyle)));
+    connect(actFormat_, &QAction::triggered, this, &MainWindow::onFormatDocument);
 }
 
 void MainWindow::createMenuBar()
@@ -527,6 +536,8 @@ void MainWindow::createMenuBar()
     fileMenu->addAction(actExit_);
 
     auto* editMenu = menuBar()->addMenu(tr("&Edit"));
+    editMenu->addAction(actFormat_);
+    editMenu->addSeparator();
     auto* foldingMenu = editMenu->addMenu(tr("&Folding"));
     foldingMenu->addAction(actFold_);
     foldingMenu->addAction(actUnfold_);
@@ -830,6 +841,19 @@ CodeEditor* MainWindow::currentEditor() const
     return qobject_cast<CodeEditor*>(tabWidget_->currentWidget());
 }
 
+QString MainWindow::tabTitleFor(const CodeEditor* editor) const
+{
+    const int index = tabWidget_->indexOf(editor);
+    if (index < 0) {
+        return tr("the active file");
+    }
+    QString title = tabWidget_->tabText(index);
+    if (title.endsWith(u'\u25CF')) {
+        title = title.left(title.length() - 2);  // drop " ●"
+    }
+    return title;
+}
+
 CodeEditor* MainWindow::createEditorTab(const QString& title)
 {
     auto* editor = new CodeEditor(this);
@@ -1124,6 +1148,73 @@ void MainWindow::jumpToLocation(const QString& filePath, int line, int column)
         outputPanel_->appendBuildOutput(
             tr("Cannot jump to %1: the file could not be opened.").arg(filePath));
     }
+}
+
+void MainWindow::onFormatDocument()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr) {
+        outputPanel_->showChannel(OutputPanel::ChannelBuild);
+        outputPanel_->appendBuildOutput(tr("No active file to format."));
+        return;
+    }
+    if (formatter_ == nullptr) {
+        formatter_ = new LightCpp::App::CodeFormatter(this);
+        connect(formatter_, &LightCpp::App::CodeFormatter::formatted, this,
+                &MainWindow::onFormatted);
+        connect(formatter_, &LightCpp::App::CodeFormatter::failed, this,
+                &MainWindow::onFormatFailed);
+    }
+    if (!LightCpp::App::CodeFormatter::isAvailable()) {
+        const QString message = tr("clang-format was not found next to the "
+                                   "compilers (%1) or on PATH.")
+                                    .arg(LightCpp::App::kMingwBin);
+        outputPanel_->showChannel(OutputPanel::ChannelBuild);
+        outputPanel_->appendBuildOutput(message);
+        statusBar()->showMessage(message, 6000);
+        return;
+    }
+
+    // The buffer's own file names the style search; an untitled buffer has
+    // none, and clang-format then falls back to the default style, which is
+    // what it would do anyway for a file that does not exist yet.
+    latestFormatRequest_ =
+        formatter_->format(ed->toPlainText(), ed->filePath());
+    formatTarget_ = ed;
+    statusBar()->showMessage(tr("Formatting %1...").arg(tabTitleFor(ed)), 2000);
+}
+
+void MainWindow::onFormatted(int requestId, const QString& text)
+{
+    // Only the newest request counts: an earlier run's answer describes text
+    // the user has since changed, and applying it would throw that away.
+    if (requestId != latestFormatRequest_ || formatTarget_.isNull()) {
+        return;
+    }
+    CodeEditor* ed = formatTarget_;
+    // A format that changes nothing must not dirty the buffer or the undo
+    // stack, so report it rather than pretending work happened.
+    const bool changed = (text != ed->toPlainText());
+    ed->applyFormattedText(text);
+    if (changed) {
+        // The tab's modification dot is maintained by the editor's textChanged
+        // handler, so there is nothing to set here beyond the caret, which
+        // applyFormattedText() has already restored.
+        statusBar()->showMessage(tr("Formatted %1").arg(tabTitleFor(ed)), 4000);
+    } else {
+        statusBar()->showMessage(tr("%1 was already formatted").arg(tabTitleFor(ed)),
+                                 4000);
+    }
+}
+
+void MainWindow::onFormatFailed(int requestId, const QString& message)
+{
+    if (requestId != latestFormatRequest_) {
+        return;
+    }
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+    outputPanel_->appendBuildOutput(tr("Formatting failed: %1").arg(message));
+    statusBar()->showMessage(tr("Formatting failed — see the Build Log"), 6000);
 }
 
 void MainWindow::onLintTimerTimeout()

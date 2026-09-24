@@ -79,6 +79,14 @@ public:
     /// language server — scroll it into view and take focus.
     void gotoLocation(int line, int column);
 
+    // --- formatting -------------------------------------------------------
+    /// Replace the buffer with `text` — the whole file, as a formatter would
+    /// write it — as a single undo step, keeping the caret on the same line
+    /// and column. Does nothing when the text is already identical, so a
+    /// format that changes nothing leaves the buffer clean and the undo stack
+    /// untouched.
+    void applyFormattedText(const QString& text);
+
     // --- code folding -----------------------------------------------------
     /// The foldable ranges in the current text, in document order. Recomputed
     /// after every edit, so this is always consistent with what is on screen.

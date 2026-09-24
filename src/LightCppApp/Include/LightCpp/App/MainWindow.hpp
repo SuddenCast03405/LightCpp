@@ -23,6 +23,7 @@ class QActionGroup;
 class QProcess;
 class QTimer;
 namespace LightCpp::App {
+class CodeFormatter;
 class LanguageServerClient;
 }
 
@@ -65,6 +66,12 @@ private slots:
     /// Jump to the source position of a Problems-list entry.
     /// `line` / `column` are 0-based.
     void onProblemActivated(const QString& filePath, int line, int column);
+    /// Reindent the active file through clang-format. The answer is async, so
+    /// the request id is remembered and a late reply for a superseded buffer
+    /// is dropped.
+    void onFormatDocument();
+    void onFormatted(int requestId, const QString& text);
+    void onFormatFailed(int requestId, const QString& message);
 
 private:
     void createActions();
@@ -81,6 +88,9 @@ private:
     [[nodiscard]] LightCpp::Project::BuildConfiguration buildConfiguration() const;
 
     CodeEditor* currentEditor() const;
+    /// The tab title as shown, without the modification dot — for messages
+    /// that name the file the user is looking at.
+    [[nodiscard]] QString tabTitleFor(const CodeEditor* editor) const;
     CodeEditor* openFileInTab(const QString& path);
     CodeEditor* createEditorTab(const QString& title);
     void updateEncodingCombo(CodeEditor* editor);
@@ -150,6 +160,7 @@ private:
     QAction* actUnfold_ = nullptr;         // expand the block around the caret
     QAction* actFoldAll_ = nullptr;
     QAction* actUnfoldAll_ = nullptr;
+    QAction* actFormat_ = nullptr;         // clang-format the whole file
 
     /// MSVC located once at start-up. cl.exe cannot be launched bare — it needs
     /// INCLUDE/LIB pointing at both its own toolset and the Windows SDK, which
@@ -194,6 +205,13 @@ private:
     QString lastBuildExe_;
     /// Debug/Release, at the far right of the toolbar.
     QComboBox* configCombo_ = nullptr;
+
+    // --- code formatting (clang-format) ---
+    LightCpp::App::CodeFormatter* formatter_ = nullptr;
+    /// Editor that asked for the format in flight, so the answer lands in the
+    /// buffer it describes even if the user switched tabs meanwhile.
+    QPointer<CodeEditor> formatTarget_;
+    int latestFormatRequest_ = 0;
 
     // new-file counter
     int untitledCounter_ = 0;

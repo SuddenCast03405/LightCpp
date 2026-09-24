@@ -341,6 +341,38 @@ void CodeEditor::gotoLocation(int line, int column)
     setFocus(Qt::OtherFocusReason);
 }
 
+void CodeEditor::applyFormattedText(const QString& text)
+{
+    if (text == toPlainText()) {
+        return;
+    }
+
+    // Where the caret was, remembered as line + column rather than as an
+    // offset: a formatter moves text around, and the line is what stops the
+    // view from jumping somewhere unrelated.
+    const QTextCursor before = textCursor();
+    const int line = before.blockNumber();
+    const int column = before.positionInBlock();
+
+    {
+        // One edit block, so a single undo puts the whole file back.
+        QTextCursor cursor(document());
+        cursor.beginEditBlock();
+        cursor.select(QTextCursor::Document);
+        cursor.insertText(text);
+        cursor.endEditBlock();
+    }
+
+    if (const QTextBlock block = document()->findBlockByNumber(line); block.isValid()) {
+        const int clamped = qBound(0, column, qMax(int(block.length()) - 1, 0));
+        QTextCursor restored(block);
+        restored.setPosition(block.position() + clamped);
+        setTextCursor(restored);
+    }
+    // The replacement marks the document modified on its own, which is right:
+    // the formatted text is not on disk until the user saves.
+}
+
 // ---------------------------------------------------------------------------
 // Completion
 // ---------------------------------------------------------------------------

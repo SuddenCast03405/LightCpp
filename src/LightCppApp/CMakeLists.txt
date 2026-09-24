@@ -3,6 +3,7 @@
 set(LIGHTCPP_APP_SOURCES
     main.cpp
     Include/LightCpp/App/CodeEditor.hpp
+    Include/LightCpp/App/CodeFormatter.hpp
     Include/LightCpp/App/CompletionPopup.hpp
     Include/LightCpp/App/CppSyntaxHighlighter.hpp
     Include/LightCpp/App/FileExplorer.hpp
@@ -11,7 +12,9 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/OutputPanel.hpp
     Include/LightCpp/App/MainWindow.hpp
     Include/LightCpp/App/ToolchainHeaders.hpp
+    Include/LightCpp/App/ToolchainPaths.hpp
     Source/CodeEditor.cpp
+    Source/CodeFormatter.cpp
     Source/CompletionPopup.cpp
     Source/CppSyntaxHighlighter.cpp
     Source/FileExplorer.cpp
