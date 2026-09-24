@@ -4,6 +4,7 @@
 #include "LightCpp/App/CodeEditor.hpp"
 #include "LightCpp/App/CodeFormatter.hpp"
 #include "LightCpp/App/FileExplorer.hpp"
+#include "LightCpp/App/GitClient.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
@@ -24,6 +25,7 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMetaType>
@@ -125,6 +127,7 @@ MainWindow::MainWindow(QWidget* parent)
     , statusCursor_(new QLabel(this))
     , statusLanguage_(new QLabel(this))
     , statusFile_(new QLabel(this))
+    , statusGit_(new QLabel(this))
     , lsp_(new LightCpp::App::LanguageServerClient(
           kClangdPath, QDir(QDir::currentPath()).absolutePath(), this))
     , lintDebounceTimer_(new QTimer(this))
@@ -300,6 +303,15 @@ MainWindow::MainWindow(QWidget* parent)
     resize(1280, 800);
     onNewFile();  // start with an empty editor
     updateProjectActions();  // nothing is open yet, so most of Project is greyed out
+
+    // Git runs on demand: nothing polls the working tree behind the user's
+    // back, so a repository changing underneath the IDE costs nothing.
+    git_ = new LightCpp::App::GitClient(this);
+    connect(git_, &LightCpp::App::GitClient::statusReady, this,
+            &MainWindow::onGitStatusReady);
+    connect(git_, &LightCpp::App::GitClient::commandFinished, this,
+            &MainWindow::onGitCommandFinished);
+    syncGitWorkingDirectory();
 
     // Locate MSVC once. cl.exe needs INCLUDE/LIB built by hand, so this walks
     // the installed toolsets and the Windows SDK up front rather than failing
@@ -553,6 +565,47 @@ void MainWindow::createActions()
     actCloseProject_ = new QAction(tr("&Close Project"), this);
     actCloseProject_->setStatusTip(tr("Forget the open project and its build tree"));
     connect(actCloseProject_, &QAction::triggered, this, &MainWindow::onCloseProject);
+
+    // --- git --------------------------------------------------------------
+    actGitRefresh_ = new QAction(tr("&Refresh Status"), this);
+    actGitRefresh_->setStatusTip(tr("Re-read the working tree and show every change"));
+    connect(actGitRefresh_, &QAction::triggered, this, &MainWindow::onGitRefresh);
+
+    actGitStageAll_ = new QAction(tr("Stage &All Changes"), this);
+    actGitStageAll_->setStatusTip(tr("git add -A — stage every change, including deletions"));
+    connect(actGitStageAll_, &QAction::triggered, this, &MainWindow::onGitStageAll);
+
+    actGitUnstageAll_ = new QAction(tr("&Unstage All Changes"), this);
+    actGitUnstageAll_->setStatusTip(tr("git reset — take everything back out of the index"));
+    connect(actGitUnstageAll_, &QAction::triggered, this, &MainWindow::onGitUnstageAll);
+
+    actGitCommit_ = new QAction(tr("&Commit..."), this);
+    actGitCommit_->setStatusTip(tr("Commit what is staged, with a message you type"));
+    connect(actGitCommit_, &QAction::triggered, this, &MainWindow::onGitCommit);
+
+    actGitLog_ = new QAction(tr("Show &Log"), this);
+    actGitLog_->setStatusTip(tr("git log --oneline for the current repository"));
+    connect(actGitLog_, &QAction::triggered, this, &MainWindow::onGitLog);
+
+    actGitDiff_ = new QAction(tr("Diff &Working Tree"), this);
+    actGitDiff_->setStatusTip(tr("Show the unstaged changes of the active file"));
+    connect(actGitDiff_, &QAction::triggered, this, [this] { showGitDiff(false); });
+
+    actGitDiffStaged_ = new QAction(tr("Diff &Staged"), this);
+    actGitDiffStaged_->setStatusTip(tr("Show the staged changes of the active file"));
+    connect(actGitDiffStaged_, &QAction::triggered, this, [this] { showGitDiff(true); });
+
+    actGitInit_ = new QAction(tr("&Initialise Repository"), this);
+    actGitInit_->setStatusTip(tr("git init in the directory git would run in"));
+    connect(actGitInit_, &QAction::triggered, this, &MainWindow::onGitInit);
+
+    actGitRefresh_->setEnabled(false);
+    actGitStageAll_->setEnabled(false);
+    actGitUnstageAll_->setEnabled(false);
+    actGitCommit_->setEnabled(false);
+    actGitLog_->setEnabled(false);
+    actGitDiff_->setEnabled(false);
+    actGitDiffStaged_->setEnabled(false);
 }
 
 void MainWindow::createMenuBar()
@@ -601,6 +654,19 @@ void MainWindow::createMenuBar()
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(actToggleExplorer_);
     viewMenu->addAction(actToggleOutput_);
+
+    auto* gitMenu = menuBar()->addMenu(tr("&Git"));
+    gitMenu->addAction(actGitRefresh_);
+    gitMenu->addSeparator();
+    gitMenu->addAction(actGitStageAll_);
+    gitMenu->addAction(actGitUnstageAll_);
+    gitMenu->addAction(actGitCommit_);
+    gitMenu->addSeparator();
+    gitMenu->addAction(actGitLog_);
+    gitMenu->addAction(actGitDiff_);
+    gitMenu->addAction(actGitDiffStaged_);
+    gitMenu->addSeparator();
+    gitMenu->addAction(actGitInit_);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
     helpMenu->addAction(actAbout_);
@@ -685,6 +751,11 @@ void MainWindow::createStatusBar()
     statusLanguage_->setText(tr("C++"));
     statusFile_->setText(tr("Untitled"));
 
+    // Branch / drift / dirty marker. Empty until a repository turns up, and
+    // never a place to click: it reports, it does not act.
+    statusGit_->setObjectName(QStringLiteral("statusGit"));
+    statusGit_->setToolTip(tr("Git branch and working tree state"));
+
     // Encoding combo — rightmost in the status bar.
     // Layout: [UTF-8, ANSI (<local name>), <other encodings alphabetical>]
     // The user can change it to re-open the file with a forced codec.
@@ -698,6 +769,7 @@ void MainWindow::createStatusBar()
             this, &MainWindow::onEncodingChanged);
 
     statusBar()->addWidget(statusFile_, 3);
+    statusBar()->addPermanentWidget(statusGit_);
     statusBar()->addPermanentWidget(statusLanguage_);
     statusBar()->addPermanentWidget(statusCursor_);
     statusBar()->addPermanentWidget(encodingCombo_);
@@ -831,6 +903,9 @@ void MainWindow::onCloseTab(int index)
 void MainWindow::onFileActivated(const QString& path)
 {
     openFileInTab(path);
+    // Opening a file elsewhere can move the whole session into a different
+    // repository, so the git pane follows the active file.
+    syncGitWorkingDirectory();
 }
 
 void MainWindow::onCursorPositionChanged()
@@ -1291,6 +1366,7 @@ void MainWindow::onCloseProject()
     updateProjectActions();
     outputPanel_->showChannel(OutputPanel::ChannelBuild);
     outputPanel_->appendBuildOutput(tr("Project closed."));
+    syncGitWorkingDirectory();
 }
 
 void MainWindow::onConfigureProject()
@@ -1403,6 +1479,7 @@ void MainWindow::openProjectFile(const QString& path)
 
     setWindowTitle(QStringLiteral("LightC++ — %1").arg(projectDisplayName()));
     updateProjectActions();
+    syncGitWorkingDirectory();
 }
 
 QString MainWindow::projectDisplayName() const
@@ -1591,6 +1668,202 @@ void MainWindow::updateProjectActions()
     if (actCloseProject_ != nullptr) {
         actCloseProject_->setEnabled(hasProject);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Git
+// ---------------------------------------------------------------------------
+QString MainWindow::gitWorkingDirectory() const
+{
+    if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
+        return cmakeProject_->sourceDir;
+    }
+    if (projectKind_ == ProjectKind::DevCpp && devProject_.has_value()) {
+        return devProject_->projectDir;
+    }
+    if (CodeEditor* ed = currentEditor(); ed != nullptr && !ed->filePath().isEmpty()) {
+        return QFileInfo(ed->filePath()).absolutePath();
+    }
+    return QDir::currentPath();
+}
+
+void MainWindow::syncGitWorkingDirectory()
+{
+    if (git_ == nullptr) {
+        return;
+    }
+    const QString dir = gitWorkingDirectory();
+    if (git_->workingDirectory() == dir) {
+        return;
+    }
+    git_->setWorkingDirectory(dir);
+    git_->refreshStatus();
+}
+
+void MainWindow::onGitRefresh()
+{
+    syncGitWorkingDirectory();
+    // An explicit refresh, so the answer includes every changed file. The
+    // automatic ones stay to a single line to keep the pane readable.
+    gitStatusWantsFileList_ = true;
+    git_->refreshStatus();
+}
+
+void MainWindow::onGitStatusReady(const LightCpp::Project::GitStatusSummary& summary)
+{
+    // `git status` fails outside a repository, and the client reports that as
+    // an empty summary rather than as an error to print — so "no branch and no
+    // entries" means there is nothing to track here.
+    inRepository_ = !summary.branch.isEmpty() || summary.detached
+                    || !summary.entries.isEmpty();
+    gitStatus_ = summary;
+
+    setGitActionsEnabled();
+    if (!inRepository_) {
+        statusGit_->clear();
+        statusGit_->setToolTip(tr("Not a git repository"));
+        if (gitStatusWantsFileList_) {
+            outputPanel_->showChannel(OutputPanel::ChannelGit);
+            outputPanel_->appendGitOutput(
+                tr("--- %1 is not inside a git repository ---")
+                    .arg(git_->workingDirectory()));
+            outputPanel_->appendGitOutput(
+                tr("Git > Initialise Repository creates one here."));
+        }
+        gitStatusWantsFileList_ = false;
+        return;
+    }
+
+    statusGit_->setText(summary.label());
+    statusGit_->setToolTip(LightCpp::Project::describeGitStatus(summary));
+    showGitStatus(summary, gitStatusWantsFileList_);
+    gitStatusWantsFileList_ = false;
+}
+
+void MainWindow::setGitActionsEnabled()
+{
+    if (actGitRefresh_ != nullptr) {
+        actGitRefresh_->setEnabled(true);
+    }
+    if (actGitStageAll_ != nullptr) {
+        actGitStageAll_->setEnabled(inRepository_);
+    }
+    if (actGitUnstageAll_ != nullptr) {
+        actGitUnstageAll_->setEnabled(inRepository_ && gitStatus_.stagedCount() > 0);
+    }
+    if (actGitCommit_ != nullptr) {
+        actGitCommit_->setEnabled(inRepository_ && gitStatus_.stagedCount() > 0);
+    }
+    if (actGitLog_ != nullptr) {
+        actGitLog_->setEnabled(inRepository_);
+    }
+    if (actGitDiff_ != nullptr) {
+        actGitDiff_->setEnabled(inRepository_);
+    }
+    if (actGitDiffStaged_ != nullptr) {
+        actGitDiffStaged_->setEnabled(inRepository_);
+    }
+    if (actGitInit_ != nullptr) {
+        actGitInit_->setEnabled(!inRepository_);
+    }
+}
+
+void MainWindow::showGitStatus(const LightCpp::Project::GitStatusSummary& summary,
+                               bool withFileList)
+{
+    outputPanel_->showChannel(OutputPanel::ChannelGit);
+    outputPanel_->appendGitOutput(
+        tr("--- %1 ---").arg(summary.label().isEmpty() ? tr("no branch")
+                                                       : summary.label()));
+    outputPanel_->appendGitOutput(LightCpp::Project::describeGitStatus(summary));
+    if (!withFileList) {
+        return;
+    }
+    for (const LightCpp::Project::GitEntry& entry : summary.entries) {
+        QString line = QStringLiteral("%1  %2").arg(entry.code(), entry.path);
+        if (!entry.originalPath.isEmpty()) {
+            line += QStringLiteral("   (was %1)").arg(entry.originalPath);
+        }
+        outputPanel_->appendGitOutput(line);
+    }
+}
+
+void MainWindow::onGitCommandFinished(const QString& title, const QString& text,
+                                      int exitCode)
+{
+    outputPanel_->showChannel(OutputPanel::ChannelGit);
+    outputPanel_->appendGitOutput(
+        exitCode == 0 ? tr("--- %1 ---").arg(title)
+                      : tr("--- %1 (exit %2) ---").arg(title).arg(exitCode));
+    if (!text.isEmpty()) {
+        outputPanel_->appendGitOutput(text);
+    }
+    // Every command can change the branch, the index or the working tree, so
+    // the status bar is re-read rather than guessed at.
+    if (inRepository_ || exitCode == 0) {
+        git_->refreshStatus();
+    }
+}
+
+void MainWindow::onGitStageAll()
+{
+    git_->run({QStringLiteral("add"), QStringLiteral("--all")},
+              QStringLiteral("git add --all"));
+}
+
+void MainWindow::onGitUnstageAll()
+{
+    // `git reset` with no paths is the documented way to clear the index; on a
+    // branch with no commits yet it has nothing to reset to and says so, which
+    // is a better outcome than silently doing nothing.
+    git_->run({QStringLiteral("reset"), QStringLiteral("--quiet")},
+              QStringLiteral("git reset"));
+}
+
+void MainWindow::onGitCommit()
+{
+    if (!inRepository_) {
+        return;
+    }
+    bool accepted = false;
+    const QString message = QInputDialog::getMultiLineText(
+        this, tr("Commit"), tr("Commit message:"), QString(), &accepted);
+    if (!accepted || message.trimmed().isEmpty()) {
+        return;
+    }
+    git_->run({QStringLiteral("commit"), QStringLiteral("-m"), message.trimmed()},
+              QStringLiteral("git commit"));
+}
+
+void MainWindow::onGitLog()
+{
+    git_->run({QStringLiteral("log"), QStringLiteral("--oneline"),
+               QStringLiteral("-n"), QStringLiteral("40")},
+              QStringLiteral("git log --oneline -n 40"));
+}
+
+void MainWindow::showGitDiff(bool staged)
+{
+    QStringList args{QStringLiteral("diff")};
+    if (staged) {
+        args << QStringLiteral("--staged");
+    }
+    // Narrowing to the active file is what makes the command useful from the
+    // editor; with nothing open it shows the whole tree, which is still the
+    // right answer to "what have I changed".
+    if (CodeEditor* ed = currentEditor(); ed != nullptr && !ed->filePath().isEmpty()) {
+        args << QStringLiteral("--") << QDir::fromNativeSeparators(ed->filePath());
+    }
+    git_->run(args, staged ? tr("git diff --staged") : tr("git diff"));
+}
+
+void MainWindow::onGitInit()
+{
+    if (inRepository_) {
+        return;
+    }
+    git_->setWorkingDirectory(gitWorkingDirectory());
+    git_->run({QStringLiteral("init")}, QStringLiteral("git init"));
 }
 
 void MainWindow::onLintTimerTimeout()

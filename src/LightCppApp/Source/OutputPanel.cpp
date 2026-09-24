@@ -83,6 +83,7 @@ OutputPanel::OutputPanel(QWidget* parent)
     , serverLog_(makeLogView(this))
     , buildLog_(makeLogView(this))
     , programOutput_(makeLogView(this))
+    , gitLog_(makeLogView(this))
     , problems_(new QTreeWidget(this))
 {
     // --- header row: title, channel drop-down, clear ----------------------
@@ -97,6 +98,7 @@ OutputPanel::OutputPanel(QWidget* parent)
     channelCombo_->addItem(tr("Clangd Log"));       // ChannelServer
     channelCombo_->addItem(tr("Build Log"));        // ChannelBuild
     channelCombo_->addItem(tr("Program Output"));   // ChannelProgram
+    channelCombo_->addItem(tr("Git"));              // ChannelGit
     channelCombo_->addItem(tr("Problems"));         // ChannelProblems
     channelCombo_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     channelCombo_->setToolTip(tr("Choose what the output area shows"));
@@ -121,9 +123,11 @@ OutputPanel::OutputPanel(QWidget* parent)
     serverLog_->setPlaceholderText(tr("No language server output yet."));
     buildLog_->setPlaceholderText(tr("No build output yet."));
     programOutput_->setPlaceholderText(tr("No program output yet."));
+    gitLog_->setPlaceholderText(tr("No git output yet."));
     stack_->addWidget(serverLog_);      // ChannelServer
     stack_->addWidget(buildLog_);       // ChannelBuild
     stack_->addWidget(programOutput_);  // ChannelProgram
+    stack_->addWidget(gitLog_);         // ChannelGit
     stack_->addWidget(problems_);       // ChannelProblems
 
     problems_->setColumnCount(2);
@@ -179,6 +183,11 @@ void OutputPanel::appendProgramOutput(const QString& text)
     programOutput_->appendPlainText(text);
 }
 
+void OutputPanel::appendGitOutput(const QString& text)
+{
+    gitLog_->appendPlainText(text);
+}
+
 void OutputPanel::showChannel(Channel channel)
 {
     const int index = int(channel);
@@ -198,6 +207,7 @@ void OutputPanel::clearOutput()
     case ChannelServer:  serverLog_->clear(); break;
     case ChannelBuild:   buildLog_->clear(); break;
     case ChannelProgram: programOutput_->clear(); break;
+    case ChannelGit:     gitLog_->clear(); break;
     default:             setProblems({}); break;
     }
 }

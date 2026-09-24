@@ -21,4 +21,8 @@ inline const QString kClangdPath = QStringLiteral("E:/msys64/ucrt64/bin/clangd.e
 inline const QString kClangFormatPath =
     QStringLiteral("E:/msys64/ucrt64/bin/clang-format.exe");
 
+/// Git. The MSYS2 copy comes from the same prefix as everything else here;
+/// when it is absent the one on PATH is used instead.
+inline const QString kGitPath = QStringLiteral("E:/msys64/ucrt64/bin/git.exe");
+
 }  // namespace LightCpp::App

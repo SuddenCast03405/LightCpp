@@ -23,12 +23,13 @@ struct ProblemEntry {
     QString code;
 };
 
-/// Output area.  Four switchable channels behind one drop-down:
+/// Output area.  Five switchable channels behind one drop-down:
 ///
 ///   Clangd Log      — the language server's own log (stderr + window/logMessage)
 ///   Build Log       — compiler output and IDE file operations
 ///   Program Output  — the run console: what the built program prints, plus the
 ///                     run banner and its exit status
+///   Git             — status, diffs and commit output
 ///   Problems        — errors/warnings pushed by clangd, as a clickable list
 ///                     that jumps to the offending source location
 ///
@@ -43,7 +44,8 @@ public:
         ChannelServer = 0,   // clangd log
         ChannelBuild = 1,    // compiler / IDE log
         ChannelProgram = 2,  // the program's own stdout/stderr
-        ChannelProblems = 3, // diagnostics list
+        ChannelGit = 3,      // git status / diff / commit
+        ChannelProblems = 4, // diagnostics list
     };
 
     explicit OutputPanel(QWidget* parent = nullptr);
@@ -54,6 +56,8 @@ public:
     void appendBuildOutput(const QString& text);
     /// Append a line of output produced by the running program.
     void appendProgramOutput(const QString& text);
+    /// Append a line to the git channel.
+    void appendGitOutput(const QString& text);
     /// Replace the Problems list. An empty list shows "no problems".
     void setProblems(const QList<ProblemEntry>& problems);
 
@@ -81,5 +85,6 @@ private:
     QPlainTextEdit* serverLog_;
     QPlainTextEdit* buildLog_;
     QPlainTextEdit* programOutput_;
+    QPlainTextEdit* gitLog_;
     QTreeWidget* problems_;
 };

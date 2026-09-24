@@ -12,6 +12,7 @@
 #include "LightCpp/Project/BuildConfiguration.hpp"
 #include "LightCpp/Project/CMakeProject.hpp"
 #include "LightCpp/Project/DevCppProject.hpp"
+#include "LightCpp/Project/GitStatus.hpp"
 #include "LightCpp/Text/Encoding.hpp"
 
 #include <optional>
@@ -28,6 +29,7 @@ class QProcess;
 class QTimer;
 namespace LightCpp::App {
 class CodeFormatter;
+class GitClient;
 class LanguageServerClient;
 }
 
@@ -88,6 +90,18 @@ private slots:
     /// File > Open Project..., separated out so it takes a path rather than
     /// going through a dialog every time.
     void openProjectFile(const QString& path);
+
+    // --- git ---------------------------------------------------------------
+    void onGitRefresh();
+    void onGitStageAll();
+    void onGitUnstageAll();
+    void onGitCommit();
+    void onGitLog();
+    void onGitInit();
+    /// A status refresh answered: update the status bar and the Git pane.
+    void onGitStatusReady(const LightCpp::Project::GitStatusSummary& summary);
+    /// A git command answered: print its transcript.
+    void onGitCommandFinished(const QString& title, const QString& text, int exitCode);
 
 private:
     void createActions();
@@ -155,6 +169,22 @@ private:
     /// Name for the window title and log lines.
     [[nodiscard]] QString projectDisplayName() const;
 
+    // --- git ---------------------------------------------------------------
+    /// Directory git should run in: the open project, else the active file's
+    /// directory, else the process's own. Git finds the repository itself.
+    [[nodiscard]] QString gitWorkingDirectory() const;
+    /// Point the git client at wherever the user is working now, and refresh
+    /// the status if that is somewhere new.
+    void syncGitWorkingDirectory();
+    /// Print a status into the Git pane: one line by default, or the whole
+    /// file list when the user asked for a refresh.
+    void showGitStatus(const LightCpp::Project::GitStatusSummary& summary,
+                       bool withFileList);
+    /// `git diff` for the active file, or the whole tree when none is open.
+    void showGitDiff(bool staged);
+    /// Grey out what the current repository state cannot do.
+    void setGitActionsEnabled();
+
     /// Source the compiler reads and binary it produces for one editor.
     /// Build and run share this, so "run" always looks exactly where the
     /// last build wrote (unsaved buffers are built from a temp copy).
@@ -210,6 +240,25 @@ private:
     QAction* actBuildProject_ = nullptr;
     QAction* actRunProject_ = nullptr;
     QAction* actCloseProject_ = nullptr;
+    QAction* actGitRefresh_ = nullptr;
+    QAction* actGitStageAll_ = nullptr;
+    QAction* actGitUnstageAll_ = nullptr;
+    QAction* actGitCommit_ = nullptr;
+    QAction* actGitLog_ = nullptr;
+    QAction* actGitDiff_ = nullptr;
+    QAction* actGitDiffStaged_ = nullptr;
+    QAction* actGitInit_ = nullptr;
+
+    // --- git state ---
+    LightCpp::App::GitClient* git_ = nullptr;
+    /// Branch / drift / dirty marker, at the right of the status bar.
+    QLabel* statusGit_ = nullptr;
+    /// Latest status, kept so commands can report drift without re-querying.
+    LightCpp::Project::GitStatusSummary gitStatus_;
+    bool inRepository_ = false;
+    /// Set by an explicit refresh, so the next status answer prints the whole
+    /// file list while an automatic one stays to a single line.
+    bool gitStatusWantsFileList_ = false;
 
     // --- open project state ---
     ProjectKind projectKind_ = ProjectKind::None;

@@ -7,6 +7,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/CompletionPopup.hpp
     Include/LightCpp/App/CppSyntaxHighlighter.hpp
     Include/LightCpp/App/FileExplorer.hpp
+    Include/LightCpp/App/GitClient.hpp
     Include/LightCpp/App/LanguageServerClient.hpp
     Include/LightCpp/App/MsvcToolchain.hpp
     Include/LightCpp/App/OutputPanel.hpp
@@ -18,6 +19,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/CompletionPopup.cpp
     Source/CppSyntaxHighlighter.cpp
     Source/FileExplorer.cpp
+    Source/GitClient.cpp
     Source/LanguageServerClient.cpp
     Source/MsvcToolchain.cpp
     Source/OutputPanel.cpp
