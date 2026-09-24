@@ -1,10 +1,12 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QFont>
 #include <QHash>
 #include <QList>
 #include <QMap>
 #include <QPointer>
+#include <QSet>
 #include <QString>
 
 #include "LightCpp/App/LanguageServerClient.hpp"
@@ -13,8 +15,10 @@
 #include "LightCpp/Project/CMakeProject.hpp"
 #include "LightCpp/Project/DevCppProject.hpp"
 #include "LightCpp/Project/GitStatus.hpp"
+#include "LightCpp/Settings/SettingsStore.hpp"
 #include "LightCpp/Text/Encoding.hpp"
 
+#include <memory>
 #include <optional>
 
 class CodeEditor;
@@ -61,6 +65,9 @@ private slots:
     void onAbout();
     void onSyntaxCheckToggled(bool enabled);
     void onLintTimerTimeout();
+    /// Re-read the configuration files from disk and re-apply everything
+    /// that derives from them (Tools > Reload Settings).
+    void onReloadSettings();
     void onCompileCurrentFile();
     /// Compile the active file and, if the build succeeds, run the result.
     void onCompileAndRun();
@@ -134,14 +141,56 @@ private:
     void createMenuBar();
     void createToolBar();
     void createStatusBar();
+    /// The Kit drop-down at the right of the toolbar. Kits are the settings'
+    /// build environments; the selected one decides the compiler, the flags
+    /// and which headers clangd resolves against.
+    QWidget* createKitWidget();
     /// The Debug/Release picker that sits at the far right of the toolbar.
     /// Owns configCombo_, so it has to be built before buildConfiguration()
     /// returns anything but the default.
     QWidget* createBuildConfigurationWidget();
-    /// The configuration currently selected in the toolbar. Also decides the
-    /// flags of a single-file compile, so "Debug" means the same thing
-    /// whether the file is built on its own or as part of a project.
+    /// Rebuild the Kit combo from the loaded kits, keeping the selection
+    /// when it still exists (default: the settings' defaultKitId).
+    void syncKitUi();
+    /// Rebuild the configuration combo from the active kit's
+    /// buildConfigurations (Debug/Release when the kit defines none).
+    void syncConfigCombo();
+    /// The configuration currently selected in the toolbar, as the name the
+    /// kit's buildConfigurations are keyed by. Also decides the flags of a
+    /// single-file compile, so "Debug" means the same thing whether the file
+    /// is built on its own or as part of a project.
+    [[nodiscard]] QString currentBuildConfigurationName() const;
+    /// The configuration currently selected, parsed back into the enum the
+    /// project models (CMake/Dev-C++) understand.
     [[nodiscard]] LightCpp::Project::BuildConfiguration buildConfiguration() const;
+    /// The kit currently selected in the toolbar, or nullopt when none is.
+    [[nodiscard]] std::optional<LightCpp::Settings::Kit> activeKit() const;
+    /// true when the active kit's C++ compiler is cl.exe (or the combo has
+    /// no selection and the legacy default applies — it does not).
+    [[nodiscard]] bool isMsvcKit(const LightCpp::Settings::Kit& kit) const;
+    [[nodiscard]] bool activeKitIsMsvc() const;
+
+    /// Load the configuration: write the starter files on first run, then
+    /// read base + overlays. Runs before anything else reads the store.
+    void loadSettings();
+    /// Push the loaded preferences into the UI: fonts, encoding/line-ending
+    /// defaults, large-file limits, language-service gates, tool paths,
+    /// shortcuts. Safe to call again whenever the settings change.
+    void applyPreferences();
+    /// The clang-format fallback style implied by the settings and the
+    /// active kit ("file" keeps the built-in default).
+    [[nodiscard]] QString resolvedClangFormatFallbackStyle() const;
+    /// git: defaults.gitPath, else the active kit's git.path, else the
+    /// compiled-in location — and PATH when none of those exist.
+    [[nodiscard]] QString resolvedGitPath() const;
+    /// Point the settings at the current workspace's config overlay
+    /// (project root /config) and re-read + re-apply. Called when a folder
+    /// or project is opened or closed.
+    void syncSettingsOverlays();
+    /// true when `path` is above `limitMB` (0 = no limit).
+    [[nodiscard]] bool fileExceeds(const QString& path, int limitMB) const;
+    /// Log a disabled feature for an oversized file, once per file+feature.
+    void noteLargeFile(const QString& path, const QString& feature);
 
     CodeEditor* currentEditor() const;
     /// The tab title as shown, without the modification dot — for messages
@@ -247,6 +296,7 @@ private:
     void applyToolchainHeaders();
 
     // --- widgets ---
+    std::unique_ptr<LightCpp::Settings::SettingsStore> settings_;
     QTabWidget* tabWidget_;
     FileExplorer* fileExplorer_;
     OutputPanel* outputPanel_;
@@ -263,6 +313,8 @@ private:
     QAction* actExit_;
     QAction* actAbout_;
     QAction* actOpenFolder_;
+    QAction* actReloadSettings_ = nullptr;  // re-read config/*.json
+    QAction* actOpenConfigDir_ = nullptr;   // open the config folder in Explorer
     QAction* actToggleExplorer_ = nullptr;  // show/hide the explorer panel
     QAction* actToggleOutput_ = nullptr;    // show/hide the output panel
     QAction* actSyntaxCheck_;
@@ -270,9 +322,6 @@ private:
     QAction* actCompileRun_ = nullptr;     // compile, then run (F5)
     QAction* actRun_ = nullptr;            // run the last build (Ctrl+F5)
     QAction* actStopRun_ = nullptr;        // kill the running program (Shift+F5)
-    QAction* actToolchainGcc_ = nullptr;   // mutually exclusive with Clang
-    QAction* actToolchainClang_ = nullptr;
-    QAction* actToolchainMsvc_ = nullptr;
     QAction* actFold_ = nullptr;           // collapse the block at the caret
     QAction* actUnfold_ = nullptr;         // expand the block around the caret
     QAction* actFoldAll_ = nullptr;
@@ -362,6 +411,32 @@ private:
     QString lastBuildExe_;
     /// Debug/Release, at the far right of the toolbar.
     QComboBox* configCombo_ = nullptr;
+    /// The active kit, at the right of the toolbar next to it.
+    QComboBox* kitCombo_ = nullptr;
+
+    // --- applied settings (kept in sync by applyPreferences) --------------
+    /// languageService.clangd.* gates.
+    bool clangdEnabledByDefault_ = true;
+    bool clangdCompletionEnabled_ = true;
+    bool clangdDiagnosticsEnabled_ = true;
+    bool clangdNavigationEnabled_ = true;
+    /// languageService.clangFormat.* gates.
+    bool clangFormatEnabled_ = true;
+    bool formatOnSave_ = false;
+    /// Raw style string ("file" = built-in default); resolved where used.
+    QString clangFormatFallbackStyle_;
+    /// performance.largeFile limits in MB (0 = no limit).
+    int largeFileHighlightMB_ = 0;
+    int largeFileIndexMB_ = 0;
+    int largeFileParseMB_ = 0;
+    /// files.encoding default for new buffers (canonical encoding name).
+    QString defaultEncodingName_ = QStringLiteral("UTF-8");
+    /// files.lineEnding resolved for this platform: "LF" or "CRLF".
+    QString lineEndingForSaving_ = QStringLiteral("CRLF");
+    /// fonts.editor, when the settings name one; applied to new tabs too.
+    QFont editorFont_;
+    /// One log line per oversized file+feature, not one per keystroke.
+    QSet<QString> largeFileNoted_;
 
     // --- code formatting (clang-format) ---
     LightCpp::App::CodeFormatter* formatter_ = nullptr;

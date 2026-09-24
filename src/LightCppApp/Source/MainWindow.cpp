@@ -4,6 +4,7 @@
 #include "LightCpp/App/BatchFormatter.hpp"
 #include "LightCpp/App/CodeEditor.hpp"
 #include "LightCpp/App/CodeFormatter.hpp"
+#include "LightCpp/App/DefaultSettings.hpp"
 #include "LightCpp/App/FileExplorer.hpp"
 #include "LightCpp/App/GitClient.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
@@ -23,12 +24,14 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QFileDialog>
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QHash>
 #include <QHBoxLayout>
+#include <QUrl>
 #include <QInputDialog>
 #include <QLabel>
 #include <QMenuBar>
@@ -125,6 +128,7 @@ QList<ComboEntry> buildEncodingList()
 // ---------------------------------------------------------------------------
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
+    , settings_(std::make_unique<LightCpp::Settings::SettingsStore>())
     , tabWidget_(new QTabWidget(this))
     , fileExplorer_(new FileExplorer(this))
     , outputPanel_(new OutputPanel(this))
@@ -205,6 +209,11 @@ MainWindow::MainWindow(QWidget* parent)
     connect(lsp_, &LightCpp::App::LanguageServerClient::diagnosticsReady,
             this, [this](const QString& filePath,
                          const QList<LightCpp::App::LspDiagnostic>& diags) {
+        // languageService.clangd.diagnostics: the server still pushes, the
+        // IDE just does not show what it does not want to see.
+        if (!clangdDiagnosticsEnabled_) {
+            return;
+        }
         int errors = 0, warnings = 0;
         for (const auto& d : diags) {
             if (d.severity == 1) ++errors;
@@ -323,22 +332,34 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Locate MSVC once. cl.exe needs INCLUDE/LIB built by hand, so this walks
     // the installed toolsets and the Windows SDK up front rather than failing
-    // mid-build; the menu entry reports the outcome either way.
+    // mid-build; a kit that names cl.exe reports the outcome either way.
     msvcToolchain_ = LightCpp::App::Msvc::detect();
-    if (msvcToolchain_.isValid()) {
-        actToolchainMsvc_->setStatusTip(
-            tr("Use %1").arg(msvcToolchain_.label));
-    } else {
-        actToolchainMsvc_->setEnabled(false);
-        actToolchainMsvc_->setStatusTip(msvcToolchain_.problem);
-    }
-    // Before the server starts, so it comes up already resolving includes the
-    // way the selected toolchain's compiler does.
+
+    // Load the config (writing the starter files on first run) *before*
+    // anything consumes it: fonts, gates and the Kit combo below all read
+    // the loaded state, and applyPreferences() also points the language
+    // server at the configured clangd.
+    loadSettings();
+
+    // Apply the loaded preferences (fonts, gates, paths, shortcuts) and fill
+    // the Kit combo — all before the language server starts.
+    applyPreferences();
+    syncKitUi();
     applyToolchainHeaders();
 
-    // Syntax checking is on by default — the Tools menu entry stays
-    // checkable so it can still be switched off.
-    actSyntaxCheck_->setChecked(true);
+    // Report where the settings live and anything the loader complained
+    // about, so a typo in a config file is visible instead of silent.
+    outputPanel_->appendBuildOutput(
+        tr("Settings: %1")
+            .arg(QDir::toNativeSeparators(
+                LightCpp::Settings::SettingsStore::baseConfigDirectory())));
+    for (const QString& error : settings_->lastErrors()) {
+        outputPanel_->appendBuildOutput(tr("Settings: %1").arg(error));
+    }
+
+    // Syntax checking follows languageService.clangd.enabledByDefault; the
+    // Tools menu entry stays checkable so it can still be switched off.
+    actSyntaxCheck_->setChecked(clangdEnabledByDefault_);
 }
 
 MainWindow::~MainWindow() = default;
@@ -465,27 +486,24 @@ void MainWindow::createActions()
     connect(actStopRun_, &QAction::triggered,
             this, &MainWindow::onStopProgram);
 
-    // Toolchain choice: GCC / Clang / MSVC. C/C++ (g++ vs gcc etc.) is chosen
-    // automatically from the file extension at compile time.
-    auto* toolchainGroup = new QActionGroup(this);
-    toolchainGroup->setExclusive(true);
-    actToolchainGcc_ = new QAction(tr("&GCC (g++/gcc)"), this);
-    actToolchainGcc_->setCheckable(true);
-    actToolchainGcc_->setChecked(true);
-    actToolchainGcc_->setStatusTip(tr("Use GCC from MSYS2 UCRT64"));
-    actToolchainClang_ = new QAction(tr("&Clang (clang++/clang)"), this);
-    actToolchainClang_->setCheckable(true);
-    actToolchainClang_->setStatusTip(tr("Use Clang from MSYS2 UCRT64"));
-    actToolchainMsvc_ = new QAction(tr("&MSVC (cl.exe)"), this);
-    actToolchainMsvc_->setCheckable(true);
-    toolchainGroup->addAction(actToolchainGcc_);
-    toolchainGroup->addAction(actToolchainClang_);
-    toolchainGroup->addAction(actToolchainMsvc_);
-    // Picking a different compiler also changes which standard-library headers
-    // the editor must resolve includes against, so the language server has to
-    // be told (and restarted — clangd reads them once, at start-up).
-    connect(toolchainGroup, &QActionGroup::triggered,
-            this, [this](QAction*) { applyToolchainHeaders(); });
+    // The build environment (compilers, debugger, clangd, ...) comes from the
+    // settings' kits in config/*.json — there is no hard-coded GCC/Clang/MSVC
+    // menu any more. These two actions manage the configuration files instead.
+    actReloadSettings_ = new QAction(tr("&Reload Settings"), this);
+    actReloadSettings_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Alt+R")));
+    actReloadSettings_->setStatusTip(
+        tr("Re-read every config/*.json and re-apply kits, fonts and limits"));
+    connect(actReloadSettings_, &QAction::triggered,
+            this, &MainWindow::onReloadSettings);
+
+    actOpenConfigDir_ = new QAction(tr("Open &Config Folder"), this);
+    actOpenConfigDir_->setStatusTip(
+        tr("Open the base configuration directory next to the executable"));
+    connect(actOpenConfigDir_, &QAction::triggered, this, [this] {
+        const QString dir = settings_->baseConfigDirectory();
+        QDir().mkpath(dir);
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    });
 
     actAbout_ = new QAction(tr("&About LightC++..."), this);
     connect(actAbout_, &QAction::triggered, this, &MainWindow::onAbout);
@@ -664,16 +682,13 @@ void MainWindow::createMenuBar()
     projectMenu->addAction(actCloseProject_);
 
     auto* toolsMenu = menuBar()->addMenu(tr("&Tools"));    toolsMenu->addAction(actSyntaxCheck_);
+    toolsMenu->addAction(actReloadSettings_);
+    toolsMenu->addAction(actOpenConfigDir_);
     toolsMenu->addSeparator();
     toolsMenu->addAction(actCompile_);
     toolsMenu->addAction(actCompileRun_);
     toolsMenu->addAction(actRun_);
     toolsMenu->addAction(actStopRun_);
-    toolsMenu->addSeparator();
-    auto* toolchainMenu = toolsMenu->addMenu(tr("&Toolchain"));
-    toolchainMenu->addAction(actToolchainGcc_);
-    toolchainMenu->addAction(actToolchainClang_);
-    toolchainMenu->addAction(actToolchainMsvc_);
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(actToggleExplorer_);
@@ -719,7 +734,70 @@ void MainWindow::createToolBar()
     auto* spacer = new QWidget(tb);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     tb->addWidget(spacer);
+    tb->addWidget(createKitWidget());
     tb->addWidget(createBuildConfigurationWidget());
+}
+
+QWidget* MainWindow::createKitWidget()
+{
+    auto* container = new QWidget(this);
+    auto* layout = new QHBoxLayout(container);
+    layout->setContentsMargins(0, 0, 4, 0);
+    layout->setSpacing(6);
+
+    layout->addWidget(new QLabel(tr("Kit:"), container));
+
+    kitCombo_ = new QComboBox(container);
+    kitCombo_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    kitCombo_->setToolTip(
+        tr("The build environment used to compile and to resolve includes.\n"
+           "Defined in config/kits.json next to the executable."));
+    // Picking a kit changes the compiler (and with it which headers clangd
+    // must resolve against) and the configuration list below it.
+    connect(kitCombo_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (index < 0) {
+            return;
+        }
+        const auto kit = activeKit();
+        if (kit.has_value()) {
+            outputPanel_->appendBuildOutput(
+                tr("Kit: %1 (%2)").arg(kit->name.isEmpty() ? kit->id : kit->name,
+                                       kit->cppCompiler));
+        }
+        applyToolchainHeaders();
+        applyPreferences();  // kit styles (clang-format/clangd) follow the kit
+        syncConfigCombo();
+    });
+    layout->addWidget(kitCombo_);
+    return container;
+}
+
+void MainWindow::syncKitUi()
+{
+    if (kitCombo_ == nullptr) {
+        return;
+    }
+    const QString previous = kitCombo_->currentData().toString();
+    QSignalBlocker blocker(kitCombo_);
+    kitCombo_->clear();
+    // Enabled, usable kits only: a kit missing a compiler is not selectable.
+    for (const LightCpp::Settings::Kit& kit : settings_->kits()) {
+        if (!kit.enabled || !kit.isValid()) {
+            continue;
+        }
+        kitCombo_->addItem(kit.name.isEmpty() ? kit.id : kit.name, kit.id);
+    }
+    // The settings' default kit wins; otherwise keep the previous choice,
+    // otherwise the first entry.
+    int index = kitCombo_->findData(settings_->defaults().defaultKitId);
+    if (index < 0) {
+        index = kitCombo_->findData(previous);
+    }
+    if (index < 0) {
+        index = kitCombo_->count() > 0 ? 0 : -1;
+    }
+    kitCombo_->setCurrentIndex(index);
+    syncConfigCombo();
 }
 
 QWidget* MainWindow::createBuildConfigurationWidget()
@@ -732,41 +810,97 @@ QWidget* MainWindow::createBuildConfigurationWidget()
     layout->addWidget(new QLabel(tr("Configuration:"), container));
 
     configCombo_ = new QComboBox(container);
-    // The names are the CMAKE_BUILD_TYPE spellings, so what the toolbar says
-    // is exactly what gets passed to CMake and printed in the build log.
-    for (const LightCpp::Project::BuildConfiguration config :
-         {LightCpp::Project::BuildConfiguration::Debug,
-          LightCpp::Project::BuildConfiguration::Release}) {
-        configCombo_->addItem(LightCpp::Project::toString(config),
-                              QVariant(int(config)));
-    }
-    // Debug is the default because that is what a single file was always
-    // compiled with; Release stays one click away and never surprises anyone
-    // who is mid-debug.
-    configCombo_->setCurrentIndex(
-        configCombo_->findData(int(LightCpp::Project::BuildConfiguration::Debug)));
+    // The entries are the active kit's buildConfigurations (Debug/Release
+    // when the kit defines none); what the toolbar shows is exactly the
+    // name the kit's flags are looked up by, and for CMake projects it is
+    // also the CMAKE_BUILD_TYPE spelling.
     configCombo_->setToolTip(
-        tr("Flags used when compiling.\n"
+        tr("Flags used when compiling, taken from the kit's build "
+           "configurations.\n"
            "Debug adds debug info and leaves optimisation off;\n"
            "Release optimises and defines NDEBUG."));
     connect(configCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
-        outputPanel_->appendBuildOutput(tr("Build configuration: %1")
-                                            .arg(LightCpp::Project::toString(
-                                                buildConfiguration())));
+        outputPanel_->appendBuildOutput(
+            tr("Build configuration: %1").arg(currentBuildConfigurationName()));
     });
+    syncConfigCombo();
     layout->addWidget(configCombo_);
     return container;
 }
 
-LightCpp::Project::BuildConfiguration MainWindow::buildConfiguration() const
+void MainWindow::syncConfigCombo()
 {
     if (configCombo_ == nullptr) {
-        return LightCpp::Project::BuildConfiguration::Debug;
+        return;
     }
+    const QString previous = configCombo_->currentData().toString();
+    QSignalBlocker blocker(configCombo_);
+    configCombo_->clear();
+    QStringList names = {QStringLiteral("Debug"), QStringLiteral("Release")};
+    const auto kit = activeKit();
+    if (kit.has_value()) {
+        names = settings_->buildConfigurationNames(*kit);
+    }
+    for (const QString& name : names) {
+        configCombo_->addItem(name, name);
+    }
+    // Keep the previous selection when the new list still has it; else the
+    // settings' default configuration; else Debug; else the first entry.
+    int index = configCombo_->findData(previous);
+    if (index < 0) {
+        index = configCombo_->findData(
+            settings_->defaults().defaultBuildConfiguration);
+    }
+    if (index < 0) {
+        index = configCombo_->findData(QStringLiteral("Debug"));
+    }
+    if (index < 0) {
+        index = configCombo_->count() > 0 ? 0 : -1;
+    }
+    configCombo_->setCurrentIndex(index);
+}
+
+QString MainWindow::currentBuildConfigurationName() const
+{
+    if (configCombo_ == nullptr) {
+        return QStringLiteral("Debug");
+    }
+    const QString name = configCombo_->currentData().toString();
+    return name.isEmpty() ? QStringLiteral("Debug") : name;
+}
+
+LightCpp::Project::BuildConfiguration MainWindow::buildConfiguration() const
+{
     // Parsed back through the same function CMake settings are read with, so
     // an unexpected label degrades to the default instead of crashing.
-    return LightCpp::Project::buildConfigurationFromName(configCombo_->currentText())
+    return LightCpp::Project::buildConfigurationFromName(
+               currentBuildConfigurationName())
         .value_or(LightCpp::Project::BuildConfiguration::Debug);
+}
+
+std::optional<LightCpp::Settings::Kit> MainWindow::activeKit() const
+{
+    if (settings_ == nullptr || kitCombo_ == nullptr) {
+        return std::nullopt;
+    }
+    const QString id = kitCombo_->currentData().toString();
+    if (id.isEmpty()) {
+        return std::nullopt;
+    }
+    return settings_->kit(id);
+}
+
+bool MainWindow::isMsvcKit(const LightCpp::Settings::Kit& kit) const
+{
+    // cl.exe is the MSVC front end; anything else is treated as GNU-style.
+    return kit.cppCompiler.endsWith(QLatin1String("cl.exe"),
+                                    Qt::CaseInsensitive);
+}
+
+bool MainWindow::activeKitIsMsvc() const
+{
+    const auto kit = activeKit();
+    return kit.has_value() && isMsvcKit(*kit);
 }
 
 void MainWindow::createStatusBar()
@@ -847,7 +981,13 @@ void MainWindow::onSaveFile()
     }
 
     if (QFile f(path); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        f.write(ed->toUtf8());
+        QByteArray bytes = ed->toUtf8();
+        // files.lineEnding: the document works in LF internally; the bytes
+        // on disk get the configured ending (CRLF on Windows by default).
+        if (lineEndingForSaving_ == QLatin1String("CRLF")) {
+            bytes.replace('\n', "\r\n");
+        }
+        f.write(bytes);
         f.close();
         ed->setModified(false);
         const int idx = tabWidget_->indexOf(ed);
@@ -878,6 +1018,12 @@ void MainWindow::onSaveFile()
         if (oldLint != newLint && diagnosticsByFile_.contains(oldLint)) {
             diagnosticsByFile_.insert(newLint, diagnosticsByFile_.take(oldLint));
             rebuildProblems();
+        }
+        // languageService.clangFormat.formatOnSave: the buffer is formatted
+        // after the write. The answer is asynchronous, so the formatted text
+        // lands as a modification the user saves like any other edit.
+        if (formatOnSave_ && clangFormatEnabled_ && isCppLikeFile(path)) {
+            onFormatDocument();
         }
     } else {
         QMessageBox::warning(this, tr("Save Error"),
@@ -999,6 +1145,11 @@ QString MainWindow::tabTitleFor(const CodeEditor* editor) const
 CodeEditor* MainWindow::createEditorTab(const QString& title)
 {
     auto* editor = new CodeEditor(this);
+    // The settings' fonts.editor choice applies to every editor created from
+    // now on; the toolbar-font path goes through applyPreferences().
+    if (!editorFont_.family().isEmpty()) {
+        editor->setEditorFont(editorFont_);
+    }
     connect(editor, &QPlainTextEdit::cursorPositionChanged,
             this, &MainWindow::onCursorPositionChanged);
     // The tab's modification dot follows the document's modified flag, not
@@ -1088,6 +1239,14 @@ CodeEditor* MainWindow::createEditorTab(const QString& title)
         if (lintPath.isEmpty() || !isCppLikeFile(lintPath)) {
             return;
         }
+        // Navigation answers lean on clangd's index: languageService.clangd.
+        // indexing switches it off, and files above the large-file limits
+        // (parse or index) are skipped as well.
+        if (!clangdNavigationEnabled_
+            || fileExceeds(lintPath, largeFileParseMB_)
+            || fileExceeds(lintPath, largeFileIndexMB_)) {
+            return;
+        }
         lsp_->changeDocument(lintPath, ed->toPlainText());
         const int reqId = lsp_->requestDefinition(lintPath, line, column);
         if (reqId > 0) {
@@ -1124,7 +1283,14 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
     }
 
     const TextFileContent& content = result.value();
+    // Large files: syntax highlighting is the first thing to go — the
+    // highlighter re-parses the whole document on every keystroke.
+    const bool tooBigToHighlight = fileExceeds(path, largeFileHighlightMB_);
     auto* editor = createEditorTab(QFileInfo(path).fileName());
+    if (tooBigToHighlight) {
+        editor->setSyntaxHighlightEnabled(false);
+        noteLargeFile(path, tr("syntax highlighting"));
+    }
     editor->setFilePath(path);
     editor->loadUtf8(content.utf8);
 
@@ -1138,10 +1304,15 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
             .arg(content.byteSize)
             .arg(content.hadBom ? QStringLiteral(", BOM") : QString()));
 
-    // Push the freshly opened document to the language server.
+    // Push the freshly opened document to the language server — unless the
+    // large-file parse limit says even that is too much.
     if (lsp_->isRunning() && isCppLikeFile(path)) {
-        lsp_->openDocument(path, languageIdForFile(path),
-                            QString::fromUtf8(content.utf8));
+        if (fileExceeds(path, largeFileParseMB_)) {
+            noteLargeFile(path, tr("parsing"));
+        } else {
+            lsp_->openDocument(path, languageIdForFile(path),
+                               QString::fromUtf8(content.utf8));
+        }
     }
 
     return editor;
@@ -1222,7 +1393,7 @@ void MainWindow::onSyntaxCheckToggled(bool enabled)
     if (enabled) {
         lsp_->start();
         outputPanel_->appendServerLog(
-            tr("Starting language server: %1").arg(kClangdPath));
+            tr("Starting language server: %1").arg(lsp_->serverPath()));
     } else {
         lsp_->stop();
         outputPanel_->appendServerLog(tr("Language server stopped"));
@@ -1655,6 +1826,9 @@ void MainWindow::openFolder(const QString& dir)
         outputPanel_->appendBuildOutput(
             tr("No CMakeLists.txt or .dev project here — showing the folder "
                "on its own."));
+        // Leaving the previous project also drops its config/ overlay; the
+        // base settings apply again from here on.
+        syncSettingsOverlays();
         return;
     }
 
@@ -1685,6 +1859,8 @@ void MainWindow::onCloseProject()
     }
     outputPanel_->showChannel(OutputPanel::ChannelBuild);
     clearProjectState();
+    // No project, no overlay: the project's config/ stops applying here.
+    syncSettingsOverlays();
     outputPanel_->appendBuildOutput(tr("Project closed."));
 }
 
@@ -1830,6 +2006,9 @@ void MainWindow::openProjectFile(const QString& path, bool showInExplorer)
     setWindowTitle(QStringLiteral("LightC++ — %1").arg(projectDisplayName()));
     updateProjectActions();
     syncGitWorkingDirectory();
+    // The project's own config/ directory (if any) now overlays the
+    // executable's settings.
+    syncSettingsOverlays();
 }
 
 QString MainWindow::projectRootDirectory() const
@@ -1867,19 +2046,37 @@ QList<MainWindow::ProjectStep> MainWindow::projectBuildSteps()
     if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
         const LightCpp::Project::CMakeProject& project = *cmakeProject_;
         QList<ProjectStep> steps;
+        // The active kit's cmake when it names one, else whatever is on
+        // PATH. The kit's buildToolArgs.cmake are appended to the configure
+        // step only — they configure the build tree; the build step's shape
+        // stays the project's own.
+        QString cmakeProgram = QStringLiteral("cmake");
+        QStringList extraConfigureArgs;
+        if (const auto kit = activeKit(); kit.has_value()) {
+            const QString kitCmake =
+                kit->buildTools.value(QStringLiteral("cmake"));
+            if (!kitCmake.isEmpty() && QFileInfo::exists(kitCmake)) {
+                cmakeProgram = kitCmake;
+            }
+            extraConfigureArgs =
+                settings_
+                    ->effectiveBuildConfig(*kit, currentBuildConfigurationName())
+                    .buildToolArgs.value(QStringLiteral("cmake"));
+        }
         // Configure only when this configuration's tree does not exist yet.
         // Re-running it would overwrite the cache the user may have edited.
         if (!LightCpp::Project::isConfigured(project, config)) {
             steps.append(ProjectStep{
-                QStringLiteral("cmake"),
-                LightCpp::Project::configureArguments(project, config),
+                cmakeProgram,
+                LightCpp::Project::configureArguments(project, config)
+                    + extraConfigureArgs,
                 LightCpp::Project::buildDirectory(project, config),
                 tr("Configuring %1 [%2]").arg(project.sourceDir,
                                               LightCpp::Project::toString(config)),
             });
         }
         steps.append(ProjectStep{
-            QStringLiteral("cmake"),
+            cmakeProgram,
             LightCpp::Project::buildArguments(project, config),
             project.sourceDir,
             tr("Building [%1]").arg(LightCpp::Project::toString(config)),
@@ -1890,17 +2087,37 @@ QList<MainWindow::ProjectStep> MainWindow::projectBuildSteps()
     if (projectKind_ == ProjectKind::DevCpp && devProject_.has_value()) {
         const LightCpp::Project::DevCppProject& project = *devProject_;
         if (project.useCustomMakefile) {
-            const QString make = QDir(kMingwBin).filePath(QStringLiteral("mingw32-make.exe"));
+            // The kit's make when it names one, else the MSYS2 default.
+            QString make = QDir(kMingwBin).filePath(QStringLiteral("mingw32-make.exe"));
+            QStringList extraMakeArgs;
+            if (const auto kit = activeKit(); kit.has_value()) {
+                const QString kitMake =
+                    kit->buildTools.value(QStringLiteral("gnuMake"));
+                if (!kitMake.isEmpty() && QFileInfo::exists(kitMake)) {
+                    make = kitMake;
+                }
+                extraMakeArgs =
+                    settings_
+                        ->effectiveBuildConfig(*kit, currentBuildConfigurationName())
+                        .buildToolArgs.value(QStringLiteral("gnuMake"));
+            }
             return {ProjectStep{
-                make, LightCpp::Project::makeArguments(project), project.projectDir,
+                make, LightCpp::Project::makeArguments(project) + extraMakeArgs,
+                project.projectDir,
                 tr("Running the project's own makefile: %1")
                     .arg(project.customMakefile)}};
         }
+        // The kit's C++ compiler drives the whole unit list, like the
+        // MSYS2 g++ did; the Dev-C++ model only supplies the files.
+        QString gxx = QDir(kMingwBin).filePath(QStringLiteral("g++.exe"));
+        if (const auto kit = activeKit(); kit.has_value()
+            && !kit->cppCompiler.isEmpty()
+            && !isMsvcKit(*kit)) {
+            gxx = kit->cppCompiler;
+        }
         return {ProjectStep{
-            QDir(kMingwBin).filePath(QStringLiteral("g++.exe")),
-            LightCpp::Project::gnuBuildArguments(project, config,
-                                                 QDir(kMingwBin).filePath(
-                                                     QStringLiteral("g++.exe")),
+            gxx,
+            LightCpp::Project::gnuBuildArguments(project, config, gxx,
                                                  project.outputPath()),
             project.projectDir,
             // The number handed to the compiler, not the number of rows in the
@@ -2344,18 +2561,21 @@ void MainWindow::onCompileCurrentFile()
         }
     }
 
-    // Pick the compiler from the selected toolchain + file extension.
-    // Headers compile as C++ by default.
+    // Pick the compiler from the active kit (the toolbar's Kit drop-down).
+    // Headers compile as C++ by default. Without any kit the built-in MSYS2
+    // GCC applies, exactly as before kits existed.
     const QString suf = QFileInfo(srcPath).suffix().toLower();
     const bool isC = (suf == "c");
     const QString outExe = target.exePath;
+    const std::optional<LightCpp::Settings::Kit> kit = activeKit();
 
     QString compilerExe;
     QStringList args;
-    QStringList toolDirs;  // prepended to the child's PATH
+    QStringList linkFlags;  // appended after the source, for GNU-style
+    QStringList toolDirs;   // prepended to the child's PATH
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
 
-    if (actToolchainMsvc_->isChecked()) {
+    if (kit.has_value() && isMsvcKit(*kit)) {
         if (!msvcToolchain_.isValid()) {
             outputPanel_->showChannel(OutputPanel::ChannelBuild);
             outputPanel_->appendBuildOutput(
@@ -2363,7 +2583,7 @@ void MainWindow::onCompileCurrentFile()
             runAfterBuild_ = false;
             return;
         }
-        compilerExe = msvcToolchain_.clPath;
+        compilerExe = kit->cppCompiler;
         toolDirs << msvcToolchain_.binDir;
 
         // cl always emits a .obj and there is no flag that suppresses it, so it
@@ -2387,11 +2607,27 @@ void MainWindow::onCompileCurrentFile()
             // g++ for headers.
             args << QStringLiteral("/TP");
         }
-        // Debug is /Od alone, without /Zi: this path is for compiling and
-        // running, not for attaching a debugger, and the linker would drop a
-        // multi-megabyte .pdb next to the source. Release adds /O2 /DNDEBUG.
-        args += LightCpp::Project::flagsFor(buildConfiguration(),
-                                            LightCpp::Project::CompilerFamily::Msvc);
+        // The kit's own Debug/Release definitions when it has any, else the
+        // built-in table: Debug is /Od alone (no /Zi — this path compiles and
+        // runs, it does not debug), Release adds /O2 /DNDEBUG.
+        bool kitDefinesConfig = false;
+        for (const LightCpp::Settings::KitBuildConfiguration& config :
+             kit->buildConfigurations) {
+            if (config.name == currentBuildConfigurationName()) {
+                kitDefinesConfig = true;
+                break;
+            }
+        }
+        if (kitDefinesConfig) {
+            args += settings_
+                        ->effectiveBuildConfig(*kit, currentBuildConfigurationName())
+                        .compileFlags;
+        } else {
+            args += LightCpp::Project::flagsFor(buildConfiguration(),
+                                                LightCpp::Project::CompilerFamily::Msvc);
+        }
+        // The kit's global flags come last, so they can override the base.
+        args += kit->compileFlags;
         args << (QStringLiteral("/Fe") + QDir::toNativeSeparators(outExe))
              << (QStringLiteral("/Fo") + QDir::toNativeSeparators(objPath))
              << QDir::toNativeSeparators(srcPath);
@@ -2404,18 +2640,42 @@ void MainWindow::onCompileCurrentFile()
         env.insert(QStringLiteral("LIB"),
                    msvcToolchain_.libDirs.join(QLatin1Char(';')));
     } else {
-        const bool useClang = actToolchainClang_->isChecked();
-        const QString compilerName = useClang
-            ? (isC ? QStringLiteral("clang.exe")    : QStringLiteral("clang++.exe"))
-            : (isC ? QStringLiteral("gcc.exe")      : QStringLiteral("g++.exe"));
-        compilerExe = QDir(kMingwBin).filePath(compilerName);
-        toolDirs << kMingwBin;
-        // -g for Debug, -O2 -DNDEBUG for Release; both are in the same place
-        // the project builds read their flags from.
-        args = {QStringLiteral("-Wall"), QStringLiteral("-Wextra")};
-        args += LightCpp::Project::flagsFor(buildConfiguration(),
-                                            LightCpp::Project::CompilerFamily::Gnu);
+        // GNU-style: the kit's compilers, or the built-in MSYS2 GCC when no
+        // kit is selected. The binary dir travels with the compiler: the
+        // runtime DLLs it (and its output) need live next to it.
+        QString cppCompiler =
+            kit.has_value() && !kit->cppCompiler.isEmpty()
+                ? kit->cppCompiler
+                : QDir(kMingwBin).filePath(QStringLiteral("g++.exe"));
+        QString cCompiler =
+            kit.has_value() && !kit->cCompiler.isEmpty()
+                ? kit->cCompiler
+                : QDir(kMingwBin).filePath(QStringLiteral("gcc.exe"));
+        compilerExe = isC ? cCompiler : cppCompiler;
+        toolDirs << QFileInfo(compilerExe).absolutePath();
+
+        if (kit.has_value()) {
+            // Compile flags and the C++ standard from the kit: the named
+            // build configuration on top of the kit's own flags.
+            const LightCpp::Settings::EffectiveBuildConfig effective =
+                settings_->effectiveBuildConfig(*kit,
+                                                currentBuildConfigurationName());
+            args = effective.compileFlags;
+            if (!effective.cppStandard.isEmpty()) {
+                args << (QStringLiteral("-std=") + effective.cppStandard);
+            }
+            linkFlags = effective.linkFlags;
+        } else {
+            // -g for Debug, -O2 -DNDEBUG for Release; both are in the same
+            // place the project builds read their flags from.
+            args = {QStringLiteral("-Wall"), QStringLiteral("-Wextra")};
+            args += LightCpp::Project::flagsFor(buildConfiguration(),
+                                                LightCpp::Project::CompilerFamily::Gnu);
+        }
         args << srcPath << QStringLiteral("-o") << outExe;
+        if (!linkFlags.isEmpty()) {
+            args += linkFlags;
+        }
     }
 
     // Lazily create the QProcess once and wire its handlers.
@@ -2480,7 +2740,7 @@ void MainWindow::onCompileCurrentFile()
     // Name the toolset as well as the compiler: with more than one MSVC
     // installed, cl.exe alone does not say which one produced these errors.
     QString compilerBanner = QFileInfo(compilerExe).fileName();
-    if (actToolchainMsvc_->isChecked()) {
+    if (activeKitIsMsvc()) {
         compilerBanner += QStringLiteral(" [%1]").arg(msvcToolchain_.label);
     }
     outputPanel_->appendBuildOutput(
@@ -2616,10 +2876,19 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
     }
 
     // The binary links against the toolchain's runtime DLLs (libstdc++-6,
-    // libgcc_s, libwinpthread), so its bin directory must be on PATH.
+    // libgcc_s, libwinpthread), so its bin directory must be on PATH — the
+    // active kit's compiler directory when there is one.
+    QString runtimeBinDir = kMingwBin;
+    if (const auto kit = activeKit(); kit.has_value() && !isMsvcKit(*kit)) {
+        const QString dir = QFileInfo(kit->cppCompiler).absolutePath();
+        if (!dir.isEmpty()) {
+            runtimeBinDir = dir;
+        }
+    }
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     env.insert(QStringLiteral("PATH"),
-               kMingwBin + QDir::listSeparator() + env.value(QStringLiteral("PATH")));
+               runtimeBinDir + QDir::listSeparator()
+                   + env.value(QStringLiteral("PATH")));
     runner_->setProcessEnvironment(env);
     runner_->setWorkingDirectory(workDir);
 
@@ -2647,7 +2916,7 @@ void MainWindow::applyToolchainHeaders()
     // Only MSVC needs saying: clangd's own defaults already are the MSYS2 GCC
     // headers, which is what both MinGW toolchains compile against.
     LightCpp::App::ToolchainHeaders headers;
-    if (actToolchainMsvc_->isChecked() && msvcToolchain_.isValid()) {
+    if (activeKitIsMsvc() && msvcToolchain_.isValid()) {
         headers = LightCpp::App::Msvc::clangdHeaders(msvcToolchain_);
     }
     if (headers == lsp_->toolchainHeaders()) {
@@ -2666,4 +2935,220 @@ void MainWindow::applyToolchainHeaders()
         headers.isEmpty()
             ? tr("Restarting the language server with its own headers")
             : tr("Restarting the language server for %1").arg(msvcToolchain_.label));
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+void MainWindow::loadSettings()
+{
+    // Compiled-in locations back the settings up: with no config files at
+    // all, the IDE behaves exactly as it did before they existed.
+    settings_->setFallbackToolPaths(LightCpp::App::kClangdPath,
+                                    LightCpp::App::kClangFormatPath,
+                                    LightCpp::App::kGitPath);
+
+    // First run: write the starter configuration next to the executable so
+    // the settings are discoverable and editable. Files that already exist
+    // are never touched, so this is also a self-repair for a deleted file —
+    // but never an override of an edited one.
+    const QString baseDir =
+        LightCpp::Settings::SettingsStore::baseConfigDirectory();
+    const auto result =
+        LightCpp::App::DefaultSettings::ensureDefaultConfigFiles(baseDir);
+    for (const QString& path : result.written) {
+        outputPanel_->appendBuildOutput(
+            tr("Settings: wrote starter config %1").arg(path));
+    }
+
+    settings_->reload();
+    for (const QString& error : settings_->lastErrors()) {
+        outputPanel_->appendBuildOutput(tr("Settings: %1").arg(error));
+    }
+}
+
+void MainWindow::applyPreferences()
+{
+    const LightCpp::Settings::Preferences prefs = settings_->preferences();
+
+    // --- fonts ---------------------------------------------------------
+    // The toolbar font is the application font: menus, toolbars and every
+    // widget without its own font follow it, while the editor and the
+    // output panel override it with their own settings below.
+    if (prefs.toolbarFont.isValid()) {
+        QFont font(prefs.toolbarFont.family);
+        font.setPointSizeF(prefs.toolbarFont.size);
+        QApplication::setFont(font);
+    }
+    if (prefs.editorFont.isValid()) {
+        QFont font(prefs.editorFont.family);
+        font.setPointSizeF(prefs.editorFont.size);
+        font.setStyleHint(QFont::Monospace);
+        editorFont_ = font;
+        for (int i = 0; i < tabWidget_->count(); ++i) {
+            if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
+                ed->setEditorFont(font);
+            }
+        }
+    }
+    if (prefs.outputFont.isValid()) {
+        QFont font(prefs.outputFont.family);
+        font.setPointSizeF(prefs.outputFont.size);
+        outputPanel_->setOutputFont(font);
+    }
+
+    // --- files ----------------------------------------------------------
+    const auto parsedEncoding =
+        LightCpp::Text::fromName(prefs.defaultEncoding.toUtf8());
+    defaultEncodingName_ = parsedEncoding.has_value()
+        ? QString::fromLatin1(LightCpp::Text::toName(*parsedEncoding))
+        : QStringLiteral("UTF-8");
+    lineEndingForSaving_ = settings_->lineEndingForSaving();
+
+    // --- performance ------------------------------------------------------
+    largeFileHighlightMB_ = prefs.largeFile.syntaxHighlightDisabledAboveMB;
+    largeFileIndexMB_ = prefs.largeFile.indexDisabledAboveMB;
+    largeFileParseMB_ = prefs.largeFile.parseDisabledAboveMB;
+
+    // --- language service: clangd ----------------------------------------
+    clangdEnabledByDefault_ = prefs.clangd.enabledByDefault;
+    clangdCompletionEnabled_ = prefs.clangd.completion;
+    clangdDiagnosticsEnabled_ = prefs.clangd.diagnostics;
+    clangdNavigationEnabled_ = prefs.clangd.indexing;
+    // A kit's own clangdFallbackStyle wins over the global preference.
+    QString clangdStyle = prefs.clangd.fallbackStyle;
+    if (const auto kit = activeKit();
+        kit.has_value() && !kit->clangdFallbackStyle.isEmpty()) {
+        clangdStyle = kit->clangdFallbackStyle;
+    }
+    lsp_->setFallbackStyle(clangdStyle);
+    lsp_->setServerPath(settings_->clangdPath());
+
+    // --- language service: clang-format ----------------------------------
+    clangFormatEnabled_ = prefs.clangFormat.enabled;
+    formatOnSave_ = prefs.clangFormat.formatOnSave;
+    clangFormatFallbackStyle_ = resolvedClangFormatFallbackStyle();
+    actFormat_->setEnabled(clangFormatEnabled_);
+    actFormatFolder_->setEnabled(clangFormatEnabled_);
+    actFormatProject_->setEnabled(clangFormatEnabled_);
+    if (formatter_ != nullptr) {
+        formatter_->setToolPath(settings_->clangFormatPath());
+        formatter_->setFallbackStyle(clangFormatFallbackStyle_);
+    }
+    if (batchFormatter_ != nullptr) {
+        batchFormatter_->setToolPath(settings_->clangFormatPath());
+        batchFormatter_->setFallbackStyle(clangFormatFallbackStyle_);
+    }
+
+    // --- tool paths --------------------------------------------------------
+    git_->setToolPath(resolvedGitPath());
+
+    // --- shortcuts ----------------------------------------------------------
+    // An empty setting means "no shortcut" for clangd's toggle (it had none
+    // before) and "keep the built-ins" for clang-format (it always had two).
+    actSyntaxCheck_->setShortcut(QKeySequence(prefs.shortcutClangd));
+    if (prefs.shortcutClangFormat.isEmpty()) {
+        actFormat_->setShortcuts({QKeySequence(QStringLiteral("Shift+Alt+F")),
+                                  QKeySequence(QStringLiteral("Ctrl+Shift+I"))});
+    } else {
+        actFormat_->setShortcut(QKeySequence(prefs.shortcutClangFormat));
+    }
+}
+
+QString MainWindow::resolvedClangFormatFallbackStyle() const
+{
+    // Precedence: the active kit's style, then the clangFormat service
+    // style, then the global formatting style. "file" (or empty) means the
+    // built-in default applies — the formatter resolves that itself.
+    QString style;
+    if (const auto kit = activeKit(); kit.has_value()) {
+        style = kit->clangFormatStyle;
+    }
+    const LightCpp::Settings::Preferences prefs = settings_->preferences();
+    if (style.isEmpty()) {
+        style = prefs.clangFormat.style;
+    }
+    if (style.isEmpty()) {
+        style = prefs.globalStyle;
+    }
+    return style;
+}
+
+QString MainWindow::resolvedGitPath() const
+{
+    // The global default first; an active kit's own git.path fills in when
+    // no default is configured (a per-kit git is a fallback, not an
+    // override — one repository should not change git binaries behind the
+    // user's back).
+    QString path = settings_->gitPath();
+    if (path.isEmpty()) {
+        if (const auto kit = activeKit(); kit.has_value()) {
+            path = kit->gitPath;
+        }
+    }
+    if (path.isEmpty() || !QFileInfo::exists(path)) {
+        return LightCpp::App::GitClient::defaultToolPath();
+    }
+    return path;
+}
+
+void MainWindow::onReloadSettings()
+{
+    settings_->reload();
+    applyPreferences();
+    syncKitUi();
+    applyToolchainHeaders();
+    outputPanel_->appendBuildOutput(
+        tr("Settings reloaded from %1")
+            .arg(QDir::toNativeSeparators(
+                LightCpp::Settings::SettingsStore::baseConfigDirectory())));
+    for (const QString& error : settings_->lastErrors()) {
+        outputPanel_->appendBuildOutput(tr("Settings: %1").arg(error));
+    }
+}
+
+void MainWindow::syncSettingsOverlays()
+{
+    // The workspace's own config directory overlays the executable's —
+    // VSCode-style folder settings, but keyed the same way as the base.
+    QStringList overlayDirs;
+    const QString root = projectRootDirectory();
+    if (!root.isEmpty()) {
+        overlayDirs.append(QDir(root).filePath(QStringLiteral("config")));
+    }
+    settings_->setOverlayDirectories(overlayDirs);
+    settings_->reload();
+    applyPreferences();
+    syncKitUi();
+    applyToolchainHeaders();
+    if (!overlayDirs.isEmpty()) {
+        outputPanel_->appendBuildOutput(
+            tr("Settings overlay: %1").arg(overlayDirs.join(QStringLiteral(", "))));
+    }
+    for (const QString& error : settings_->lastErrors()) {
+        outputPanel_->appendBuildOutput(tr("Settings: %1").arg(error));
+    }
+}
+
+bool MainWindow::fileExceeds(const QString& path, int limitMB) const
+{
+    if (limitMB <= 0) {
+        return false;  // no limit configured
+    }
+    return QFileInfo(path).size() > qint64(limitMB) * 1024 * 1024;
+}
+
+void MainWindow::noteLargeFile(const QString& path, const QString& feature)
+{
+    // Once per file and feature per session — this runs on hot paths
+    // (opening, every debounced lint), so the log must not fill up either.
+    const QString key = QFileInfo(path).absoluteFilePath() + QLatin1Char('|')
+                        + feature;
+    if (largeFileNoted_.contains(key)) {
+        return;
+    }
+    largeFileNoted_.insert(key);
+    outputPanel_->appendServerLog(
+        tr("Large file: %1 — %2 disabled by settings.")
+            .arg(QFileInfo(path).fileName(), feature));
 }
