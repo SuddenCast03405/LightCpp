@@ -29,7 +29,19 @@ GitClient::GitClient(QObject* parent)
 
 GitClient::~GitClient()
 {
-    if (process_ != nullptr && process_->state() != QProcess::NotRunning) {
+    if (process_ == nullptr) {
+        return;
+    }
+    // Drop anything still queued first: the finished handler starts the next
+    // job, so a waiting command would otherwise be launched *during* shutdown
+    // and reported as "QProcess: Destroyed while process is still running".
+    queue_.clear();
+    current_ = Job{};
+    if (process_->state() != QProcess::NotRunning) {
+        // Same reason as stop(): no receiver can still be interested, and
+        // letting the handlers run on the way out only gives them a chance to
+        // start something new.
+        process_->disconnect(this);
         process_->kill();
         process_->waitForFinished(1000);
     }

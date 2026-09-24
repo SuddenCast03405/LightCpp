@@ -296,7 +296,15 @@ void LanguageServerClient::stop()
         proc->kill();
         proc->waitForFinished(500);
     }
-    proc->deleteLater();
+    // The process is already gone — waitForFinished above either reaped it or
+    // killed it and reaped that. deleteLater() would be the usual idiom, but
+    // the deletion is only performed by the event loop, and stop() is also
+    // called on the way out of the window, when there is no event loop left to
+    // run it: the QProcess would then outlive its owner and Qt would abort
+    // during destruction with "called object is not of the correct type".
+    // Deleting directly is safe precisely because nothing can still be
+    // connected to it (disconnect(this) above) and it has already exited.
+    delete proc;
     documentVersions_.clear();
     completionRequests_.clear();
     definitionRequests_.clear();
