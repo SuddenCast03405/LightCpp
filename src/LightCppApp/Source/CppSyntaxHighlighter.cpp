@@ -91,9 +91,13 @@ CppSyntaxHighlighter::CppSyntaxHighlighter(QTextDocument* parent)
     r.format = keywordFormat_;
     rules_.append(r);
 
-    // Numbers (hex, binary, float, int)
+    // Numbers (hex, binary, float, int).
+    // The alternation must sit INSIDE the \b(...)\b group: an extra ")"
+    // after the exponent group used to leave the whole pattern invalid
+    // ("unmatched closing parenthesis"), so QSyntaxHighlighter silently
+    // skipped it and no number was ever highlighted.
     r.pattern = QRegularExpression(
-        QStringLiteral(R"(\b(0[xX][0-9a-fA-F']+|0[bB][01']+|[0-9']*\.[0-9']*([eE][+-]?[0-9']+)?)|([0-9']+[eE][+-]?[0-9']+)|[0-9']+[uUlL]{0,3})\b)"));
+        QStringLiteral(R"(\b(0[xX][0-9a-fA-F']+|0[bB][01']+|[0-9']*\.[0-9']*([eE][+-]?[0-9']+)?|([0-9']+[eE][+-]?[0-9']+)|[0-9']+[uUlL]{0,3})\b)"));
     r.format = numberFormat_;
     rules_.append(r);
 
