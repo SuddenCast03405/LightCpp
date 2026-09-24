@@ -44,6 +44,39 @@ QString languageIdForExtension(const QString& filePath)
     return QStringLiteral("cpp");
 }
 
+/// Turn one entry of a textDocument/definition result into an LspLocation.
+/// Two shapes are legal: "Location" ({uri, range}) and "LocationLink"
+/// ({targetUri, targetSelectionRange, targetRange}), the latter used by
+/// servers that point at the identifier rather than the whole declaration.
+/// Returns false when neither shape carries a usable local file URI.
+bool parseLocation(const QJsonObject& object, LspLocation& out)
+{
+    QString uri = object.value("uri").toString();
+    QJsonObject range = object.value("range").toObject();
+    if (uri.isEmpty()) {
+        uri = object.value("targetUri").toString();
+        // Prefer the identifier itself: targetRange would put the caret on
+        // the return type or a leading attribute instead of on the name.
+        range = object.value("targetSelectionRange").toObject();
+        if (range.isEmpty()) {
+            range = object.value("targetRange").toObject();
+        }
+    }
+    if (uri.isEmpty()) {
+        return false;
+    }
+    // clangd answers non-file URIs (for builtins, say); there is nowhere to
+    // jump, so an empty path from fromFileUri() is the correct answer.
+    out.filePath = LanguageServerClient::fromFileUri(uri);
+    if (out.filePath.isEmpty()) {
+        return false;
+    }
+    const QJsonObject start = range.value("start").toObject();
+    out.line = start.value("line").toInt();
+    out.column = start.value("character").toInt();
+    return true;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -207,6 +240,8 @@ void LanguageServerClient::stop()
     }
     proc->deleteLater();
     documentVersions_.clear();
+    completionRequests_.clear();
+    definitionRequests_.clear();
 }
 
 bool LanguageServerClient::isRunning() const
@@ -366,6 +401,44 @@ int LanguageServerClient::requestCompletion(const QString& filePath, int line,
 }
 
 // ---------------------------------------------------------------------------
+// Go to definition
+// ---------------------------------------------------------------------------
+
+int LanguageServerClient::requestDefinition(const QString& filePath, int line,
+                                            int column)
+{
+    if (process_ == nullptr || !initialized_) {
+        return 0;
+    }
+    const QString uri = toFileUri(filePath);
+    if (!documentVersions_.contains(uri)) {
+        // Not open on the server, so clangd has no AST to resolve against.
+        return 0;
+    }
+    const int id = nextRequestId_++;
+    definitionRequests_.insert(id, filePath);
+
+    QJsonObject position;
+    position.insert("line", line);
+    position.insert("character", column);
+
+    QJsonObject textDocument;
+    textDocument.insert("uri", uri);
+
+    QJsonObject params;
+    params.insert("textDocument", textDocument);
+    params.insert("position", position);
+
+    QJsonObject request;
+    request.insert("jsonrpc", "2.0");
+    request.insert("id", id);
+    request.insert("method", "textDocument/definition");
+    request.insert("params", params);
+    sendJsonRpc(request);
+    return id;
+}
+
+// ---------------------------------------------------------------------------
 // URI helpers
 // ---------------------------------------------------------------------------
 
@@ -503,6 +576,26 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
             emit completionReady(id, filePath, items);
             return;
         }
+        if (definitionRequests_.contains(id)) {
+            const QString filePath = definitionRequests_.take(id);
+            // The result is Location | Location[] | LocationLink[] | null.
+            // One destination is all the IDE can act on, so the first entry
+            // wins; anything unparseable stays invalid ("not found").
+            LspLocation location;
+            const QJsonValue result = message.value("result");
+            if (result.isObject()) {
+                parseLocation(result.toObject(), location);
+            } else if (result.isArray()) {
+                const QJsonArray arr = result.toArray();
+                for (const QJsonValue& v : arr) {
+                    if (parseLocation(v.toObject(), location)) {
+                        break;
+                    }
+                }
+            }
+            emit definitionReady(id, filePath, location);
+            return;
+        }
         return;
     }
 
@@ -527,7 +620,8 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
         return;
     }
     // Other notifications ($/progress, telemetry, ...) are ignored — this
-    // client only cares about diagnostics, completion and the server log.
+    // client only cares about diagnostics, completion, go-to-definition
+    // and the server log.
 }
 
 void LanguageServerClient::handlePublishDiagnostics(const QJsonObject& params)

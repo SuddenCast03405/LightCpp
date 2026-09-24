@@ -80,6 +80,11 @@ private:
     void reloadWithEncoding(LightCpp::Text::TextEncoding encoding);
     /// Push the editor's current text to the language server (debounced).
     void scheduleLint(CodeEditor* editor);
+    /// Show `filePath` at (line, column): focus the tab that already holds it
+    /// (possibly an unsaved buffer under its virtual lint path) and only load
+    /// from disk when no tab matches. Shared by the Problems list and by
+    /// go-to-definition, so both land the caret identically.
+    void jumpToLocation(const QString& filePath, int line, int column);
     /// Rebuild the Output panel's Problems list from diagnosticsByFile_.
     void rebuildProblems();
     /// true when the file extension is handled by the language server.
@@ -150,6 +155,13 @@ private:
     /// ignored — otherwise an outdated empty result dismisses the popup
     /// that a newer response just filled.
     int latestCompletionId_ = 0;
+
+    /// Same routing for textDocument/definition: request id -> editor.
+    QMap<int, QPointer<CodeEditor>> pendingDefinitions_;
+    /// Id of the most recently issued definition request. A slow answer for
+    /// an earlier Ctrl+Click must not yank the view away from wherever the
+    /// user has navigated since.
+    int latestDefinitionId_ = 0;
 
     /// Latest diagnostics per document, keyed by the editor's lint path
     /// (a virtual temp path for unsaved buffers). Feeds the Problems list.

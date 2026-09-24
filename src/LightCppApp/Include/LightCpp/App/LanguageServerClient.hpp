@@ -45,6 +45,18 @@ struct LspCompletionItem {
     int kind = 0;
 };
 
+/// A source position returned by a "go to definition" answer.
+/// Line/column are 0-based LSP units (UTF-16 code units), i.e. directly
+/// usable with QTextCursor. An empty `filePath` means the server found
+/// nothing at the requested position — check isValid() before jumping.
+struct LspLocation {
+    QString filePath;
+    int line = 0;
+    int column = 0;
+
+    [[nodiscard]] bool isValid() const noexcept { return !filePath.isEmpty(); }
+};
+
 class LanguageServerClient : public QObject {
     Q_OBJECT
 public:
@@ -87,6 +99,13 @@ public:
     int requestCompletion(const QString& filePath, int line, int column,
                           const QString& triggerChar = QString());
 
+    // --- go to definition -------------------------------------------------
+
+    /// Ask the server where the symbol at (line, column) is defined.
+    /// Returns the JSON-RPC request id, or 0 if not sent; the answer
+    /// arrives asynchronously via definitionReady().
+    int requestDefinition(const QString& filePath, int line, int column);
+
     // --- URI helpers (LSP uses file:// URIs with percent encoding) ---
 
     [[nodiscard]] static QString toFileUri(const QString& filePath);
@@ -103,6 +122,12 @@ signals:
     /// themselves and ignore stale results.
     void completionReady(int requestId, const QString& filePath,
                          const QList<LspCompletionItem>& items);
+
+    /// Definition response arrived. `requestId` is the id returned by
+    /// requestDefinition. `location` may be invalid (no definition at the
+    /// requested position, e.g. the caret was on whitespace or a keyword).
+    void definitionReady(int requestId, const QString& filePath,
+                         const LspLocation& location);
 
     /// The initialize handshake completed; documents can now be opened.
     void serverStarted();
@@ -129,6 +154,7 @@ private:
     QByteArray buffer_;                  // partial frame accumulation
     QMap<QString, int> documentVersions_;  // fileUri -> last version sent
     QMap<int, QString> completionRequests_;  // requestId -> fileUri
+    QMap<int, QString> definitionRequests_;  // requestId -> fileUri
     bool initialized_ = false;          // handshake done
     int nextRequestId_ = 1;             // JSON-RPC request id counter
 };

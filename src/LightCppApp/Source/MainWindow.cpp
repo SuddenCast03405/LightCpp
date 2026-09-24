@@ -249,6 +249,25 @@ MainWindow::MainWindow(QWidget* parent)
         }
         pendingCompletions_.erase(it);
     });
+    connect(lsp_, &LightCpp::App::LanguageServerClient::definitionReady,
+            this, [this](int requestId, const QString& filePath,
+                         const LightCpp::App::LspLocation& location) {
+        Q_UNUSED(filePath)
+        // Only the newest request may move the caret (see latestDefinitionId_).
+        if (requestId != latestDefinitionId_) {
+            pendingDefinitions_.remove(requestId);
+            return;
+        }
+        pendingDefinitions_.remove(requestId);
+        if (!location.isValid()) {
+            // Common and expected: the click landed on whitespace, a keyword
+            // or a local. Say so instead of looking like nothing happened.
+            outputPanel_->appendServerLog(
+                tr("No definition found at that position."));
+            return;
+        }
+        jumpToLocation(location.filePath, location.line, location.column);
+    });
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverFailed,
             this, [this](const QString& message) {
         outputPanel_->appendServerLog(tr("language server error: %1").arg(message));
@@ -768,6 +787,29 @@ CodeEditor* MainWindow::createEditorTab(const QString& title)
         }
     });
 
+    // Ctrl+Click / F12 in the editor becomes a textDocument/definition
+    // request. Same contract as completion: push the current text first
+    // (lint didChange is debounced, so clangd would otherwise resolve the
+    // position against a stale buffer), then remember the id so the async
+    // answer can be routed back.
+    connect(editor, &CodeEditor::definitionRequested,
+            this, [this, edPtr](int line, int column) {
+        CodeEditor* ed = edPtr;
+        if (ed == nullptr || !lsp_->isRunning()) {
+            return;
+        }
+        const QString lintPath = ed->lintPath();
+        if (lintPath.isEmpty() || !isCppLikeFile(lintPath)) {
+            return;
+        }
+        lsp_->changeDocument(lintPath, ed->toPlainText());
+        const int reqId = lsp_->requestDefinition(lintPath, line, column);
+        if (reqId > 0) {
+            latestDefinitionId_ = reqId;
+            pendingDefinitions_[reqId] = edPtr;
+        }
+    });
+
     tabWidget_->addTab(editor, title);
     tabWidget_->setCurrentWidget(editor);
     return editor;
@@ -900,6 +942,7 @@ void MainWindow::onSyntaxCheckToggled(bool enabled)
         outputPanel_->appendServerLog(tr("Language server stopped"));
         // Clear all diagnostic markers and any pending completion popups.
         pendingCompletions_.clear();
+        pendingDefinitions_.clear();
         for (int i = 0; i < tabWidget_->count(); ++i) {
             if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
                 ed->setDiagnostics({});
@@ -946,9 +989,14 @@ void MainWindow::rebuildProblems()
 
 void MainWindow::onProblemActivated(const QString& filePath, int line, int column)
 {
-    // A diagnostic may belong to an unsaved buffer, whose "path" is a virtual
-    // temp location rather than a real file — look for an open tab first and
-    // only fall back to loading from disk.
+    jumpToLocation(filePath, line, column);
+}
+
+void MainWindow::jumpToLocation(const QString& filePath, int line, int column)
+{
+    // A diagnostic or a definition may belong to an unsaved buffer, whose
+    // "path" is a virtual temp location rather than a real file — look for an
+    // open tab first and only fall back to loading from disk.
     for (int i = 0; i < tabWidget_->count(); ++i) {
         auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i));
         if (ed == nullptr) {

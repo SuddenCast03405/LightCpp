@@ -486,6 +486,15 @@ void CodeEditor::keyPressEvent(QKeyEvent* event)
     const int key = event->key();
     const QString text = event->text();
 
+    // --- go to definition --------------------------------------------------
+    // F12 is the keyboard twin of Ctrl+Click. Handled before everything else
+    // so it works regardless of what is under the caret.
+    if (key == Qt::Key_F12) {
+        const QTextCursor c = textCursor();
+        emit definitionRequested(c.blockNumber(), c.positionInBlock());
+        return;
+    }
+
     // --- bracket auto-pairing --------------------------------------------
     // Runs before the completion logic so an auto-inserted pair behaves like
     // ordinary typing ("()" with the caret in between, one undo step).
@@ -623,7 +632,29 @@ void CodeEditor::mousePressEvent(QMouseEvent* event)
     if (popup_ && popup_->isVisible()) {
         dismissPopup();
     }
+
+    // Ctrl+Click over an identifier means "go to definition". The document
+    // position is resolved before the base class runs, because the base class
+    // moves the caret — and with a selection in play that would change which
+    // character sits under the pointer. The request itself is emitted after,
+    // so the caret has already settled here when the answer jumps away.
+    const bool ctrlClick = event->button() == Qt::LeftButton
+                           && event->modifiers().testFlag(Qt::ControlModifier);
+    int defLine = 0;
+    int defColumn = 0;
+    if (ctrlClick) {
+        // cursorForPosition() takes viewport coordinates, which is the space
+        // a mouse event carries (QMouseEvent::pos() is deprecated in Qt 6).
+        const QTextCursor cursor = cursorForPosition(event->position().toPoint());
+        defLine = cursor.blockNumber();
+        defColumn = cursor.positionInBlock();
+    }
+
     QPlainTextEdit::mousePressEvent(event);
+
+    if (ctrlClick) {
+        emit definitionRequested(defLine, defColumn);
+    }
 }
 
 bool CodeEditor::event(QEvent* event)

@@ -23,6 +23,10 @@ namespace LightCpp::App { class CompletionPopup; }
 /// Ctrl+Space asks the language server for completions via the
 /// completionRequested() signal; MainWindow forwards the request to
 /// clangd and feeds results back through presentPopup().
+///
+/// Provides go-to-definition: Ctrl+Click on an identifier (or F12 with the
+/// caret on one) emits definitionRequested(); MainWindow asks clangd and
+/// jumps through gotoLocation().
 class CodeEditor : public QPlainTextEdit {
     Q_OBJECT
 public:
@@ -83,6 +87,10 @@ signals:
     /// `line` / `column` are 0-based; `triggerChar` is the character
     /// that caused the request (".", ":", ">") or empty for Ctrl+Space.
     void completionRequested(int line, int column, const QString& triggerChar);
+
+    /// Go-to-definition was asked for at (line, column) — Ctrl+Click on an
+    /// identifier, or F12 with the caret on one. Both are 0-based.
+    void definitionRequested(int line, int column);
 
     /// The diagnostic set of this buffer changed. `path` is lintPath(),
     /// and the diagnostics are already position-normalised.
