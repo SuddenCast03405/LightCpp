@@ -137,12 +137,18 @@ LightC++ IDE：显示名 "LightC++"，代码标识 `LightCpp`，最终二进制 
   改用 `[System.IO.File]::WriteAllText(..., UTF8Encoding($false))` 写消息文件 + `git commit -F`。
 - MinGW 下测试可执行文件静态链接 GCC 运行时（`-static-libgcc -static-libstdc++`），否则 ctest 派生进程会缺 DLL。
 - 运行 Qt 程序需 `E:\msys64\ucrt64\bin` 在 PATH 中（Qt6Core.dll 等依赖）。
-- **单文件编译**：Tools → Compile Current File（F7）+ Toolchain 子菜单
-  （GCC/Clang 互斥，默认 GCC）。编译器固定 `E:\msys64\ucrt64\bin` 下
-  gcc/g++/clang/clang++（按 .c 选 C 编译器、其余 C++）。
-  - args：`-Wall -Wextra -g <src> -o <stem>.exe`；Untitled 写
-    `%TEMP%/lightcpp-compile/<stem>.cpp`；已保存但 modified 自动写盘。
-  - QProcess* compiler_ 懒创建复用，MergedChannels → OutputPanel；
-    子进程 PATH 前置 `kMingwBin`（运行时 DLL 在那）；编译中按钮 disabled。
-- MinGW 下测试可执行文件静态链接 GCC 运行时（`-static-libgcc -static-libstdc++`），否则 ctest 派生进程会缺 DLL。
+- **单文件编译 / 运行**：Tools 菜单 → Compile Current File(F7) / Compile && Run(F5) /
+  Run(Ctrl+F5) / Stop Program(Shift+F5) + Toolchain 子菜单（GCC/Clang 互斥，默认 GCC）。
+  编译器固定 `E:\msys64\ucrt64\bin` 下 gcc/g++/clang/clang++（按 .c 选 C 编译器、其余 C++）。
+  - **build 与 run 共用 `MainWindow::BuildTarget resolveBuildTarget(editor)`**，
+    exe 恒在源码同目录同名；Untitled 源码写 `%TEMP%/lightcpp-compile/<tabstem>.cpp`。
+    改任意一边的路径规则必须只改这个函数，否则"运行"会找不到"编译"的产物。
+  - 编译 args：`-Wall -Wextra -g <src> -o <exe>`；已保存但 modified 会自动写盘。
+  - Compile & Run：编译 `finished` 回调里 rc==0 才 `startProgram()`（`runAfterBuild_` 标志）。
+  - Run 在 exe 不存在时弹 QMessageBox 询问是否立即编译运行；exe 比源码旧只打印提醒仍照跑。
+  - `QProcess* compiler_` / `runner_` 懒创建复用，MergedChannels → OutputPanel 的 Build Log 通道；
+    两个子进程的 PATH 都前置 `kMingwBin`（编译器与产物都需要那里的运行时 DLL）。
+  - 被运行的程序没有终端：**在 `runner_->started()` 信号里 `closeWriteChannel()`** 主动给 stdin EOF，
+    否则 scanf/getline 永久阻塞（在 start() 之后立刻 close 是无效的，那时通道还没建立）。
+  - `updateRunActionStates()` 统一管理 4 个 action 的 enabled；closeEvent 同时 kill 编译器与运行中的程序。
 - 运行 Qt 程序需 `E:\msys64\ucrt64\bin` 在 PATH 中（Qt6Core.dll 等依赖）。
