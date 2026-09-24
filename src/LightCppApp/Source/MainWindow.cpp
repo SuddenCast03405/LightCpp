@@ -1001,18 +1001,29 @@ CodeEditor* MainWindow::createEditorTab(const QString& title)
     auto* editor = new CodeEditor(this);
     connect(editor, &QPlainTextEdit::cursorPositionChanged,
             this, &MainWindow::onCursorPositionChanged);
-    connect(editor, &QPlainTextEdit::textChanged, [this, editor]() {
+    // The tab's modification dot follows the document's modified flag, not
+    // textChanged: QTextDocument emits modificationChanged() in both
+    // directions — the first edit after save marks it, setModified(false)
+    // on save/load clears it, and undoing back to the saved state clears
+    // it too — so the dot can never drift out of sync with the real state.
+    connect(editor->document(), &QTextDocument::modificationChanged,
+            this, [this, editor](bool modified) {
         const int idx = tabWidget_->indexOf(editor);
-        if (idx >= 0) {
-            QString t = tabWidget_->tabText(idx);
-            // Add/remove the modification dot.
-            if (editor->isModified() && !t.endsWith(u'\u25CF')) {
-                t += QStringLiteral(" \u25CF");
-            } else if (!editor->isModified() && t.endsWith(u'\u25CF')) {
-                t = t.left(t.length() - 2);
-            }
+        if (idx < 0) {
+            return;
+        }
+        QString t = tabWidget_->tabText(idx);
+        // Add/remove the modification dot.
+        if (modified && !t.endsWith(u'\u25CF')) {
+            t += QStringLiteral(" \u25CF");
+            tabWidget_->setTabText(idx, t);
+        } else if (!modified && t.endsWith(u'\u25CF')) {
+            t = t.left(t.length() - 2);
             tabWidget_->setTabText(idx, t);
         }
+    });
+
+    connect(editor, &QPlainTextEdit::textChanged, [this, editor]() {
         // Debounce a didChange notification to the language server.
         scheduleLint(editor);
     });
@@ -2322,13 +2333,9 @@ void MainWindow::onCompileCurrentFile()
     } else if (ed->isModified()) {
         if (QFile f(srcPath); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
             f.write(ed->toUtf8());
+            // setModified(false) emits modificationChanged, which strips
+            // the tab's modification dot (see createEditorTab).
             ed->setModified(false);
-            const int idx = tabWidget_->indexOf(ed);
-            if (idx >= 0) {
-                QString t = tabWidget_->tabText(idx);
-                if (t.endsWith(u'\u25CF')) t = t.left(t.length() - 2);
-                tabWidget_->setTabText(idx, t);
-            }
         } else {
             outputPanel_->showChannel(OutputPanel::ChannelBuild);
             outputPanel_->appendBuildOutput(tr("Cannot save %1 before compile").arg(srcPath));
