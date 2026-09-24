@@ -296,6 +296,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
         compiler_->kill();
         compiler_->waitForFinished(2000);
     }
+    // Same for a program started with Compile & Run / Run.
+    if (runner_ && runner_->state() != QProcess::NotRunning) {
+        runner_->kill();
+        runner_->waitForFinished(2000);
+    }
     // Prompt to save modified files.
     for (int i = 0; i < tabWidget_->count(); ++i) {
         if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
@@ -384,6 +389,31 @@ void MainWindow::createActions()
     connect(actCompile_, &QAction::triggered,
             this, &MainWindow::onCompileCurrentFile);
 
+    // --- compile & run / run -------------------------------------------
+    actCompileRun_ = new QAction(QIcon::fromTheme(QStringLiteral("run-build")),
+                                 tr("Compile && &Run"), this);
+    actCompileRun_->setShortcut(QKeySequence(Qt::Key_F5));
+    actCompileRun_->setStatusTip(tr("Compile the active file, then run the "
+                                     "program it produces"));
+    connect(actCompileRun_, &QAction::triggered,
+            this, &MainWindow::onCompileAndRun);
+
+    actRun_ = new QAction(QIcon::fromTheme(QStringLiteral("media-playback-start")),
+                          tr("&Run"), this);
+    actRun_->setShortcut(QKeySequence(QStringLiteral("Ctrl+F5")));
+    actRun_->setStatusTip(tr("Run the program from the last build "
+                              "(without rebuilding)"));
+    connect(actRun_, &QAction::triggered,
+            this, &MainWindow::onRunCurrentFile);
+
+    actStopRun_ = new QAction(QIcon::fromTheme(QStringLiteral("process-stop")),
+                              tr("&Stop Program"), this);
+    actStopRun_->setShortcut(QKeySequence(QStringLiteral("Shift+F5")));
+    actStopRun_->setStatusTip(tr("Kill the program started by Run"));
+    actStopRun_->setEnabled(false);
+    connect(actStopRun_, &QAction::triggered,
+            this, &MainWindow::onStopProgram);
+
     // Toolchain choice: GCC vs Clang. C/C++ (g++ vs gcc etc.) is chosen
     // automatically from the file extension at compile time.
     auto* toolchainGroup = new QActionGroup(this);
@@ -418,6 +448,10 @@ void MainWindow::createMenuBar()
     toolsMenu->addAction(actSyntaxCheck_);
     toolsMenu->addSeparator();
     toolsMenu->addAction(actCompile_);
+    toolsMenu->addAction(actCompileRun_);
+    toolsMenu->addAction(actRun_);
+    toolsMenu->addAction(actStopRun_);
+    toolsMenu->addSeparator();
     auto* toolchainMenu = toolsMenu->addMenu(tr("&Toolchain"));
     toolchainMenu->addAction(actToolchainGcc_);
     toolchainMenu->addAction(actToolchainClang_);
@@ -442,6 +476,8 @@ void MainWindow::createToolBar()
     tb->addAction(actSaveAll_);
     tb->addSeparator();
     tb->addAction(actCompile_);
+    tb->addAction(actCompileRun_);
+    tb->addAction(actRun_);
 }
 
 void MainWindow::createStatusBar()
@@ -948,35 +984,66 @@ QString MainWindow::languageIdForFile(const QString& path)
 }
 
 // ---------------------------------------------------------------------------
-// Single-file compile
+// Single-file build & run
 // ---------------------------------------------------------------------------
-void MainWindow::onCompileCurrentFile()
+MainWindow::BuildTarget MainWindow::resolveBuildTarget(CodeEditor* editor) const
 {
-    CodeEditor* ed = currentEditor();
-    if (ed == nullptr) {
-        outputPanel_->appendBuildOutput(tr("No active file to compile."));
-        return;
+    BuildTarget target;
+    if (editor == nullptr) {
+        return target;
     }
-    // The compiler needs real bytes on disk. For an unsaved Untitled buffer
-    // write a temp .cpp file; for a saved file just flush the buffer to
-    // its path so the compiler reads the latest content.
-    QString srcPath = ed->filePath();
-    if (srcPath.isEmpty()) {
-        const QString dir = QDir(QDir::tempPath())
-                              .filePath(QStringLiteral("lightcpp-compile"));
-        QDir().mkpath(dir);
-        // Derive a stem from the tab title, stripping the modification dot.
-        const int idx = tabWidget_->indexOf(ed);
+    if (!editor->filePath().isEmpty()) {
+        target.srcPath = editor->filePath();
+    } else {
+        // An unsaved buffer still has to exist on disk for the compiler, so
+        // it is built from a temp copy. The stem comes from the tab title
+        // (minus the modification dot) so repeat builds overwrite each other
+        // instead of littering one file per keystroke-free retry.
+        const int idx = tabWidget_->indexOf(editor);
         QString stem = idx >= 0
                 ? QFileInfo(tabWidget_->tabText(idx)).completeBaseName()
                 : QStringLiteral("Untitled");
         stem.remove(QStringLiteral(" \u25CF"));
-        if (stem.isEmpty()) stem = QStringLiteral("Untitled");
-        srcPath = QDir(dir).filePath(stem + QStringLiteral(".cpp"));
+        if (stem.isEmpty()) {
+            stem = QStringLiteral("Untitled");
+        }
+        target.tempSource = true;
+        target.srcPath =
+            QDir(QDir(QDir::tempPath())
+                     .filePath(QStringLiteral("lightcpp-compile")))
+                .filePath(stem + QStringLiteral(".cpp"));
+    }
+    // The binary always sits next to its source, so Run looks exactly where
+    // the last build wrote without having to remember anything.
+    target.exePath = QDir(QFileInfo(target.srcPath).absolutePath())
+                         .filePath(QFileInfo(target.srcPath).completeBaseName()
+                                   + QStringLiteral(".exe"));
+    return target;
+}
+
+void MainWindow::onCompileCurrentFile()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr) {
+        outputPanel_->showChannel(OutputPanel::ChannelBuild);
+        outputPanel_->appendBuildOutput(tr("No active file to compile."));
+        runAfterBuild_ = false;
+        return;
+    }
+    const BuildTarget target = resolveBuildTarget(ed);
+    const QString& srcPath = target.srcPath;
+
+    // The compiler needs real bytes on disk. For an unsaved Untitled buffer
+    // write a temp .cpp file; for a saved file just flush the buffer to
+    // its path so the compiler reads the latest content.
+    if (target.tempSource) {
+        QDir().mkpath(QFileInfo(srcPath).absolutePath());
         if (QFile f(srcPath); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
             f.write(ed->toUtf8());
         } else {
+            outputPanel_->showChannel(OutputPanel::ChannelBuild);
             outputPanel_->appendBuildOutput(tr("Cannot write temp file: %1").arg(srcPath));
+            runAfterBuild_ = false;
             return;
         }
     } else if (ed->isModified()) {
@@ -990,7 +1057,9 @@ void MainWindow::onCompileCurrentFile()
                 tabWidget_->setTabText(idx, t);
             }
         } else {
+            outputPanel_->showChannel(OutputPanel::ChannelBuild);
             outputPanel_->appendBuildOutput(tr("Cannot save %1 before compile").arg(srcPath));
+            runAfterBuild_ = false;
             return;
         }
     }
@@ -1004,9 +1073,7 @@ void MainWindow::onCompileCurrentFile()
         ? (isC ? QStringLiteral("clang.exe")    : QStringLiteral("clang++.exe"))
         : (isC ? QStringLiteral("gcc.exe")      : QStringLiteral("g++.exe"));
     const QString compilerExe = QDir(kMingwBin).filePath(compilerName);
-    const QString stem = QFileInfo(srcPath).completeBaseName();
-    const QString outExe = QDir(QFileInfo(srcPath).absolutePath())
-                              .filePath(stem + QStringLiteral(".exe"));
+    const QString outExe = target.exePath;
     const QStringList args = {
         QStringLiteral("-Wall"),
         QStringLiteral("-Wextra"),
@@ -1032,7 +1099,18 @@ void MainWindow::onCompileCurrentFile()
             outputPanel_->appendBuildOutput(
                 rc == 0 ? tr("--- Build succeeded (exit 0) ---")
                         : tr("--- Build failed (exit %1) ---").arg(rc));
-            if (actCompile_) actCompile_->setEnabled(true);
+            updateRunActionStates();
+            // "Compile & Run" only continues on a successful build.
+            const bool runNow = runAfterBuild_;
+            runAfterBuild_ = false;
+            if (runNow) {
+                if (rc == 0) {
+                    startProgram(lastBuildExe_, QFileInfo(lastBuildExe_).absolutePath());
+                } else {
+                    outputPanel_->appendBuildOutput(
+                        tr("Build failed — nothing was run."));
+                }
+            }
         });
         connect(compiler_, &QProcess::errorOccurred, this,
                 [this](QProcess::ProcessError e) {
@@ -1040,12 +1118,15 @@ void MainWindow::onCompileCurrentFile()
             outputPanel_->appendBuildOutput(
                 tr("Compiler failed to start. Check that %1 exists.")
                     .arg(QDir(kMingwBin).filePath(QStringLiteral("<gcc|g++|clang|clang++>.exe"))));
-            if (actCompile_) actCompile_->setEnabled(true);
+            runAfterBuild_ = false;
+            updateRunActionStates();
         });
     }
 
     if (compiler_->state() != QProcess::NotRunning) {
+        outputPanel_->showChannel(OutputPanel::ChannelBuild);
         outputPanel_->appendBuildOutput(tr("A build is already running."));
+        runAfterBuild_ = false;
         return;
     }
 
@@ -1058,10 +1139,151 @@ void MainWindow::onCompileCurrentFile()
     compiler_->setProcessEnvironment(env);
     compiler_->setWorkingDirectory(QFileInfo(srcPath).absolutePath());
 
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
     outputPanel_->appendBuildOutput(
         tr("--- Compiling: %1 %2 ---")
             .arg(QFileInfo(compilerExe).fileName(),
                  args.join(QStringLiteral(" "))));
-    actCompile_->setEnabled(false);
+    lastBuildExe_ = outExe;
     compiler_->start(compilerExe, args);
+    updateRunActionStates();
+}
+
+void MainWindow::onCompileAndRun()
+{
+    // The run step happens in the compiler's finished handler.
+    runAfterBuild_ = true;
+    onCompileCurrentFile();
+}
+
+void MainWindow::onRunCurrentFile()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr) {
+        outputPanel_->showChannel(OutputPanel::ChannelBuild);
+        outputPanel_->appendBuildOutput(tr("No active file to run."));
+        return;
+    }
+    const BuildTarget target = resolveBuildTarget(ed);
+    const QString exePath = target.exePath;
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+
+    if (!QFileInfo::exists(exePath)) {
+        // Nothing has been built yet — offer to build it instead of just
+        // failing, which is what the user almost certainly wants.
+        const QString label = target.tempSource
+                ? tabWidget_->tabText(tabWidget_->indexOf(ed))
+                : QFileInfo(exePath).fileName();
+        outputPanel_->appendBuildOutput(
+            tr("Nothing to run yet: %1 has not been compiled.").arg(exePath));
+        const auto reply = QMessageBox::question(
+            this, tr("Not Compiled"),
+            tr("\"%1\" has not been compiled yet.\n\nCompile and run it now?")
+                .arg(label),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+        if (reply == QMessageBox::Yes) {
+            onCompileAndRun();
+        } else {
+            outputPanel_->appendBuildOutput(
+                tr("Hint: Tools > Compile & Run (F5) builds it first."));
+        }
+        return;
+    }
+
+    // The binary exists, but it may predate the current text.
+    const QFileInfo exeInfo(exePath);
+    bool stale = ed->isModified();
+    if (!stale && !target.tempSource) {
+        stale = QFileInfo(target.srcPath).lastModified() > exeInfo.lastModified();
+    }
+    if (stale) {
+        outputPanel_->appendBuildOutput(
+            tr("Note: %1 is older than the source — press F5 to rebuild.")
+                .arg(exeInfo.fileName()));
+    }
+    startProgram(exePath, QFileInfo(target.srcPath).absolutePath());
+}
+
+void MainWindow::onStopProgram()
+{
+    if (runner_ == nullptr || runner_->state() == QProcess::NotRunning) {
+        return;
+    }
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+    outputPanel_->appendBuildOutput(tr("--- Stopping program ---"));
+    runner_->kill();
+}
+
+void MainWindow::startProgram(const QString& exePath, const QString& workDir)
+{
+    if (exePath.isEmpty() || !QFileInfo::exists(exePath)) {
+        outputPanel_->appendBuildOutput(
+            tr("Cannot run: %1 does not exist.").arg(exePath));
+        return;
+    }
+    if (runner_ == nullptr) {
+        runner_ = new QProcess(this);
+        runner_->setProcessChannelMode(QProcess::MergedChannels);
+        connect(runner_, &QProcess::readyReadStandardOutput, this, [this] {
+            if (runner_ == nullptr) return;
+            const QByteArray b = runner_->readAllStandardOutput();
+            outputPanel_->appendBuildOutput(QString::fromLocal8Bit(b));
+        });
+        // The program has no terminal, so hand it an immediate EOF on stdin:
+        // otherwise a scanf()/getline() would block forever with no way to
+        // feed it. Must run on started() — the channel isn't open before.
+        connect(runner_, &QProcess::started,
+                runner_, &QProcess::closeWriteChannel);
+        connect(runner_, &QProcess::errorOccurred, this,
+                [this](QProcess::ProcessError e) {
+            if (runner_ == nullptr) return;
+            if (e == QProcess::FailedToStart) {
+                outputPanel_->appendBuildOutput(
+                    tr("Failed to start the program. It probably needs the "
+                       "MSYS2 runtime DLLs next to it (or on PATH)."));
+            }
+            updateRunActionStates();
+        });
+        connect(runner_,
+                QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, [this](int code, QProcess::ExitStatus status) {
+            outputPanel_->appendBuildOutput(
+                status == QProcess::NormalExit
+                    ? tr("--- Program exited with code %1 ---").arg(code)
+                    : tr("--- Program was killed ---"));
+            updateRunActionStates();
+        });
+    }
+
+    if (runner_->state() != QProcess::NotRunning) {
+        outputPanel_->showChannel(OutputPanel::ChannelBuild);
+        outputPanel_->appendBuildOutput(tr("A program is already running."));
+        return;
+    }
+
+    // The binary links against the toolchain's runtime DLLs (libstdc++-6,
+    // libgcc_s, libwinpthread), so its bin directory must be on PATH.
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("PATH"),
+               kMingwBin + QDir::listSeparator() + env.value(QStringLiteral("PATH")));
+    runner_->setProcessEnvironment(env);
+    runner_->setWorkingDirectory(workDir);
+
+    outputPanel_->showChannel(OutputPanel::ChannelBuild);
+    outputPanel_->appendBuildOutput(
+        tr("--- Running: %1 ---").arg(QFileInfo(exePath).absoluteFilePath()));
+    runner_->start(exePath, {});
+    updateRunActionStates();
+}
+
+void MainWindow::updateRunActionStates()
+{
+    const bool building = compiler_ != nullptr
+                          && compiler_->state() != QProcess::NotRunning;
+    const bool running = runner_ != nullptr
+                         && runner_->state() != QProcess::NotRunning;
+    if (actCompile_)    actCompile_->setEnabled(!building);
+    if (actCompileRun_) actCompileRun_->setEnabled(!building && !running);
+    if (actRun_)        actRun_->setEnabled(!building && !running);
+    if (actStopRun_)    actStopRun_->setEnabled(running);
 }

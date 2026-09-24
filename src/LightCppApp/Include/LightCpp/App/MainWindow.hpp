@@ -52,6 +52,13 @@ private slots:
     void onSyntaxCheckToggled(bool enabled);
     void onLintTimerTimeout();
     void onCompileCurrentFile();
+    /// Compile the active file and, if the build succeeds, run the result.
+    void onCompileAndRun();
+    /// Run the binary produced by an earlier build. Asks whether to build
+    /// first when nothing has been compiled yet.
+    void onRunCurrentFile();
+    /// Kill a program started by onRunCurrentFile() / onCompileAndRun().
+    void onStopProgram();
     /// Jump to the source position of a Problems-list entry.
     /// `line` / `column` are 0-based.
     void onProblemActivated(const QString& filePath, int line, int column);
@@ -78,6 +85,20 @@ private:
     /// LSP languageId for a path ("cpp", "c", ...).
     [[nodiscard]] static QString languageIdForFile(const QString& path);
 
+    /// Source the compiler reads and binary it produces for one editor.
+    /// Build and run share this, so "run" always looks exactly where the
+    /// last build wrote (unsaved buffers are built from a temp copy).
+    struct BuildTarget {
+        QString srcPath;          // what the compiler is invoked on
+        QString exePath;          // what the linker writes
+        bool tempSource = false;  // true when srcPath lives in %TEMP%
+    };
+    [[nodiscard]] BuildTarget resolveBuildTarget(CodeEditor* editor) const;
+    /// Launch `exePath` with its output captured into the Build Log.
+    void startProgram(const QString& exePath, const QString& workDir);
+    /// Enable/disable the build and run actions for the current states.
+    void updateRunActionStates();
+
     // --- widgets ---
     QTabWidget* tabWidget_;
     FileExplorer* fileExplorer_;
@@ -99,6 +120,9 @@ private:
     QAction* actToggleOutput_ = nullptr;    // show/hide the output panel
     QAction* actSyntaxCheck_;
     QAction* actCompile_ = nullptr;        // single-file compile (F7)
+    QAction* actCompileRun_ = nullptr;     // compile, then run (F5)
+    QAction* actRun_ = nullptr;            // run the last build (Ctrl+F5)
+    QAction* actStopRun_ = nullptr;        // kill the running program (Shift+F5)
     QAction* actToolchainGcc_ = nullptr;   // mutually exclusive with Clang
     QAction* actToolchainClang_ = nullptr;
 
@@ -120,8 +144,14 @@ private:
     /// (a virtual temp path for unsaved buffers). Feeds the Problems list.
     QHash<QString, QList<LightCpp::App::LspDiagnostic>> diagnosticsByFile_;
 
-    // --- single-file compiler ---
+    // --- single-file compiler / runner ---
     QProcess* compiler_ = nullptr;   // lazily created; reused across builds
+    QProcess* runner_ = nullptr;     // lazily created; reused across runs
+    /// Set by onCompileAndRun(): run the produced binary once the build
+    /// finishes successfully.
+    bool runAfterBuild_ = false;
+    /// Binary produced by the most recent build, i.e. what "Run" launches.
+    QString lastBuildExe_;
 
     // new-file counter
     int untitledCounter_ = 0;
