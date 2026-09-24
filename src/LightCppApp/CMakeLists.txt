@@ -29,11 +29,13 @@ set_target_properties(lightcpp PROPERTIES AUTOMOC ON)
 target_include_directories(lightcpp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppCore/Include
+    ${CMAKE_SOURCE_DIR}/src/LightCppProject/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppText/Include
 )
 
 target_link_libraries(lightcpp PRIVATE
     LightCppCore
+    LightCppProject
     LightCppText
     Qt6::Widgets
     LightCppWarnings

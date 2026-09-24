@@ -95,10 +95,12 @@ endif()
 # ---------------------------------------------------------------------------
 add_subdirectory(src/LightCppCore)
 add_subdirectory(src/LightCppText)
+add_subdirectory(src/LightCppProject)
 add_subdirectory(src/LightCppApp)
 add_subdirectory(apps/LightCppEncodingCli)
 
 if(BUILD_TESTING)
     add_subdirectory(tests/LightCppCoreTests)
     add_subdirectory(tests/LightCppTextTests)
+    add_subdirectory(tests/LightCppProjectTests)
 endif()
