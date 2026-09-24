@@ -19,6 +19,17 @@
 #include <QAbstractTextDocumentLayout>
 
 #include <utility>
+#include <vector>
+
+namespace {
+
+/// The gutter is one column wider than the line numbers need, holding the
+/// fold markers to the left of the diagnostic dots.
+constexpr int kFoldColumnWidth = 12;
+/// Side of the square fold marker drawn in that column.
+constexpr int kFoldMarkerSize = 9;
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // LineNumberArea — a thin widget painted by CodeEditor.
@@ -35,6 +46,17 @@ public:
 protected:
     void paintEvent(QPaintEvent* event) override {
         editor_->lineNumberAreaPaintEvent(event);
+    }
+
+    // The gutter is a plain widget, so folding has to be driven from here:
+    // clicks on the fold markers never reach the editor's own handlers.
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton) {
+            editor_->handleFoldMarkerClick(event->position().toPoint());
+            event->accept();
+            return;
+        }
+        QWidget::mousePressEvent(event);
     }
 
 private:
@@ -76,6 +98,11 @@ CodeEditor::CodeEditor(QWidget* parent)
             this, &CodeEditor::updateLineNumberArea);
     connect(this, &QPlainTextEdit::cursorPositionChanged,
             this, &CodeEditor::highlightCurrentLine);
+    // Folding is derived from the text, so it is recomputed whenever the text
+    // changes. The analysis is a single pass over the document, and the fold
+    // state itself survives re-parsing (see FoldAnchor).
+    connect(this, &QPlainTextEdit::textChanged,
+            this, &CodeEditor::rebuildFoldRegions);
 
     // Force the line-number gutter to be visible and opaque: creating it
     // as a child of an un-shown widget can leave it hidden by default.
@@ -108,6 +135,7 @@ CodeEditor::CodeEditor(QWidget* parent)
 
     updateLineNumberAreaWidth(0);
     highlightCurrentLine();
+    rebuildFoldRegions();
 }
 
 CodeEditor::~CodeEditor() = default;
@@ -141,8 +169,10 @@ int CodeEditor::lineNumberAreaWidth() const
         max /= 10;
         ++digits;
     }
+    // One spare digit's worth of room keeps the line numbers clear of the fold
+    // markers and diagnostic dots drawn on the left.
     int space = 3 + fontMetrics().horizontalAdvance(u'9') * (digits + 1);
-    return space;
+    return space + kFoldColumnWidth;
 }
 
 void CodeEditor::updateLineNumberAreaWidth(int)
@@ -296,6 +326,9 @@ QList<LightCpp::App::LspDiagnostic> CodeEditor::normalizedDiagnostics() const
 
 void CodeEditor::gotoLocation(int line, int column)
 {
+    // A jump into collapsed code would otherwise put the caret somewhere it
+    // cannot be seen — expand whatever hides it first.
+    unfoldLine(line);
     const QTextBlock block = document()->findBlockByNumber(qMax(line, 0));
     if (!block.isValid()) {
         return;
@@ -800,6 +833,333 @@ void CodeEditor::applyCompletionItem(const LightCpp::App::LspCompletionItem& ite
     setTextCursor(c);
 }
 
+// ---------------------------------------------------------------------------
+// Code folding
+//
+// The analysis itself lives in LightCppCore (FoldModel) and knows nothing about
+// widgets; everything here is about keeping a fold attached to its block while
+// the text moves underneath it.
+// ---------------------------------------------------------------------------
+void CodeEditor::rebuildFoldRegions()
+{
+    // Splitting the document text once is simpler than translating block
+    // positions, and the analysis wants to see the text as a whole anyway — a
+    // block comment or a raw string can span blocks.
+    const QStringList parts = toPlainText().split(u'\n');
+    std::vector<std::string> lines;
+    lines.reserve(std::size_t(parts.size()));
+    for (const QString& part : parts) {
+        lines.push_back(part.toStdString());
+    }
+
+    QList<LightCpp::Core::Fold::FoldRegion> next;
+    for (const LightCpp::Core::Fold::FoldRegion& region
+         : LightCpp::Core::Fold::computeFoldRegions(lines)) {
+        next.append(region);
+    }
+
+    // Re-attach the folds that are currently collapsed. A fold is remembered
+    // as an ordinal position, so an edit above it moves every line without
+    // disturbing the fold. The header text is the safety net: if that slot now
+    // opens something else, the fold it described is gone and is dropped
+    // rather than snapping onto an unrelated block.
+    QList<FoldAnchor> kept;
+    for (const FoldAnchor& anchor : std::as_const(folded_)) {
+        if (anchor.regionIndex < 0 || anchor.regionIndex >= next.size()) {
+            continue;
+        }
+        const QTextBlock block = document()->findBlockByNumber(
+            int(next.at(anchor.regionIndex).startLine));
+        if (!block.isValid() || block.text() != anchor.headerText) {
+            continue;
+        }
+        kept.append(anchor);
+    }
+
+    foldRegions_ = next;
+    folded_ = kept;
+    applyFoldState();
+}
+
+void CodeEditor::applyFoldState()
+{
+    QSet<int> hidden;
+    for (const FoldAnchor& anchor : std::as_const(folded_)) {
+        if (anchor.regionIndex < 0 || anchor.regionIndex >= foldRegions_.size()) {
+            continue;
+        }
+        const LightCpp::Core::Fold::FoldRegion& region =
+            foldRegions_.at(anchor.regionIndex);
+        // The region's own line stays visible: it is the header that says what
+        // is inside.
+        for (std::size_t line = region.startLine + 1; line <= region.endLine; ++line) {
+            hidden.insert(int(line));
+        }
+    }
+
+    // This runs on every keystroke, so an unchanged answer must cost nothing.
+    if (hidden == hiddenLines_) {
+        return;
+    }
+    hiddenLines_ = hidden;
+
+    QTextBlock block = document()->begin();
+    while (block.isValid()) {
+        const bool visible = !hidden.contains(block.blockNumber());
+        if (block.isVisible() != visible) {
+            block.setVisible(visible);
+            // A block that occupies no lines takes no vertical space, and
+            // markContentsDirty invalidates its cached layout so the change is
+            // actually reflected on screen.
+            block.setLineCount(visible ? 1 : 0);
+            document()->markContentsDirty(block.position(), block.length());
+        }
+        block = block.next();
+    }
+    viewport()->update();
+    lineNumberArea_->update();
+}
+
+bool CodeEditor::isLineHidden(int line) const
+{
+    return hiddenLines_.contains(line);
+}
+
+bool CodeEditor::isFolded(int regionIndex) const
+{
+    for (const FoldAnchor& anchor : std::as_const(folded_)) {
+        if (anchor.regionIndex == regionIndex) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void CodeEditor::setFolded(int regionIndex, bool folded)
+{
+    if (regionIndex < 0 || regionIndex >= foldRegions_.size()) {
+        return;
+    }
+    if (isFolded(regionIndex) == folded) {
+        return;
+    }
+    if (folded) {
+        const QTextBlock header = document()->findBlockByNumber(
+            int(foldRegions_.at(regionIndex).startLine));
+        FoldAnchor anchor;
+        anchor.regionIndex = regionIndex;
+        anchor.headerText = header.isValid() ? header.text() : QString();
+        folded_.append(anchor);
+    } else {
+        for (qsizetype i = 0; i < folded_.size(); ++i) {
+            if (folded_.at(i).regionIndex == regionIndex) {
+                folded_.removeAt(i);
+                break;
+            }
+        }
+    }
+    applyFoldState();
+    keepCaretOutsideFolds();
+}
+
+bool CodeEditor::toggleFoldAtLine(int line)
+{
+    // Innermost first: when several blocks open on one line, the tightest is
+    // the one the click was aimed at.
+    for (qsizetype i = foldRegions_.size() - 1; i >= 0; --i) {
+        if (int(foldRegions_.at(i).startLine) == line) {
+            setFolded(int(i), !isFolded(int(i)));
+            return true;
+        }
+    }
+    return false;
+}
+
+void CodeEditor::foldAtCaret()
+{
+    const std::size_t caret = std::size_t(qMax(textCursor().blockNumber(), 0));
+    int best = -1;
+    std::size_t bestStart = 0;
+    std::size_t bestSpan = 0;
+    for (qsizetype i = 0; i < foldRegions_.size(); ++i) {
+        const LightCpp::Core::Fold::FoldRegion& region = foldRegions_.at(i);
+        if (region.startLine > caret || region.endLine < caret) {
+            continue;
+        }
+        const std::size_t span = region.endLine - region.startLine;
+        if (best < 0 || region.startLine > bestStart
+            || (region.startLine == bestStart && span < bestSpan)) {
+            best = int(i);
+            bestStart = region.startLine;
+            bestSpan = span;
+        }
+    }
+    if (best >= 0) {
+        setFolded(best, true);
+    }
+}
+
+void CodeEditor::unfoldAtCaret()
+{
+    const std::size_t caret = std::size_t(qMax(textCursor().blockNumber(), 0));
+    int best = -1;
+    std::size_t bestStart = 0;
+    std::size_t bestSpan = 0;
+    for (const FoldAnchor& anchor : std::as_const(folded_)) {
+        if (anchor.regionIndex < 0 || anchor.regionIndex >= foldRegions_.size()) {
+            continue;
+        }
+        const LightCpp::Core::Fold::FoldRegion& region =
+            foldRegions_.at(anchor.regionIndex);
+        if (region.startLine > caret || region.endLine < caret) {
+            continue;
+        }
+        const std::size_t span = region.endLine - region.startLine;
+        if (best < 0 || region.startLine > bestStart
+            || (region.startLine == bestStart && span < bestSpan)) {
+            best = anchor.regionIndex;
+            bestStart = region.startLine;
+            bestSpan = span;
+        }
+    }
+    if (best >= 0) {
+        setFolded(best, false);
+    }
+}
+
+void CodeEditor::foldAll()
+{
+    QSet<int> hidden;
+    QList<FoldAnchor> anchors;
+    for (qsizetype i = 0; i < foldRegions_.size(); ++i) {
+        const LightCpp::Core::Fold::FoldRegion& region = foldRegions_.at(i);
+        // Skip anything already inside a fold that is being taken: collapsing
+        // a block nobody can see only stores state with no way to reach it.
+        if (hidden.contains(int(region.startLine))) {
+            continue;
+        }
+        const QTextBlock header = document()->findBlockByNumber(int(region.startLine));
+        FoldAnchor anchor;
+        anchor.regionIndex = int(i);
+        anchor.headerText = header.isValid() ? header.text() : QString();
+        anchors.append(anchor);
+        for (std::size_t line = region.startLine + 1; line <= region.endLine; ++line) {
+            hidden.insert(int(line));
+        }
+    }
+    folded_ = anchors;
+    applyFoldState();
+    keepCaretOutsideFolds();
+}
+
+void CodeEditor::unfoldAll()
+{
+    if (folded_.isEmpty()) {
+        return;
+    }
+    folded_.clear();
+    applyFoldState();
+}
+
+void CodeEditor::unfoldLine(int line)
+{
+    if (!hiddenLines_.contains(line)) {
+        return;
+    }
+    for (const FoldAnchor& anchor : std::as_const(folded_)) {
+        if (anchor.regionIndex < 0 || anchor.regionIndex >= foldRegions_.size()) {
+            continue;
+        }
+        const LightCpp::Core::Fold::FoldRegion& region =
+            foldRegions_.at(anchor.regionIndex);
+        if (int(region.startLine) < line && line <= int(region.endLine)) {
+            setFolded(anchor.regionIndex, false);
+            return;
+        }
+    }
+}
+
+void CodeEditor::keepCaretOutsideFolds()
+{
+    if (hiddenLines_.isEmpty()) {
+        return;
+    }
+    QTextCursor cursor = textCursor();
+    const int line = cursor.blockNumber();
+    if (!hiddenLines_.contains(line)) {
+        return;
+    }
+    // Park the caret at the end of the header line that swallowed it, which is
+    // where the user was looking when they folded.
+    for (const FoldAnchor& anchor : std::as_const(folded_)) {
+        if (anchor.regionIndex < 0 || anchor.regionIndex >= foldRegions_.size()) {
+            continue;
+        }
+        const LightCpp::Core::Fold::FoldRegion& region =
+            foldRegions_.at(anchor.regionIndex);
+        if (int(region.startLine) < line && line <= int(region.endLine)) {
+            const QTextBlock header = document()->findBlockByNumber(int(region.startLine));
+            if (header.isValid()) {
+                cursor.setPosition(header.position()
+                                   + qMax<qsizetype>(header.length() - 1, 0));
+                setTextCursor(cursor);
+            }
+            return;
+        }
+    }
+}
+
+void CodeEditor::handleFoldMarkerClick(const QPoint& pos)
+{
+    if (pos.x() >= kFoldColumnWidth) {
+        return;  // that part of the gutter belongs to the line numbers
+    }
+    // The gutter and the viewport share the same vertical geometry, so a y
+    // measured in the gutter is already a y in the viewport.
+    const int line = cursorForPosition(QPoint(0, pos.y())).blockNumber();
+    toggleFoldAtLine(line);
+}
+
+void CodeEditor::paintFoldMarker(QPainter* painter, int top, int bottom, int regionIndex)
+{
+    if (regionIndex < 0 || regionIndex >= foldRegions_.size()) {
+        return;
+    }
+
+    QColor color = palette().color(QPalette::Text);
+    color.setAlpha(140);
+
+    // drawRect's width already includes the pen, so a size-8 box spanning
+    // [x, x+8] is the 9-pixel marker.
+    const int box = kFoldMarkerSize - 1;
+    const int x = qMax(0, (kFoldColumnWidth - kFoldMarkerSize) / 2);
+    const int y = top + qMax(0, (bottom - top - kFoldMarkerSize) / 2);
+
+    painter->setPen(QPen(color, 1));
+    painter->setBrush(Qt::NoBrush);
+    painter->drawRect(x, y, box, box);
+
+    QFont markerFont = font();
+    if (markerFont.pointSizeF() > 0.0) {
+        // The glyph lives in a 9-pixel box, so it needs to be markedly
+        // smaller than the line numbers next to it.
+        markerFont.setPointSizeF(qMax(6.0, markerFont.pointSizeF() - 3.0));
+    }
+    markerFont.setBold(true);
+    painter->setFont(markerFont);
+    painter->setPen(color);
+    painter->drawText(x, y, box + 1, box + 1, Qt::AlignCenter,
+                      isFolded(regionIndex) ? QString(QChar(0x2212)) : QString(u'+'));
+
+    if (isFolded(regionIndex)) {
+        // A collapsed range usually has more lines below it, so the marker
+        // keeps a hairline running down to the bottom of the visible gutter.
+        const int cx = x + box / 2;
+        painter->setPen(QPen(color, 1));
+        painter->drawLine(cx, y + box + 1, cx, lineNumberArea_->rect().bottom());
+    }
+}
+
 void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event)
 {
     QPainter painter(lineNumberArea_);
@@ -826,18 +1186,36 @@ void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event)
         }
     }
 
+    // Which lines open a foldable block, and which region that is. The list is
+    // ordered outermost-first, so for several regions opening on one line the
+    // last write leaves the innermost — which is the one a click should reach.
+    QHash<int, int> foldAtLine;
+    for (qsizetype i = 0; i < foldRegions_.size(); ++i) {
+        foldAtLine.insert(int(foldRegions_.at(i).startLine), int(i));
+    }
+
     while (block.isValid() && top <= event->rect().bottom()) {
         if (block.isVisible() && bottom >= event->rect().top()) {
+            // Fold marker first, then the diagnostic dot, then the number: the
+            // three share the gutter left to right in that order.
+            const auto foldIt = foldAtLine.constFind(blockNumber);
+            if (foldIt != foldAtLine.constEnd()) {
+                painter.save();
+                paintFoldMarker(&painter, top, bottom, foldIt.value());
+                painter.restore();
+            }
+
             const QString number = QString::number(blockNumber + 1);
             painter.setPen(numColor);
             // The rect height must be at least one line box — an empty
             // (height 0) rect makes QPainter skip drawing the text, which
             // is why the gutter showed but the numbers did not.
-            painter.drawText(0, top, lineNumberArea_->width() - 2,
+            painter.drawText(kFoldColumnWidth, top,
+                             lineNumberArea_->width() - 2 - kFoldColumnWidth,
                              fontMetrics().height(),
                              Qt::AlignRight | Qt::AlignVCenter, number);
 
-            // Diagnostic marker on the left edge of the gutter.
+            // Diagnostic marker, just right of the fold strip.
             const int sev = lineSeverity.value(blockNumber, 0);
             if (sev > 0 && sev <= 3) {
                 QColor mark = (sev == 1) ? QColor(Qt::red)
@@ -845,7 +1223,7 @@ void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event)
                                             : QColor(Qt::gray);
                 painter.setPen(Qt::NoPen);
                 painter.setBrush(mark);
-                painter.drawEllipse(2, top + 2, 6, 6);
+                painter.drawEllipse(kFoldColumnWidth + 2, top + 2, 6, 6);
                 painter.setPen(numColor);
                 painter.setBrush(Qt::NoBrush);
             }

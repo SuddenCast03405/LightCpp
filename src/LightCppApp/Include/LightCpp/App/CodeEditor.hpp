@@ -1,13 +1,17 @@
 #pragma once
 
 #include <QPlainTextEdit>
+#include <QSet>
 #include <QTextCharFormat>
 #include <QTextCursor>
 
 #include "LightCpp/App/LanguageServerClient.hpp"
+#include "LightCpp/Core/FoldModel.hpp"
 
 class CppSyntaxHighlighter;
 class LineNumberArea;
+class QPainter;
+class QPaintEvent;
 class QTimer;
 namespace LightCpp::App { class CompletionPopup; }
 
@@ -74,6 +78,27 @@ public:
     /// Move the caret to (line, column) — both 0-based, as reported by the
     /// language server — scroll it into view and take focus.
     void gotoLocation(int line, int column);
+
+    // --- code folding -----------------------------------------------------
+    /// The foldable ranges in the current text, in document order. Recomputed
+    /// after every edit, so this is always consistent with what is on screen.
+    [[nodiscard]] const QList<LightCpp::Core::Fold::FoldRegion>& foldRegions() const noexcept
+    {
+        return foldRegions_;
+    }
+    [[nodiscard]] bool isFolded(int regionIndex) const;
+    /// Collapse or expand one region, addressed by its index in foldRegions().
+    void setFolded(int regionIndex, bool folded);
+    /// Toggle the region whose opening line is `line`. Returns false when that
+    /// line starts no region — which is the case for most lines, so the gutter
+    /// can call this on every click.
+    bool toggleFoldAtLine(int line);
+    /// Collapse the innermost region containing the caret.
+    void foldAtCaret();
+    /// Expand the innermost collapsed region containing the caret.
+    void unfoldAtCaret();
+    void foldAll();
+    void unfoldAll();
 
 public slots:
     /// Show the completion popup with `items` at the editor cursor's
@@ -144,9 +169,43 @@ private:
     [[nodiscard]] static bool isClosingBracket(QChar ch);
     [[nodiscard]] static bool isQuote(QChar ch);
     /// Character immediately before / after `cursor`, or a null QChar when
-    /// the cursor sits at the very start / end of the document.
+    /// the cursor sits at the very start or end of the document.
     [[nodiscard]] static QChar characterBefore(const QTextCursor& cursor);
     [[nodiscard]] static QChar characterAfter(const QTextCursor& cursor);
+
+    // --- code folding -----------------------------------------------------
+    /// Recompute foldRegions_ from the document text.
+    void rebuildFoldRegions();
+    /// Apply folded_ to the document: hide the lines the collapsed regions
+    /// cover, show the rest. Cheap and idempotent — it does nothing when the
+    /// hidden set is unchanged, which matters because this runs on every edit.
+    void applyFoldState();
+    /// True while `line` sits inside a collapsed region.
+    [[nodiscard]] bool isLineHidden(int line) const;
+    /// Expand whichever region hides `line`, if any.
+    void unfoldLine(int line);
+    /// Move the caret out of hidden text — otherwise it would sit somewhere
+    /// invisible and the next keystroke would go to a line nobody can see.
+    void keepCaretOutsideFolds();
+    /// Handle a click in the gutter's fold column (`pos` in gutter
+    /// coordinates), toggling the region on the clicked line.
+    void handleFoldMarkerClick(const QPoint& pos);
+    /// Draw the `+`/`−` box for one region in the gutter's fold strip, plus the
+    /// hairline that signals more content below a collapsed range. `top` and
+    /// `bottom` are the header line's vertical extent in gutter coordinates.
+    void paintFoldMarker(QPainter* painter, int top, int bottom, int regionIndex);
+
+    /// A collapsed region, remembered as "the Nth foldable range" rather than
+    /// by line number. An edit above it shifts every line but leaves its
+    /// ordinal untouched, which is what keeps a fold attached to its block
+    /// while the text moves. `headerText` pins it to the actual construct: if
+    /// the Nth range now starts with different text, the fold described
+    /// something that is gone and is dropped instead of jumping to a
+    /// look-alike.
+    struct FoldAnchor {
+        int regionIndex = 0;
+        QString headerText;
+    };
 
     LineNumberArea* lineNumberArea_;
     CppSyntaxHighlighter* highlighter_;
@@ -158,6 +217,12 @@ private:
     QString lintPath_;
     QString encodingLabel_;
     QList<LightCpp::App::LspDiagnostic> diagnostics_;
+
+    QList<LightCpp::Core::Fold::FoldRegion> foldRegions_;
+    QList<FoldAnchor> folded_;
+    /// The hidden line numbers currently applied to the document. Compared
+    /// against the wanted set so a relayout only happens when it must.
+    QSet<int> hiddenLines_;
 
     friend class LineNumberArea;
 };

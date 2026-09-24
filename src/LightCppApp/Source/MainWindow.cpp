@@ -473,6 +473,45 @@ void MainWindow::createActions()
 
     actAbout_ = new QAction(tr("&About LightC++..."), this);
     connect(actAbout_, &QAction::triggered, this, &MainWindow::onAbout);
+
+    // --- code folding ---------------------------------------------------
+    // The gutter carries a +/- box per foldable line, which is the way most
+    // people fold; these exist for the keyboard and for the menu.
+    actFold_ = new QAction(tr("&Fold"), this);
+    actFold_->setShortcuts({QKeySequence(QStringLiteral("Alt+Shift+Left")),
+                            QKeySequence(QStringLiteral("Ctrl+Shift+["))});
+    actFold_->setStatusTip(tr("Collapse the innermost block on the current line"));
+    connect(actFold_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->foldAtCaret();
+        }
+    });
+
+    actUnfold_ = new QAction(tr("&Unfold"), this);
+    actUnfold_->setShortcuts({QKeySequence(QStringLiteral("Alt+Shift+Right")),
+                              QKeySequence(QStringLiteral("Ctrl+Shift+]"))});
+    actUnfold_->setStatusTip(tr("Expand the collapsed block around the cursor"));
+    connect(actUnfold_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->unfoldAtCaret();
+        }
+    });
+
+    actFoldAll_ = new QAction(tr("Fold &All"), this);
+    actFoldAll_->setStatusTip(tr("Collapse every foldable block in the file"));
+    connect(actFoldAll_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->foldAll();
+        }
+    });
+
+    actUnfoldAll_ = new QAction(tr("Unfold A&ll"), this);
+    actUnfoldAll_->setStatusTip(tr("Expand every collapsed block in the file"));
+    connect(actUnfoldAll_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->unfoldAll();
+        }
+    });
 }
 
 void MainWindow::createMenuBar()
@@ -486,6 +525,14 @@ void MainWindow::createMenuBar()
     fileMenu->addAction(actSaveAll_);
     fileMenu->addSeparator();
     fileMenu->addAction(actExit_);
+
+    auto* editMenu = menuBar()->addMenu(tr("&Edit"));
+    auto* foldingMenu = editMenu->addMenu(tr("&Folding"));
+    foldingMenu->addAction(actFold_);
+    foldingMenu->addAction(actUnfold_);
+    foldingMenu->addSeparator();
+    foldingMenu->addAction(actFoldAll_);
+    foldingMenu->addAction(actUnfoldAll_);
 
     auto* toolsMenu = menuBar()->addMenu(tr("&Tools"));
     toolsMenu->addAction(actSyntaxCheck_);

@@ -1,8 +1,9 @@
 # LightCppCoreTests: GTest suite for the core library.
 
 add_executable(LightCppCoreTests
-    Utf8Tests.cpp
+    FoldModelTests.cpp
     Utf8FileTests.cpp
+    Utf8Tests.cpp
 )
 
 target_link_libraries(LightCppCoreTests PRIVATE

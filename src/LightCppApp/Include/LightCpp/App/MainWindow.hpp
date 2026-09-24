@@ -137,6 +137,10 @@ private:
     QAction* actToolchainGcc_ = nullptr;   // mutually exclusive with Clang
     QAction* actToolchainClang_ = nullptr;
     QAction* actToolchainMsvc_ = nullptr;
+    QAction* actFold_ = nullptr;           // collapse the block at the caret
+    QAction* actUnfold_ = nullptr;         // expand the block around the caret
+    QAction* actFoldAll_ = nullptr;
+    QAction* actUnfoldAll_ = nullptr;
 
     /// MSVC located once at start-up. cl.exe cannot be launched bare — it needs
     /// INCLUDE/LIB pointing at both its own toolset and the Windows SDK, which
