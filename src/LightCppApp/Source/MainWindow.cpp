@@ -312,6 +312,9 @@ MainWindow::MainWindow(QWidget* parent)
         actToolchainMsvc_->setEnabled(false);
         actToolchainMsvc_->setStatusTip(msvcToolchain_.problem);
     }
+    // Before the server starts, so it comes up already resolving includes the
+    // way the selected toolchain's compiler does.
+    applyToolchainHeaders();
 
     // Syntax checking is on by default — the Tools menu entry stays
     // checkable so it can still be switched off.
@@ -462,6 +465,11 @@ void MainWindow::createActions()
     toolchainGroup->addAction(actToolchainGcc_);
     toolchainGroup->addAction(actToolchainClang_);
     toolchainGroup->addAction(actToolchainMsvc_);
+    // Picking a different compiler also changes which standard-library headers
+    // the editor must resolve includes against, so the language server has to
+    // be told (and restarted — clangd reads them once, at start-up).
+    connect(toolchainGroup, &QActionGroup::triggered,
+            this, [this](QAction*) { applyToolchainHeaders(); });
 
     actAbout_ = new QAction(tr("&About LightC++..."), this);
     connect(actAbout_, &QAction::triggered, this, &MainWindow::onAbout);
@@ -1174,12 +1182,7 @@ void MainWindow::onCompileCurrentFile()
             // g++ for headers.
             args << QStringLiteral("/TP");
         }
-        const QString standard = LightCpp::App::Msvc::standardArgument(msvcToolchain_);
-        if (!standard.isEmpty()) {
-            // Omitted entirely for compilers that predate /std: (VS 2015 and
-            // older), where passing it is a hard error.
-            args << standard;
-        }
+        // No /std: — the compiler's own default is what gets run.
         // /MT statically links the C runtime so the exe runs on its own,
         // playing the same role as -static-libgcc -static-libstdc++ on the
         // MinGW side. No /Zi: it would drop a multi-megabyte .pdb next to the
@@ -1434,4 +1437,30 @@ void MainWindow::updateRunActionStates()
     if (actCompileRun_) actCompileRun_->setEnabled(!building && !running);
     if (actRun_)        actRun_->setEnabled(!building && !running);
     if (actStopRun_)    actStopRun_->setEnabled(running);
+}
+
+void MainWindow::applyToolchainHeaders()
+{
+    // Only MSVC needs saying: clangd's own defaults already are the MSYS2 GCC
+    // headers, which is what both MinGW toolchains compile against.
+    LightCpp::App::ToolchainHeaders headers;
+    if (actToolchainMsvc_->isChecked() && msvcToolchain_.isValid()) {
+        headers = LightCpp::App::Msvc::clangdHeaders(msvcToolchain_);
+    }
+    if (headers == lsp_->toolchainHeaders()) {
+        return;  // GCC and Clang both mean "leave clangd alone"
+    }
+    lsp_->setToolchainHeaders(headers);
+
+    // clangd reads its include paths once, when it starts, so a server that is
+    // already up keeps answering from the old ones until it is restarted.
+    if (!lsp_->isRunning()) {
+        return;
+    }
+    lsp_->stop();
+    lsp_->start();
+    outputPanel_->appendServerLog(
+        headers.isEmpty()
+            ? tr("Restarting the language server with its own headers")
+            : tr("Restarting the language server for %1").arg(msvcToolchain_.label));
 }

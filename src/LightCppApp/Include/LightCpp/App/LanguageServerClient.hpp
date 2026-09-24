@@ -4,7 +4,9 @@
 //   initialize / initialized handshake,
 //   textDocument/didOpen / didChange (full-text) / didClose,
 //   textDocument/publishDiagnostics notifications (push from server),
-//   textDocument/completion request/response (manual + trigger-char).
+//   textDocument/completion request/response (manual + trigger-char),
+//   textDocument/definition request/response (go-to-definition),
+//   and telling clangd which compiler's headers to resolve includes against.
 
 #pragma once
 
@@ -13,6 +15,8 @@
 #include <QString>
 #include <QList>
 #include <QMap>
+
+#include "LightCpp/App/ToolchainHeaders.hpp"
 
 namespace LightCpp::App {
 
@@ -69,6 +73,9 @@ public:
 
     /// Launch the server and perform the initialize handshake.
     /// Safe to call again after stop(); re-starts a fresh process.
+    ///
+    /// clangd reads its include paths once, when it starts, so a change made
+    /// through setToolchainHeaders() only takes effect after stop() + start().
     void start();
 
     /// Graceful shutdown: LSP "shutdown" request + "exit" notification,
@@ -76,6 +83,23 @@ public:
     void stop();
 
     [[nodiscard]] bool isRunning() const;
+
+    /// Choose which compiler's headers the server resolves includes against.
+    ///
+    /// clangd has no other way to be told this: include paths reach it only
+    /// through a compilation database. This client therefore writes a
+    /// single-file database (compile_flags.txt) inside the temp directory —
+    /// never in the user's source tree — and starts clangd with
+    /// --compile-commands-dir pointing at it. An empty `headers` skips all of
+    /// that and leaves clangd's own defaults in place.
+    void setToolchainHeaders(const ToolchainHeaders& headers);
+
+    /// The headers the server is currently configured with. Empty means it is
+    /// using its own.
+    [[nodiscard]] const ToolchainHeaders& toolchainHeaders() const noexcept
+    {
+        return headers_;
+    }
 
     // --- document synchronization (full-text sync, textDocumentSync=1) ---
 
@@ -150,6 +174,8 @@ private:
 
     QString serverPath_;
     QString rootPath_;
+    /// Headers the server should resolve against; empty means "its own".
+    ToolchainHeaders headers_;
     QProcess* process_ = nullptr;
     QByteArray buffer_;                  // partial frame accumulation
     QMap<QString, int> documentVersions_;  // fileUri -> last version sent
@@ -157,6 +183,10 @@ private:
     QMap<int, QString> definitionRequests_;  // requestId -> fileUri
     bool initialized_ = false;          // handshake done
     int nextRequestId_ = 1;             // JSON-RPC request id counter
+    /// Id of the outstanding "initialize" request. It cannot be assumed to be
+    /// 1: this client is restarted (stop() + start()) whenever the toolchain
+    /// changes, and the counter keeps running across restarts.
+    int initializeRequestId_ = 0;
 };
 
 }  // namespace LightCpp::App

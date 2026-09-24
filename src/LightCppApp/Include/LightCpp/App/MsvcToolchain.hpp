@@ -3,6 +3,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "LightCpp/App/ToolchainHeaders.hpp"
+
 namespace LightCpp::App::Msvc {
 
 /// A located Microsoft C/C++ toolchain.
@@ -34,8 +36,12 @@ struct Toolchain {
     QStringList includeDirs;
     /// Directories for LIB, most specific first.
     QStringList libDirs;
+    /// What this toolchain targets, as an LLVM triple. Fed to clangd so it
+    /// parses the headers below the same way cl.exe does.
+    QString targetTriple;
     /// Minor half of the cl.exe version: 30 for "19.30.30715". Zero means the
-    /// compiler predates the /std: switch entirely (VS 2015 and older).
+    /// version could not be determined (the pre-2017 layouts), which only
+    /// suppresses the version hint handed to clangd.
     int clMinor = 0;
     /// Why this toolchain cannot be used. Empty when it can.
     QString problem;
@@ -53,12 +59,13 @@ struct Toolchain {
 /// a compiler failing with a wall of "cannot open include file".
 [[nodiscard]] Toolchain detect();
 
-/// The `/std:` argument matching what this compiler actually understands.
+/// The headers clangd must resolve against for this toolchain.
 ///
-/// The project targets C++20, but asking for it from a compiler that predates
-/// the switch is worse than asking for nothing, so this degrades: c++20 from
-/// cl 19.29, c++17 from 19.14, c++latest from 19.11, and nothing at all before
-/// that. Returns an empty string when no switch should be passed.
-[[nodiscard]] QString standardArgument(const Toolchain& toolchain);
+/// Without this, clangd answers from its own bundled clang defaults — on this
+/// machine MinGW's libstdc++ — so `<iostream>` opens the GCC header and MSVC
+/// code gets underlined for things cl.exe is perfectly happy with. The include
+/// directories are the same ones cl.exe reads through INCLUDE, so the editor
+/// and the compiler agree by construction.
+[[nodiscard]] ToolchainHeaders clangdHeaders(const Toolchain& toolchain);
 
 }  // namespace LightCpp::App::Msvc

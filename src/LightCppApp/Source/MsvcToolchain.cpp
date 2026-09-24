@@ -244,9 +244,9 @@ Msvc::Toolchain resolve(const Candidate& candidate, QString* arch)
         }
         if (!toolchain.clPath.isEmpty()) {
             // The toolset version is written as "14.30.30705", where 30 is the
-            // minor half of the cl.exe version (19.30) that gates /std:. Naming
-            // the product version too matters when several are installed side
-            // by side, which is the normal case once you have more than one.
+            // minor half of the cl.exe version (19.30). Naming the product
+            // version as well matters when several are installed side by side,
+            // which is the normal case once you have more than one.
             const QStringList parts = toolsetName.split(QLatin1Char('.'));
             if (parts.size() > 1) {
                 toolchain.clMinor = parts.at(1).toInt();
@@ -275,7 +275,7 @@ Msvc::Toolchain resolve(const Candidate& candidate, QString* arch)
         *arch = root.filePath(QString::fromLatin1(layout.lib)).endsWith(QStringLiteral("amd64"))
                     ? QStringLiteral("x64")
                     : QStringLiteral("x86");
-        toolchain.clMinor = 0;  // no /std: before VS 2017
+        toolchain.clMinor = 0;  // not derivable from the layout alone
         toolchain.label = QStringLiteral("MSVC (Visual Studio %1)")
                               .arg(versionFromScore(candidate.score));
         return toolchain;
@@ -368,6 +368,14 @@ Toolchain detect()
             }
             continue;
         }
+        // Hand clangd the same target the compiler produces code for, so it
+        // parses windows.h and the STL with the matching ABI. The language
+        // standard is deliberately left alone: clang defaults to C++14 on the
+        // msvc targets precisely because cl.exe does, so clangd already agrees
+        // with what this toolchain compiles.
+        toolchain.targetTriple = arch == QStringLiteral("x64")
+                                     ? QStringLiteral("x86_64-pc-windows-msvc")
+                                     : QStringLiteral("i686-pc-windows-msvc");
         return toolchain;
     }
 
@@ -375,21 +383,28 @@ Toolchain detect()
     return best;
 }
 
-QString standardArgument(const Toolchain& toolchain)
+ToolchainHeaders clangdHeaders(const Toolchain& toolchain)
 {
-    // /std: arrived in cl 19.11 and its values appeared over the releases that
-    // followed. Asking for a standard the compiler has never heard of is a hard
-    // error, so step down to the newest one it definitely knows.
-    if (toolchain.clMinor >= 29) {
-        return QStringLiteral("/std:c++20");
+    ToolchainHeaders headers;
+    if (!toolchain.isValid()) {
+        return headers;
     }
-    if (toolchain.clMinor >= 14) {
-        return QStringLiteral("/std:c++17");
+    headers.target = toolchain.targetTriple;
+    // Same include directories cl.exe sees through INCLUDE, so the editor and
+    // the compiler cannot disagree about which <iostream> is meant.
+    headers.includeDirs = toolchain.includeDirs;
+    // MSVC's standard library picks its code paths from _MSC_VER, so clangd has
+    // to be told the version this compiler actually reports; otherwise clang
+    // assumes a newer MSVC than is installed and takes a branch of the same
+    // headers the compiler never would.
+    const QStringList msCompat{QStringLiteral("-fms-compatibility"),
+                               QStringLiteral("-fms-extensions")};
+    headers.extraFlags = msCompat;
+    if (toolchain.clMinor > 0) {
+        headers.extraFlags << QStringLiteral("-fms-compatibility-version=19.%1")
+                                  .arg(toolchain.clMinor);
     }
-    if (toolchain.clMinor >= 11) {
-        return QStringLiteral("/std:c++latest");
-    }
-    return {};
+    return headers;
 }
 
 }  // namespace LightCpp::App::Msvc

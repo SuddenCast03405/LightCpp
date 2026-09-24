@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -75,6 +76,42 @@ bool parseLocation(const QJsonObject& object, LspLocation& out)
     out.line = start.value("line").toInt();
     out.column = start.value("character").toInt();
     return true;
+}
+
+/// Directory holding the generated clangd flags file. Under the temp
+/// directory on purpose: nothing about this is the user's project, and their
+/// source tree must not be littered with build-system leftovers.
+QString clangdFlagsDir()
+{
+    return QDir(QDir::tempPath()).filePath(QStringLiteral("lightcpp-clangd"));
+}
+
+/// Write the one-file compilation database clangd reads its include paths from.
+///
+/// compile_flags.txt takes one argument per line, applied to every file, which
+/// is exactly the right granularity here — the choice is per toolchain, not per
+/// file. Paths therefore need no quoting (and must not have any: quotes would
+/// be taken as part of the path).
+bool writeClangdFlags(const LightCpp::App::ToolchainHeaders& headers)
+{
+    const QString dir = clangdFlagsDir();
+    if (!QDir().mkpath(dir)) {
+        return false;
+    }
+    QStringList lines;
+    if (!headers.target.isEmpty()) {
+        lines.append(QStringLiteral("--target=%1").arg(headers.target));
+    }
+    lines += headers.extraFlags;
+    for (const QString& include : headers.includeDirs) {
+        lines.append(QStringLiteral("-isystem"));
+        lines.append(QDir::fromNativeSeparators(include));
+    }
+    QFile file(QDir(dir).filePath(QStringLiteral("compile_flags.txt")));
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+    return file.write(lines.join(QLatin1Char('\n')).toUtf8() + '\n') >= 0;
 }
 
 }  // namespace
@@ -173,9 +210,26 @@ void LanguageServerClient::start()
     // Light options: no background indexing, no clang-tidy checks — this is
     // a plain syntax-check integration; full compilation-database support
     // can come later.
-    process_->start(serverPath_, {"--background-index=false",
-                                   "--clang-tidy=false",
-                                   "--pch-storage=memory"});
+    QStringList args{QStringLiteral("--background-index=false"),
+                     QStringLiteral("--clang-tidy=false"),
+                     QStringLiteral("--pch-storage=memory")};
+
+    // clangd has no flag for "use this compiler's headers"; include paths reach
+    // it only through a compilation database. Synthesising a one-file database
+    // and pointing clangd at it is the documented way to do this without
+    // writing into the user's project.
+    if (!headers_.isEmpty()) {
+        if (writeClangdFlags(headers_)) {
+            args.append(QStringLiteral("--compile-commands-dir=") + clangdFlagsDir());
+        } else {
+            emit serverLog(tr("warning: could not write %1; the editor will "
+                              "resolve includes against its own headers")
+                               .arg(QDir::toNativeSeparators(
+                                   QDir(clangdFlagsDir())
+                                       .filePath(QStringLiteral("compile_flags.txt")))));
+        }
+    }
+    process_->start(serverPath_, args);
 
     // --- LSP initialize request -----------------------------------------
     // Declare the capabilities the client supports: full-text document
@@ -202,7 +256,11 @@ void LanguageServerClient::start()
 
     QJsonObject request;
     request.insert("jsonrpc", "2.0");
-    request.insert("id", nextRequestId_++);
+    // Remembered rather than assumed: after a restart the counter has moved on,
+    // and matching the response against a hard-coded 1 would leave the client
+    // permanently un-initialized (no didOpen, so no diagnostics ever again).
+    initializeRequestId_ = nextRequestId_++;
+    request.insert("id", initializeRequestId_);
     request.insert("method", "initialize");
     request.insert("params", params);
     sendJsonRpc(request);
@@ -248,6 +306,11 @@ bool LanguageServerClient::isRunning() const
 {
     return process_ != nullptr && process_->state() == QProcess::Running
            && initialized_;
+}
+
+void LanguageServerClient::setToolchainHeaders(const ToolchainHeaders& headers)
+{
+    headers_ = headers;
 }
 
 void LanguageServerClient::requestShutdown()
@@ -527,7 +590,7 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
     if (message.contains("id") && !message.contains("method")) {
         const QJsonValue idVal = message.value("id");
         const int id = idVal.toInt();
-        if (id == 1 && !initialized_) {
+        if (id == initializeRequestId_ && !initialized_) {
             // initialize response — complete the handshake.
             initialized_ = true;
             QJsonObject initialized;

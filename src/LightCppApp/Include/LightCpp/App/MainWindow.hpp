@@ -105,6 +105,10 @@ private:
     void startProgram(const QString& exePath, const QString& workDir);
     /// Enable/disable the build and run actions for the current states.
     void updateRunActionStates();
+    /// Tell the language server whose headers to resolve includes against,
+    /// following the selected toolchain, and restart it when that changes —
+    /// clangd reads its include paths once, at start-up.
+    void applyToolchainHeaders();
 
     // --- widgets ---
     QTabWidget* tabWidget_;

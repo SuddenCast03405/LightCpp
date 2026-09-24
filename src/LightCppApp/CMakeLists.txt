@@ -10,6 +10,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/MsvcToolchain.hpp
     Include/LightCpp/App/OutputPanel.hpp
     Include/LightCpp/App/MainWindow.hpp
+    Include/LightCpp/App/ToolchainHeaders.hpp
     Source/CodeEditor.cpp
     Source/CompletionPopup.cpp
     Source/CppSyntaxHighlighter.cpp
