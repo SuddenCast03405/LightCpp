@@ -7,6 +7,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/CodeFormatter.hpp
     Include/LightCpp/App/CompletionPopup.hpp
     Include/LightCpp/App/CppSyntaxHighlighter.hpp
+    Include/LightCpp/App/DefaultSettings.hpp
     Include/LightCpp/App/FileExplorer.hpp
     Include/LightCpp/App/GitClient.hpp
     Include/LightCpp/App/LanguageServerClient.hpp
@@ -20,6 +21,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/CodeFormatter.cpp
     Source/CompletionPopup.cpp
     Source/CppSyntaxHighlighter.cpp
+    Source/DefaultSettings.cpp
     Source/FileExplorer.cpp
     Source/GitClient.cpp
     Source/LanguageServerClient.cpp
@@ -37,12 +39,14 @@ target_include_directories(lightcpp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppCore/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppProject/Include
+    ${CMAKE_SOURCE_DIR}/src/LightCppSettings/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppText/Include
 )
 
 target_link_libraries(lightcpp PRIVATE
     LightCppCore
     LightCppProject
+    LightCppSettings
     LightCppText
     Qt6::Widgets
     LightCppWarnings
