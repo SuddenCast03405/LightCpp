@@ -171,6 +171,17 @@ private:
     /// Delete both halves of an empty pair — `(|)` + Backspace removes the
     /// pair instead of leaving a stray `)`. Returns true when handled.
     bool backspaceEmptyPair();
+    /// Auto-indent on Enter: the new line inherits the current line's
+    /// indentation, one level deeper when the text before the caret ends
+    /// with `{`. When the auto-inserted `}` sits right after the caret
+    /// (`{|}` + Enter), the pair expands into three lines with the closer
+    /// back at the `{` line's indentation. Returns true when handled.
+    bool autoIndentOnReturn();
+    /// Type `}` at the start of an indented line: the line dedents one
+    /// level first, so the closer lines up with its `{`. Returns true when
+    /// handled; a `}` typed mid-line or on an unindented line is left to
+    /// the default handling.
+    bool autoDedentOnCloseBrace(QChar typed);
     /// The closing character that pairs with `opener`, or a null QChar when
     /// `opener` is not an auto-paired character.
     [[nodiscard]] static QChar closingBracketFor(QChar opener);

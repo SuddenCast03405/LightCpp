@@ -546,6 +546,147 @@ bool CodeEditor::backspaceEmptyPair()
     return true;
 }
 
+bool CodeEditor::autoIndentOnReturn()
+{
+    if (isReadOnly()) {
+        return false;
+    }
+    QTextCursor cursor = textCursor();
+    if (cursor.hasSelection()) {
+        return false;  // Enter over a selection replaces it — default rules
+    }
+    const int col = cursor.positionInBlock();
+    const QString line = cursor.block().text();
+    // The indentation is whatever whitespace precedes the caret; it is
+    // carried over verbatim so mixed tab/space files keep their shape.
+    int indentEnd = 0;
+    while (indentEnd < col && (line.at(indentEnd) == QLatin1Char('\t')
+                               || line.at(indentEnd) == QLatin1Char(' '))) {
+        ++indentEnd;
+    }
+    const QString indent = line.left(indentEnd);
+    // Right-trim the text between the indentation and the caret: the block
+    // opens when its last non-blank character is `{`.
+    int last = col - 1;
+    while (last >= indentEnd && (line.at(last) == QLatin1Char(' ')
+                                 || line.at(last) == QLatin1Char('\t'))) {
+        --last;
+    }
+    const bool opensBlock =
+        last >= indentEnd && line.at(last) == QLatin1Char('{');
+    // The auto-pairing closer sits right after the caret (`{|}`): Enter
+    // expands the pair into the three-line shape every C++ editor uses.
+    const bool expandsPair =
+        opensBlock && characterAfter(cursor) == QLatin1Char('}');
+
+    cursor.beginEditBlock();
+    if (expandsPair) {
+        cursor.setPosition(cursor.position() + 1, QTextCursor::KeepAnchor);
+        cursor.removeSelectedText();  // take the closer out of the line…
+        // …and put it back on its own line, at the `{` line's indentation.
+        cursor.insertText(QString(QLatin1Char('\n')) + indent
+                          + QLatin1Char('\t'));
+        cursor.insertText(QString(QLatin1Char('\n')) + indent
+                          + QLatin1Char('}'));
+        // Park the caret at the end of the middle (body) line: back over
+        // the closer, its newline, and the middle line's indentation.
+        cursor.setPosition(cursor.position() - indent.size() - 2);
+    } else {
+        cursor.insertText(QString(QLatin1Char('\n')) + indent
+                          + (opensBlock ? QString(QLatin1Char('\t')) : QString()));
+    }
+    cursor.endEditBlock();
+    setTextCursor(cursor);
+    return true;
+}
+
+bool CodeEditor::autoDedentOnCloseBrace(QChar typed)
+{
+    if (typed != QLatin1Char('}') || isReadOnly()) {
+        return false;
+    }
+    QTextCursor cursor = textCursor();
+    if (cursor.hasSelection()) {
+        return false;
+    }
+    const int col = cursor.positionInBlock();
+    const QString line = cursor.block().text();
+    // Only a `}` typed at the start of a line (leading whitespace only)
+    // dedents; mid-line it is an expression, not a block closer.
+    for (int i = 0; i < col; ++i) {
+        const QChar ch = line.at(i);
+        if (ch != QLatin1Char(' ') && ch != QLatin1Char('\t')) {
+            return false;
+        }
+    }
+    // Peel one indentation level off the line: a leading tab, or up to four
+    // leading spaces (the tab width this editor displays).
+    int remove = 0;
+    if (col > 0 && line.at(0) == QLatin1Char('\t')) {
+        remove = 1;
+    } else {
+        while (remove < col && remove < 4
+               && line.at(remove) == QLatin1Char(' ')) {
+            ++remove;
+        }
+    }
+    if (remove == 0) {
+        return false;  // nothing to dedent — let the key insert normally
+    }
+
+    QTextDocument* doc = document();
+    const int pos = cursor.position();
+    // When the auto-inserted closer sits on the next line (`{|}` + Enter
+    // put it there), this keystroke means "close the block I just wrote",
+    // not "insert another `}`": drop the empty indented line under the
+    // caret and step onto the closer that is already there.
+    int p = pos;
+    // Block separators are U+2029 inside a QTextDocument — '\n' only
+    // exists in toPlainText().
+    const QChar paragraphSeparator = QChar(QChar::ParagraphSeparator);
+    if (doc->characterAt(p) == paragraphSeparator) {
+        ++p;
+        while (p < doc->characterCount() - 1
+               && (doc->characterAt(p) == QLatin1Char(' ')
+                   || doc->characterAt(p) == QLatin1Char('\t'))) {
+            ++p;
+        }
+        if (doc->characterAt(p) == QLatin1Char('}')) {
+            const int blockStart = cursor.block().position();
+            cursor.beginEditBlock();
+            cursor.setPosition(blockStart);
+            cursor.setPosition(p, QTextCursor::KeepAnchor);
+            cursor.removeSelectedText();  // the `}` rides up to this line
+            cursor.setPosition(blockStart + 1);
+            cursor.endEditBlock();
+            setTextCursor(cursor);
+            return true;
+        }
+    }
+
+    // The closer belongs after the line's *full* leading indentation, so
+    // insert it there first and only then strip the peeled level in front
+    // of it — inserting at the caret (or the block start) would land it
+    // inside the leftover whitespace.
+    int indentEnd = 0;
+    while (indentEnd < line.size()
+           && (line.at(indentEnd) == QLatin1Char('\t')
+               || line.at(indentEnd) == QLatin1Char(' '))) {
+        ++indentEnd;
+    }
+    cursor.beginEditBlock();
+    const int blockStart = cursor.block().position();
+    cursor.setPosition(blockStart + indentEnd);
+    cursor.insertText(QString(typed));
+    QTextCursor trim = cursor;
+    trim.setPosition(blockStart);
+    trim.setPosition(blockStart + remove, QTextCursor::KeepAnchor);
+    trim.removeSelectedText();  // ahead of the caret: it shifts back itself
+    cursor.endEditBlock();
+    setTextCursor(cursor);
+    return true;
+}
+
 void CodeEditor::keyPressEvent(QKeyEvent* event)
 {
     const int key = event->key();
@@ -584,6 +725,16 @@ void CodeEditor::keyPressEvent(QKeyEvent* event)
     // Backspace between the two halves of an empty pair removes both.
     if (key == Qt::Key_Backspace && !event->isAutoRepeat()
         && backspaceEmptyPair()) {
+        completionIdleTimer_->stop();
+        if (popup_ && popup_->isVisible()) {
+            dismissPopup();
+        }
+        return;
+    }
+
+    // A `}` typed at the start of an indented line dedents first, so it
+    // lines up with the `{` that opened the block.
+    if (plainTextKey && autoDedentOnCloseBrace(text.at(0))) {
         completionIdleTimer_->stop();
         if (popup_ && popup_->isVisible()) {
             dismissPopup();
@@ -683,6 +834,16 @@ void CodeEditor::keyPressEvent(QKeyEvent* event)
             }
             completionIdleTimer_->stop();
         }
+    }
+
+    // Auto-indent: a plain newline inherits the current line's indentation,
+    // one level deeper when the line ends with `{` (and expands the
+    // auto-inserted `{|}` pair into three lines). The completion popup
+    // consumes Enter above, so this only runs for ordinary newlines.
+    if ((key == Qt::Key_Return || key == Qt::Key_Enter)
+        && autoIndentOnReturn()) {
+        completionIdleTimer_->stop();
+        return;
     }
 
     QPlainTextEdit::keyPressEvent(event);
