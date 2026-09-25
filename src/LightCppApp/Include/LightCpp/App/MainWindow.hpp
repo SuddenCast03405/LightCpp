@@ -68,9 +68,13 @@ private slots:
     /// Re-read the configuration files from disk and re-apply everything
     /// that derives from them (Tools > Reload Settings).
     void onReloadSettings();
-    /// Open the settings dialog (Tools > Settings...). Accepted changes
+    /// Open the settings dialog (Edit > Settings...). Accepted changes
     /// trigger a full reload + re-apply, exactly like Reload Settings.
     void onSettings();
+    /// Start-up check gated by preferences.general.checkCompilersAtStartup:
+    /// when the default kit's compilers cannot be found on disk, offer to
+    /// open the settings. Runs once, from the event loop after show().
+    void checkStartupCompilers();
     void onCompileCurrentFile();
     /// Compile the active file and, if the build succeeds, run the result.
     void onCompileAndRun();

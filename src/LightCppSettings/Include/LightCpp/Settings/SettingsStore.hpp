@@ -81,10 +81,15 @@ public:
     // --- typed views over the merged documents ------------------------------
 
     [[nodiscard]] GlobalDefaults defaults() const;
-    [[nodiscard]] ToolchainLists toolchains() const;
+    /// Toolchains in document order (base first, then overlays).
+    [[nodiscard]] QList<Toolchain> toolchains() const;
+    [[nodiscard]] std::optional<Toolchain> toolchain(const QString& id) const;
     [[nodiscard]] Preferences preferences() const;
 
     /// Kits in document order (base first, then overlays), enabled or not.
+    /// A kit with inheritToolchain=true has its empty tool fields filled
+    /// from the toolchain its toolchainId names; fields the kit names
+    /// itself win.
     [[nodiscard]] QList<Kit> kits() const;
 
     [[nodiscard]] std::optional<Kit> kit(const QString& id) const;
@@ -130,7 +135,7 @@ private:
     bool mergeDocument(const QJsonObject& document, const QString& source);
 
     QList<QPair<QString, QJsonObject>> kitDocs_;  ///< id -> merged doc, in order
-    QJsonObject mergedToolchains_;
+    QList<QPair<QString, QJsonObject>> toolchainDocs_;  ///< id -> merged doc
     QJsonObject mergedDefaults_;
     QJsonObject mergedPreferences_;
     QString baseDir_;  ///< empty = the executable-relative default

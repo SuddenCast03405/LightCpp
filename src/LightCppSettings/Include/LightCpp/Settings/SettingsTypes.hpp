@@ -24,20 +24,29 @@
 namespace LightCpp::Settings {
 
 // ---------------------------------------------------------------------------
-// toolchains
+// toolchain
 // ---------------------------------------------------------------------------
 
-/// Registries of tools the user has. Every member is a list of candidate
-/// paths (or of lists, for the build tools), so several installs can be
-/// registered and kits pick one each.
-struct ToolchainLists {
-    QStringList cCompilers;
-    QStringList cppCompilers;
-    QStringList debuggers;     // gdb / lldb / ...
-    QStringList clangd;
-    QStringList clangFormat;
-    /// "cmake" | "ninja" | "gnuMake" | "msbuild" -> candidate paths.
-    QHash<QString, QStringList> buildTools;
+/// One named toolchain: the tool paths a kit can inherit wholesale. Kits
+/// either name their own tools or set inheritToolchain and reference one of
+/// these by id.
+struct Toolchain {
+    QString id;
+    QString name;
+
+    QString cCompiler;
+    QString cppCompiler;
+    QString debugger;      // gdb / lldb / ...
+    QString clangd;
+    QString clangFormat;
+    /// "cmake" | "ninja" | "gnuMake" | "msbuild" -> one path ("" = unset).
+    QHash<QString, QString> buildTools;
+
+    /// A toolchain is usable when it is identified and names both compilers.
+    [[nodiscard]] bool isValid() const noexcept
+    {
+        return !id.isEmpty() && !cCompiler.isEmpty() && !cppCompiler.isEmpty();
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -75,7 +84,14 @@ struct Kit {
     bool enabled = true;
     bool isDefault = false;
 
-    // Necessary
+    /// When true, the empty tool fields below are filled from the toolchain
+    /// named by toolchainId (see SettingsStore::kits()). A kit that inherits
+    /// still keeps its own fields as per-field overrides: anything the kit
+    /// names explicitly wins over the toolchain.
+    bool inheritToolchain = false;
+    QString toolchainId;
+
+    // Necessary (unless inherited from a toolchain)
     QString cCompiler;
     QString cppCompiler;
 
@@ -149,8 +165,10 @@ struct Preferences {
     QString defaultEncoding;         ///< e.g. "UTF-8"; canonical Text name
     QStringList detectionPriority;   ///< modelled; detection order is fixed
     QString lineEndingDefault;       ///< "auto" | "LF" | "CRLF"
-    /// "windows" | "linux" | "macos" -> "LF" | "CRLF" (for "auto").
-    QHash<QString, QString> lineEndingPlatform;
+
+    /// When true, start-up checks the default kit's compilers and offers to
+    /// open the settings when one cannot be found.
+    bool checkCompilersAtStartup = true;
 
     QString shortcutClangd;      ///< Syntax Check toggle; empty = none
     QString shortcutClangFormat; ///< Format Document; empty = built-ins

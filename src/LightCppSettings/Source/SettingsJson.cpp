@@ -160,17 +160,25 @@ void writeBuildToolSingleMap(QJsonObject& object, const char* key,
 // toJson
 // ---------------------------------------------------------------------------
 
-QJsonObject toJson(const ToolchainLists& lists)
+QJsonObject toJson(const Toolchain& toolchain)
 {
     QJsonObject object;
-    object.insert(QStringLiteral("type"), QStringLiteral("toolchains"));
-    object.insert(QStringLiteral("id"), QStringLiteral("global"));
-    object.insert(QStringLiteral("cCompilers"), fromStringList(lists.cCompilers));
-    object.insert(QStringLiteral("cppCompilers"), fromStringList(lists.cppCompilers));
-    object.insert(QStringLiteral("debuggers"), fromStringList(lists.debuggers));
-    object.insert(QStringLiteral("clangd"), fromStringList(lists.clangd));
-    object.insert(QStringLiteral("clangFormat"), fromStringList(lists.clangFormat));
-    writeBuildToolMap(object, "buildTools", lists.buildTools);
+    object.insert(QStringLiteral("type"), QStringLiteral("toolchain"));
+    object.insert(QStringLiteral("id"), toolchain.id);
+    object.insert(QStringLiteral("name"), toolchain.name);
+    object.insert(QStringLiteral("cCompiler"), toolchain.cCompiler);
+    object.insert(QStringLiteral("cppCompiler"), toolchain.cppCompiler);
+    object.insert(QStringLiteral("debugger"),
+                  toolchain.debugger.isEmpty() ? QJsonValue::Null
+                                               : QJsonValue(toolchain.debugger));
+    object.insert(QStringLiteral("clangd"),
+                  toolchain.clangd.isEmpty() ? QJsonValue::Null
+                                             : QJsonValue(toolchain.clangd));
+    object.insert(QStringLiteral("clangFormat"),
+                  toolchain.clangFormat.isEmpty()
+                      ? QJsonValue::Null
+                      : QJsonValue(toolchain.clangFormat));
+    writeBuildToolSingleMap(object, "buildTools", toolchain.buildTools);
     return object;
 }
 
@@ -208,6 +216,10 @@ QJsonObject toJson(const Kit& kit)
     object.insert(QStringLiteral("name"), kit.name);
     object.insert(QStringLiteral("enabled"), kit.enabled);
     object.insert(QStringLiteral("isDefault"), kit.isDefault);
+    object.insert(QStringLiteral("inheritToolchain"), kit.inheritToolchain);
+    object.insert(QStringLiteral("toolchainId"),
+                  kit.toolchainId.isEmpty() ? QJsonValue::Null
+                                            : QJsonValue(kit.toolchainId));
     object.insert(QStringLiteral("cCompiler"), kit.cCompiler);
     object.insert(QStringLiteral("cppCompiler"), kit.cppCompiler);
     object.insert(QStringLiteral("debugger"),
@@ -269,14 +281,13 @@ QJsonObject toJson(const Preferences& prefs)
     files.insert(QStringLiteral("encoding"), encoding);
     QJsonObject lineEnding;
     lineEnding.insert(QStringLiteral("default"), prefs.lineEndingDefault);
-    QJsonObject platform;
-    for (auto it = prefs.lineEndingPlatform.constBegin();
-         it != prefs.lineEndingPlatform.constEnd(); ++it) {
-        platform.insert(it.key(), it.value());
-    }
-    lineEnding.insert(QStringLiteral("platformOverrides"), platform);
     files.insert(QStringLiteral("lineEnding"), lineEnding);
     object.insert(QStringLiteral("files"), files);
+
+    QJsonObject general;
+    general.insert(QStringLiteral("checkCompilersAtStartup"),
+                   prefs.checkCompilersAtStartup);
+    object.insert(QStringLiteral("general"), general);
 
     QJsonObject shortcuts;
     shortcuts.insert(QStringLiteral("clangd"),
@@ -327,14 +338,16 @@ QJsonObject toJson(const Preferences& prefs)
 // fromJson
 // ---------------------------------------------------------------------------
 
-void fromJson(const QJsonObject& object, ToolchainLists& out)
+void fromJson(const QJsonObject& object, Toolchain& out)
 {
-    readStringList(object, "cCompilers", out.cCompilers);
-    readStringList(object, "cppCompilers", out.cppCompilers);
-    readStringList(object, "debuggers", out.debuggers);
-    readStringList(object, "clangd", out.clangd);
-    readStringList(object, "clangFormat", out.clangFormat);
-    readBuildToolMap(object, "buildTools", out.buildTools);
+    readString(object, "id", out.id);
+    readString(object, "name", out.name);
+    readString(object, "cCompiler", out.cCompiler);
+    readString(object, "cppCompiler", out.cppCompiler);
+    readOptionalString(object, "debugger", out.debugger);
+    readOptionalString(object, "clangd", out.clangd);
+    readOptionalString(object, "clangFormat", out.clangFormat);
+    readBuildToolSingleMap(object, "buildTools", out.buildTools);
 }
 
 void fromJson(const QJsonObject& object, GlobalDefaults& out)
@@ -362,6 +375,8 @@ void fromJson(const QJsonObject& object, Kit& out)
     readString(object, "name", out.name);
     readBool(object, "enabled", out.enabled);
     readBool(object, "isDefault", out.isDefault);
+    readBool(object, "inheritToolchain", out.inheritToolchain);
+    readOptionalString(object, "toolchainId", out.toolchainId);
     readString(object, "cCompiler", out.cCompiler);
     readString(object, "cppCompiler", out.cppCompiler);
     readOptionalString(object, "debugger", out.debugger);
@@ -419,20 +434,14 @@ void fromJson(const QJsonObject& object, Preferences& out)
         if (lineEndingValue.isObject()) {
             const QJsonObject lineEnding = lineEndingValue.toObject();
             readString(lineEnding, "default", out.lineEndingDefault);
-            const QJsonValue platformValue =
-                lineEnding.value(QLatin1String("platformOverrides"));
-            if (platformValue.isObject()) {
-                const QJsonObject platform = platformValue.toObject();
-                // Only the three platforms and two endings are meaningful;
-                // anything else is kept verbatim but will not match a query.
-                for (const QString& key : platform.keys()) {
-                    const QJsonValue value = platform.value(key);
-                    if (value.isString()) {
-                        out.lineEndingPlatform.insert(key, value.toString());
-                    }
-                }
-            }
         }
+        // Legacy "platformOverrides" objects are deliberately not read: the
+        // per-platform line-ending overrides were removed from the model.
+    }
+    const QJsonValue generalValue = object.value(QLatin1String("general"));
+    if (generalValue.isObject()) {
+        const QJsonObject general = generalValue.toObject();
+        readBool(general, "checkCompilersAtStartup", out.checkCompilersAtStartup);
     }
 
     const QJsonValue shortcutsValue = object.value(QLatin1String("shortcuts"));

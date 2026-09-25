@@ -22,7 +22,6 @@
 #include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
-#include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
@@ -38,8 +37,6 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QVBoxLayout>
-
-#include <functional>
 
 namespace LightCpp::App {
 
@@ -66,15 +63,15 @@ constexpr const char* kEncodingNames[] = {
     "UTF-8", "GB18030", "GBK", "Big5", "Shift-JIS", "EUC-KR",
     "UTF-16LE", "UTF-16BE", "Windows-1252", "ISO-8859-1"};
 
-/// One entry of the toolchains page: registry key + human label.
-struct RegistrySpec {
-    const char* key;
+/// The tool paths a toolchain names, as (role, label) pairs in form order.
+struct ToolchainToolSpec {
+    const char* key;          ///< "" = the C/C++/debugger/... members
     const char* label;
 };
-constexpr RegistrySpec kRegistrySpecs[] = {
-    {"cCompilers", QT_TRANSLATE_NOOP("SettingsDialog", "C compilers")},
-    {"cppCompilers", QT_TRANSLATE_NOOP("SettingsDialog", "C++ compilers")},
-    {"debuggers", QT_TRANSLATE_NOOP("SettingsDialog", "Debuggers")},
+const ToolchainToolSpec kToolchainToolSpecs[] = {
+    {"cCompiler", QT_TRANSLATE_NOOP("SettingsDialog", "C compiler")},
+    {"cppCompiler", QT_TRANSLATE_NOOP("SettingsDialog", "C++ compiler")},
+    {"debugger", QT_TRANSLATE_NOOP("SettingsDialog", "Debugger")},
     {"clangd", QT_TRANSLATE_NOOP("SettingsDialog", "Clangd")},
     {"clangFormat", QT_TRANSLATE_NOOP("SettingsDialog", "Clang-Format")},
     {"cmake", QT_TRANSLATE_NOOP("SettingsDialog", "CMake")},
@@ -108,6 +105,110 @@ QString kitDisplayName(const Settings::Kit& kit)
         return kit.id;
     }
     return SettingsDialog::tr("(unnamed kit)");
+}
+
+/// How a toolchain is named in lists, mirroring kitDisplayName.
+QString toolchainDisplayName(const Settings::Toolchain& toolchain)
+{
+    if (!toolchain.name.isEmpty()) {
+        return toolchain.name;
+    }
+    if (!toolchain.id.isEmpty()) {
+        return toolchain.id;
+    }
+    return SettingsDialog::tr("(unnamed toolchain)");
+}
+
+/// Read/write one of the nine tool paths by its spec key. Used by the
+/// form load/commit so each row needs no dedicated member variable pair.
+QString toolchainPath(const Settings::Toolchain& toolchain, const QString& key)
+{
+    if (key == QLatin1String("cCompiler")) {
+        return toolchain.cCompiler;
+    }
+    if (key == QLatin1String("cppCompiler")) {
+        return toolchain.cppCompiler;
+    }
+    if (key == QLatin1String("debugger")) {
+        return toolchain.debugger;
+    }
+    if (key == QLatin1String("clangd")) {
+        return toolchain.clangd;
+    }
+    if (key == QLatin1String("clangFormat")) {
+        return toolchain.clangFormat;
+    }
+    return toolchain.buildTools.value(key);
+}
+
+void setToolchainPath(Settings::Toolchain* toolchain, const QString& key,
+                      const QString& path)
+{
+    if (key == QLatin1String("cCompiler")) {
+        toolchain->cCompiler = path;
+    } else if (key == QLatin1String("cppCompiler")) {
+        toolchain->cppCompiler = path;
+    } else if (key == QLatin1String("debugger")) {
+        toolchain->debugger = path;
+    } else if (key == QLatin1String("clangd")) {
+        toolchain->clangd = path;
+    } else if (key == QLatin1String("clangFormat")) {
+        toolchain->clangFormat = path;
+    } else {
+        if (path.isEmpty()) {
+            toolchain->buildTools.remove(key);
+        } else {
+            toolchain->buildTools.insert(key, path);
+        }
+    }
+}
+
+/// Candidate file names per toolchain role, used by the folder scan.
+struct ScanSpec {
+    const char* key;
+    std::initializer_list<const char*> fileNames;
+};
+constexpr ScanSpec kScanSpecs[] = {
+    {"cCompiler", {"gcc.exe", "clang.exe", "cl.exe"}},
+    {"cppCompiler", {"g++.exe", "clang++.exe", "cl.exe"}},
+    {"debugger", {"gdb.exe", "lldb.exe"}},
+    {"clangd", {"clangd.exe"}},
+    {"clangFormat", {"clang-format.exe"}},
+    {"cmake", {"cmake.exe"}},
+    {"ninja", {"ninja.exe"}},
+    {"gnuMake", {"mingw32-make.exe", "make.exe"}},
+    {"msbuild", {"MSBuild.exe"}},
+};
+
+/// Fill a toolchain from the executables found in `dir`: every known tool
+/// file that exists in the folder is entered with its full path. Returns
+/// the roles filled, so the caller can report what was recognised.
+QStringList scanToolchainFolder(const QString& dir, Settings::Toolchain* out)
+{
+    QStringList filled;
+    for (const ScanSpec& spec : kScanSpecs) {
+        for (const char* fileName : spec.fileNames) {
+            const QString path = QDir(dir).filePath(QLatin1String(fileName));
+            if (!QFileInfo::exists(path)) {
+                continue;
+            }
+            // The first existing candidate wins; cl.exe below fills both
+            // compiler rows via the post-loop fix-up.
+            if (toolchainPath(*out, QLatin1String(spec.key)).isEmpty()) {
+                setToolchainPath(out, QLatin1String(spec.key), path);
+                filled.append(QLatin1String(spec.key));
+            }
+            break;  // one hit per role is enough
+        }
+    }
+    // cl.exe compiles both C and C++.
+    if (filled.contains(QLatin1String("cCompiler"))
+        && out->cppCompiler.isEmpty()
+        && out->cCompiler.endsWith(QLatin1String("cl.exe"),
+                                   Qt::CaseInsensitive)) {
+        out->cppCompiler = out->cCompiler;
+    }
+    return filled;
 }
 
 void fillStyleCombo(QComboBox* combo)
@@ -153,113 +254,6 @@ Settings::FontSpec fontSpecOf(const QFontComboBox* family, const QDoubleSpinBox*
     return spec;
 }
 
-/// A labelled list of paths with Browse/Remove buttons. Plain QGroupBox
-/// subclass without Q_OBJECT: everything is wired with lambdas.
-class PathListEditor final : public QGroupBox {
-public:
-    PathListEditor(const QString& title, QWidget* parent)
-        : QGroupBox(title, parent)
-    {
-        auto* layout = new QHBoxLayout(this);
-        layout->setContentsMargins(6, 6, 6, 6);
-        list_ = new QListWidget(this);
-        list_->setSelectionMode(QAbstractItemView::SingleSelection);
-        list_->setToolTip(
-            tr("Add a path with Browse; double-click an entry to edit it."));
-        layout->addWidget(list_, 1);
-
-        auto* buttons = new QVBoxLayout;
-        auto* add = new QPushButton(tr("Browse..."), this);
-        connect(add, &QPushButton::clicked, this, [this] { browse(); });
-        buttons->addWidget(add);
-        auto* remove = new QPushButton(tr("Remove"), this);
-        remove->setEnabled(false);
-        connect(remove, &QPushButton::clicked, this, [this, remove] {
-            const int row = list_->currentRow();
-            if (row >= 0) {
-                delete list_->takeItem(row);
-                remove->setEnabled(false);
-                if (onChange_) {
-                    onChange_();
-                }
-            }
-        });
-        buttons->addWidget(remove);
-        buttons->addStretch(1);
-        connect(list_, &QListWidget::itemSelectionChanged, this,
-                [remove, this] { remove->setEnabled(list_->currentRow() >= 0); });
-        connect(list_, &QListWidget::itemDoubleClicked, this,
-                [this](QListWidgetItem* item) {
-                    bool ok = false;
-                    const QString value = QInputDialog::getText(
-                        this, tr("Edit entry"), tr("Path:"), QLineEdit::Normal,
-                        item->text(), &ok);
-                    if (ok) {
-                        const QString trimmed = value.trimmed();
-                        if (!trimmed.isEmpty()) {
-                            item->setText(trimmed);
-                            if (onChange_) {
-                                onChange_();
-                            }
-                        }
-                    }
-                });
-        layout->addLayout(buttons);
-    }
-
-    QListWidget* list() const { return list_; }
-
-    void setItems(const QStringList& items)
-    {
-        list_->clear();
-        list_->addItems(items);
-    }
-
-    QStringList items() const
-    {
-        QStringList out;
-        for (int i = 0; i < list_->count(); ++i) {
-            out.append(list_->item(i)->text());
-        }
-        return out;
-    }
-
-    /// Appends one path (used by Browse and by tests driving the widget).
-    void addPath(const QString& path)
-    {
-        const QString trimmed = path.trimmed();
-        if (trimmed.isEmpty()) {
-            return;
-        }
-        list_->addItem(trimmed);
-        list_->setCurrentRow(list_->count() - 1);
-    }
-
-    /// Called after user-driven changes only; programmatic setItems/addPath
-    /// stay silent (loads run under the dialog's loading guard anyway).
-    void setOnChange(std::function<void()> callback) { onChange_ = std::move(callback); }
-
-private:
-    void browse()
-    {
-        const QString start = list_->currentItem()
-            ? QFileInfo(list_->currentItem()->text()).absolutePath()
-            : QString();
-        const QString path = QFileDialog::getOpenFileName(
-            this, tr("Select a tool"), start, tr("Executables (*.exe);;All files (*)"));
-        if (path.isEmpty()) {
-            return;
-        }
-        addPath(path);
-        if (onChange_) {
-            onChange_();
-        }
-    }
-
-    QListWidget* list_ = nullptr;
-    std::function<void()> onChange_;
-};
-
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -287,7 +281,7 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     scopeRow->addWidget(new QLabel(tr("Edit:"), this));
     scopeCombo_ = new QComboBox(this);
     scopeCombo_->setObjectName(QStringLiteral("settings.scope"));
-    scopeCombo_->addItem(tr("Global settings (exe directory)"),
+    scopeCombo_->addItem(tr("Global settings"),
                          static_cast<int>(Scope::Base));
     scopeCombo_->setToolTip(
         tr("The global layer lives in config/ next to the executable; the "
@@ -300,19 +294,17 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     nav_ = new QListWidget(this);
     nav_->setObjectName(QStringLiteral("settings.nav"));
     nav_->setFixedWidth(170);
-    nav_->addItem(tr("Defaults"));
+    nav_->addItem(tr("General"));
     nav_->addItem(tr("Toolchains"));
     nav_->addItem(tr("Kits"));
-    nav_->addItem(tr("Preferences"));
     nav_->setCurrentRow(0);
     bodyRow->addWidget(nav_);
 
     pages_ = new QStackedWidget(this);
     pages_->setObjectName(QStringLiteral("settings.pages"));
-    pages_->addWidget(wrapInScroll(buildDefaultsPage()));
+    pages_->addWidget(wrapInScroll(buildGeneralPage()));
     pages_->addWidget(wrapInScroll(buildToolchainsPage()));
     pages_->addWidget(wrapInScroll(buildKitsPage()));
-    pages_->addWidget(wrapInScroll(buildPreferencesPage()));
     bodyRow->addWidget(pages_, 1);
     rootLayout->addLayout(bodyRow, 1);
 
@@ -344,6 +336,9 @@ SettingsDialog::SettingsDialog(QWidget* parent)
         }
         commitUiToState();  // flush the page the user is leaving
         pages_->setCurrentIndex(row);
+        // The kit page's suggestions and inheritance combo read the
+        // committed toolchains — refresh them after the page switch.
+        updateKitSuggestions();
     });
     connect(scopeCombo_, &QComboBox::currentIndexChanged, this,
             [this](int index) { handleScopeChanged(index); });
@@ -407,10 +402,20 @@ QCheckBox* SettingsDialog::makeCheck(const QString& objectName, const QString& t
 // Pages
 // ---------------------------------------------------------------------------
 
-QWidget* SettingsDialog::buildDefaultsPage()
+QWidget* SettingsDialog::buildGeneralPage()
 {
     auto* page = new QWidget(this);
-    auto* form = new QFormLayout(page);
+    auto* column = new QVBoxLayout(page);
+    column->addWidget(buildDefaultsSection(page));
+    column->addWidget(buildPreferencesSection(page));
+    column->addStretch(1);
+    return page;
+}
+
+QWidget* SettingsDialog::buildDefaultsSection(QWidget* parent)
+{
+    auto* group = new QGroupBox(tr("Defaults"), parent);
+    auto* form = new QFormLayout(group);
 
     defaultsKitId_ = makeCombo(QStringLiteral("defaults.kitId"), true);
     defaultsKitId_->setToolTip(
@@ -422,13 +427,13 @@ QWidget* SettingsDialog::buildDefaultsPage()
         tr("The build configuration (Debug/Release/...) selected on start-up."));
     form->addRow(tr("Default build configuration"), defaultsBuildConfig_);
 
-    const auto addPathRow = [this, form, page](const char* objectName,
+    const auto addPathRow = [this, form, group](const char* objectName,
                                                QLineEdit** editOut,
                                                const QString& label,
                                                const QString& tip) {
         auto* edit = makeLine(QLatin1String(objectName));
         edit->setToolTip(tip);
-        auto* browse = new QPushButton(tr("Browse..."), page);
+        auto* browse = new QPushButton(tr("Browse..."), group);
         connect(browse, &QPushButton::clicked, this, [this, edit] {
             const QString path = QFileDialog::getOpenFileName(
                 this, tr("Select a tool"), edit->text(),
@@ -450,30 +455,93 @@ QWidget* SettingsDialog::buildDefaultsPage()
     addPathRow("defaults.clangFormatPath", &defaultsClangFormatPath_,
                tr("Clang-Format path"),
                tr("Shared clang-format used by the formatting commands."));
-    return page;
+    return group;
 }
 
 QWidget* SettingsDialog::buildToolchainsPage()
 {
     auto* page = new QWidget(this);
-    auto* grid = new QGridLayout(page);
-    int row = 0;
-    int column = 0;
-    for (const RegistrySpec& spec : kRegistrySpecs) {
+    auto* rowLayout = new QHBoxLayout(page);
+
+    // --- master: the toolchain list -------------------------------------------
+    auto* listPane = new QVBoxLayout;
+    toolchainList_ = new QListWidget(this);
+    toolchainList_->setObjectName(QStringLiteral("toolchains.list"));
+    toolchainList_->setMinimumWidth(180);
+    toolchainList_->setToolTip(
+        tr("Toolchains are stored in toolchains.json of the edited layer. "
+           "Kits reference them by id."));
+    listPane->addWidget(toolchainList_, 1);
+    auto* scanButton = new QPushButton(tr("Identify Folder..."), this);
+    scanButton->setObjectName(QStringLiteral("toolchains.identifyFolder"));
+    scanButton->setToolTip(
+        tr("Pick a folder and every known tool in it (compilers, debugger, "
+           "clangd, ...) is entered into the selected toolchain."));
+    connect(scanButton, &QPushButton::clicked, this,
+            [this] { identifyToolchainFolder(); });
+    listPane->addWidget(scanButton);
+    auto* toolchainButtons = new QHBoxLayout;
+    auto* add = new QPushButton(tr("Add"), this);
+    add->setObjectName(QStringLiteral("toolchains.add"));
+    connect(add, &QPushButton::clicked, this, [this] { addToolchain(); });
+    toolchainButtons->addWidget(add);
+    auto* remove = new QPushButton(tr("Remove"), this);
+    remove->setObjectName(QStringLiteral("toolchains.remove"));
+    connect(remove, &QPushButton::clicked, this, [this] { removeToolchain(); });
+    toolchainButtons->addWidget(remove);
+    auto* check = new QPushButton(tr("Check"), this);
+    check->setObjectName(QStringLiteral("toolchains.check"));
+    check->setToolTip(
+        tr("Verify that every named tool exists on disk and report what is "
+           "missing."));
+    connect(check, &QPushButton::clicked, this,
+            [this] { checkCurrentToolchain(); });
+    toolchainButtons->addWidget(check);
+    listPane->addLayout(toolchainButtons);
+    rowLayout->addLayout(listPane);
+
+    // --- detail: the toolchain form ----------------------------------------------
+    auto* formBox = new QGroupBox(tr("Toolchain"), this);
+    toolchainFormContainer_ = formBox;
+    auto* form = new QFormLayout(formBox);
+
+    toolchainId_ = makeLine(QStringLiteral("toolchain.id"));
+    form->addRow(tr("Id"), toolchainId_);
+    toolchainName_ = makeLine(QStringLiteral("toolchain.name"));
+    form->addRow(tr("Name"), toolchainName_);
+
+    // The nine tool rows: a line edit plus a Browse button each, kept in a
+    // member map keyed by the spec key.
+    for (const ToolchainToolSpec& spec : kToolchainToolSpecs) {
         const QString key = QLatin1String(spec.key);
-        auto* editor = new PathListEditor(tr(spec.label), page);
-        editor->setOnChange([this] { markDirty(); });
-        editor->list()->setObjectName(QStringLiteral("toolchains.%1.list").arg(key));
-        registryLists_.insert(key, editor->list());
-        grid->addWidget(editor, row, column);
-        if (++column == 2) {
-            column = 0;
-            ++row;
-        }
+        auto* edit = makeLine(QStringLiteral("toolchain.%1").arg(key));
+        edit->setToolTip(tr("Absolute path to the executable; empty = unset."));
+        auto* browse = new QPushButton(tr("Browse..."), formBox);
+        connect(browse, &QPushButton::clicked, this, [this, edit] {
+            const QString path = QFileDialog::getOpenFileName(
+                this, tr("Select a tool"), edit->text(),
+                tr("Executables (*.exe);;All files (*)"));
+            if (!path.isEmpty()) {
+                edit->setText(path);
+            }
+        });
+        auto* row = new QHBoxLayout;
+        row->addWidget(edit, 1);
+        row->addWidget(browse);
+        form->addRow(tr(spec.label), row);
+        toolchainToolEdits_.insert(key, edit);
     }
-    grid->setRowStretch(row + 1, 1);
-    grid->setColumnStretch(0, 1);
-    grid->setColumnStretch(1, 1);
+
+    rowLayout->addWidget(formBox, 1);
+
+    connect(toolchainList_, &QListWidget::currentRowChanged, this,
+            [this](int row) {
+                if (loading_ > 0) {
+                    return;
+                }
+                commitToolchainForm();
+                loadToolchainForm(row);
+            });
     return page;
 }
 
@@ -527,6 +595,22 @@ QWidget* SettingsDialog::buildKitsPage()
     stateRow->addStretch(1);
     form->addRow(stateRow);
 
+    kitInheritToolchain_ =
+        makeCheck(QStringLiteral("kit.inheritToolchain"), tr("Inherit toolchain"));
+    kitInheritToolchain_->setToolTip(
+        tr("Fill this kit's tools from the toolchain selected below. Fields "
+           "the kit names itself still win."));
+    kitToolchainId_ = makeCombo(QStringLiteral("kit.toolchainId"), false);
+    kitToolchainId_->setToolTip(
+        tr("The toolchain this kit inherits, as defined on the Toolchains "
+           "page."));
+    auto* inheritRow = new QHBoxLayout;
+    inheritRow->addWidget(kitInheritToolchain_);
+    inheritRow->addWidget(kitToolchainId_, 1);
+    form->addRow(tr("Toolchain"), inheritRow);
+    connect(kitInheritToolchain_, &QCheckBox::toggled, this,
+            [this](bool) { updateKitInheritanceUi(); });
+
     kitCCompiler_ = makeCombo(QStringLiteral("kit.cCompiler"), true);
     form->addRow(tr("C compiler"), kitCCompiler_);
     kitCppCompiler_ = makeCombo(QStringLiteral("kit.cppCompiler"), true);
@@ -539,6 +623,7 @@ QWidget* SettingsDialog::buildKitsPage()
     form->addRow(tr("Clang-Format"), kitClangFormat_);
 
     auto* toolsBox = new QGroupBox(tr("Build tools"), this);
+    kitToolsBox_ = toolsBox;
     auto* toolsForm = new QFormLayout(toolsBox);
     kitToolCmake_ = makeCombo(QStringLiteral("kit.tool.cmake"), true);
     toolsForm->addRow(tr("CMake"), kitToolCmake_);
@@ -663,10 +748,11 @@ QWidget* SettingsDialog::buildKitsPage()
     return page;
 }
 
-QWidget* SettingsDialog::buildPreferencesPage()
+QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
 {
-    auto* page = new QWidget(this);
-    auto* column = new QVBoxLayout(page);
+    auto* container = new QWidget(parent);
+    auto* column = new QVBoxLayout(container);
+    column->setContentsMargins(0, 0, 0, 0);
 
     // --- fonts -----------------------------------------------------------------
     auto* fonts = new QGroupBox(tr("Fonts"), this);
@@ -727,23 +813,19 @@ QWidget* SettingsDialog::buildPreferencesPage()
     lineEndingDefault_->addItems(
         {QStringLiteral("auto"), QStringLiteral("LF"), QStringLiteral("CRLF")});
     filesForm->addRow(tr("Line ending"), lineEndingDefault_);
-    auto* platformRow = new QHBoxLayout;
-    const auto addPlatformRow = [this](QHBoxLayout* row, const char* name,
-                                       QComboBox** out, const QString& label) {
-        auto* combo = makeCombo(QLatin1String(name), false);
-        combo->addItems({QStringLiteral("LF"), QStringLiteral("CRLF")});
-        row->addWidget(new QLabel(label, combo));
-        row->addWidget(combo, 1);
-        *out = combo;
-    };
-    addPlatformRow(platformRow, "prefs.lineEnding.windows", &lineEndingWindows_,
-                   tr("Windows"));
-    addPlatformRow(platformRow, "prefs.lineEnding.linux", &lineEndingLinux_,
-                   tr("Linux"));
-    addPlatformRow(platformRow, "prefs.lineEnding.macos", &lineEndingMacos_,
-                   tr("macOS"));
-    filesForm->addRow(tr("Line ending overrides"), platformRow);
     column->addWidget(files);
+
+    // --- general -----------------------------------------------------------------
+    auto* general = new QGroupBox(tr("General"), this);
+    auto* generalForm = new QFormLayout(general);
+    checkCompilersAtStartup_ =
+        makeCheck(QStringLiteral("prefs.general.checkCompilersAtStartup"),
+                  tr("Check that the compilers exist at start-up"));
+    checkCompilersAtStartup_->setToolTip(
+        tr("When enabled, start-up verifies the default kit's compilers and "
+           "offers to open the settings when one is missing."));
+    generalForm->addRow(QStringLiteral(), checkCompilersAtStartup_);
+    column->addWidget(general);
 
     // --- shortcuts ----------------------------------------------------------------
     auto* shortcuts = new QGroupBox(tr("Shortcuts"), this);
@@ -837,8 +919,7 @@ QWidget* SettingsDialog::buildPreferencesPage()
     formattingForm->addRow(tr("Default style content"), formattingDefaultStyleContent_);
     column->addWidget(formatting);
 
-    column->addStretch(1);
-    return page;
+    return container;
 }
 
 // ---------------------------------------------------------------------------
@@ -925,8 +1006,10 @@ void SettingsDialog::loadScopeStateFromDisk(Scope scope)
         }
         const auto absorb = [&target](const QJsonObject& object) {
             const QString type = object.value(QLatin1String("type")).toString();
-            if (type == QLatin1String("toolchains")) {
-                Settings::fromJson(object, target.toolchains);
+            if (type == QLatin1String("toolchain")) {
+                Settings::Toolchain toolchain;
+                Settings::fromJson(object, toolchain);
+                target.toolchains.append(toolchain);
             } else if (type == QLatin1String("defaults")) {
                 Settings::fromJson(object, target.defaults);
             } else if (type == QLatin1String("preferences")) {
@@ -964,6 +1047,7 @@ void SettingsDialog::loadScopeToUi(Scope scope)
     currentScope_ = scope;
     currentKitIndex_ = -1;
     currentConfigIndex_ = -1;
+    currentToolchainIndex_ = -1;
 
     updateKitSuggestions();
     loadDefaultsPage(target.defaults);
@@ -1084,58 +1168,201 @@ void SettingsDialog::updateDefaultsKitItems()
 }
 
 // ---------------------------------------------------------------------------
-// Toolchains page
+// Toolchains page — one entry per toolchain, master-detail like the kits
 // ---------------------------------------------------------------------------
 
-void SettingsDialog::loadToolchainsPage(const Settings::ToolchainLists& lists)
+void SettingsDialog::loadToolchainsPage(
+    const QList<Settings::Toolchain>& toolchains)
 {
     LoadGuard guard(this);
-    for (const RegistrySpec& spec : kRegistrySpecs) {
-        const QString key = QLatin1String(spec.key);
-        QListWidget* list = registryLists_.value(key);
-        if (list == nullptr) {
-            continue;
+    currentToolchainIndex_ = -1;
+    toolchainList_->blockSignals(true);
+    toolchainList_->clear();
+    for (const Settings::Toolchain& toolchain : toolchains) {
+        toolchainList_->addItem(toolchainDisplayName(toolchain));
+    }
+    toolchainList_->blockSignals(false);
+    loadToolchainForm(toolchains.isEmpty() ? -1 : 0);
+}
+
+void SettingsDialog::loadToolchainForm(int toolchainIndex)
+{
+    LoadGuard guard(this);
+    currentToolchainIndex_ = toolchainIndex;
+    const QList<Settings::Toolchain>& list =
+        state(currentScope_).toolchains;
+    const bool have =
+        toolchainIndex >= 0 && toolchainIndex < list.size();
+    toolchainFormContainer_->setEnabled(have);
+    if (!have) {
+        toolchainId_->clear();
+        toolchainName_->clear();
+        for (QLineEdit* edit : toolchainToolEdits_) {
+            edit->clear();
         }
-        const QStringList items = key == QLatin1String("cCompilers") ? lists.cCompilers
-            : key == QLatin1String("cppCompilers")                   ? lists.cppCompilers
-            : key == QLatin1String("debuggers")                      ? lists.debuggers
-            : key == QLatin1String("clangd")                         ? lists.clangd
-            : key == QLatin1String("clangFormat")                    ? lists.clangFormat
-                                                                     : lists.buildTools.value(key);
-        // Same refill as PathListEditor::setItems, without a cast back to
-        // the editor wrapper (it has no Q_OBJECT, so qobject_cast refuses).
-        list->clear();
-        for (const QString& item : items) {
-            list->addItem(item);
-        }
+        return;
+    }
+    const Settings::Toolchain& toolchain = list[toolchainIndex];
+    toolchainId_->setText(toolchain.id);
+    toolchainName_->setText(toolchain.name);
+    for (auto it = toolchainToolEdits_.constBegin();
+         it != toolchainToolEdits_.constEnd(); ++it) {
+        it.value()->setText(toolchainPath(toolchain, it.key()));
     }
 }
 
-void SettingsDialog::commitToolchainsPage(Settings::ToolchainLists* lists)
+void SettingsDialog::commitToolchainForm()
 {
-    for (const RegistrySpec& spec : kRegistrySpecs) {
-        const QString key = QLatin1String(spec.key);
-        const QListWidget* list = registryLists_.value(key);
-        if (list == nullptr) {
-            continue;
+    QList<Settings::Toolchain>& list = state(currentScope_).toolchains;
+    if (currentToolchainIndex_ < 0
+        || currentToolchainIndex_ >= list.size()) {
+        return;
+    }
+    Settings::Toolchain& toolchain = list[currentToolchainIndex_];
+    toolchain.id = toolchainId_->text().trimmed();
+    toolchain.name = toolchainName_->text().trimmed();
+    for (auto it = toolchainToolEdits_.constBegin();
+         it != toolchainToolEdits_.constEnd(); ++it) {
+        setToolchainPath(&toolchain, it.key(),
+                         it.value()->text().trimmed());
+    }
+    if (currentToolchainIndex_ < toolchainList_->count()) {
+        toolchainList_->item(currentToolchainIndex_)
+            ->setText(toolchainDisplayName(toolchain));
+    }
+}
+
+void SettingsDialog::commitToolchainsPage(
+    QList<Settings::Toolchain>* toolchains)
+{
+    // The form commits straight into the working state the pointer refers
+    // to; the parameter exists so callers can name the target explicitly.
+    Q_UNUSED(toolchains);
+    commitToolchainForm();
+}
+
+void SettingsDialog::rebuildToolchainList(int selectRow)
+{
+    toolchainList_->blockSignals(true);
+    toolchainList_->clear();
+    for (const Settings::Toolchain& toolchain :
+         state(currentScope_).toolchains) {
+        toolchainList_->addItem(toolchainDisplayName(toolchain));
+    }
+    if (selectRow >= 0 && selectRow < toolchainList_->count()) {
+        toolchainList_->setCurrentRow(selectRow);
+    }
+    toolchainList_->blockSignals(false);
+}
+
+void SettingsDialog::addToolchain()
+{
+    commitToolchainForm();
+    Settings::Toolchain toolchain;
+    toolchain.id = uniqueToolchainId(QStringLiteral("new-toolchain"));
+    toolchain.name = tr("New Toolchain");
+    state(currentScope_).toolchains.append(toolchain);
+    markDirty();
+    const int row = state(currentScope_).toolchains.size() - 1;
+    rebuildToolchainList(row);
+    loadToolchainForm(row);
+    updateKitSuggestions();
+    toolchainId_->setFocus();
+    toolchainId_->selectAll();
+}
+
+void SettingsDialog::removeToolchain()
+{
+    QList<Settings::Toolchain>& list = state(currentScope_).toolchains;
+    if (currentToolchainIndex_ < 0 || currentToolchainIndex_ >= list.size()) {
+        return;
+    }
+    const Settings::Toolchain& toolchain = list[currentToolchainIndex_];
+    const QMessageBox::StandardButton answer = QMessageBox::question(
+        this, tr("Remove toolchain"),
+        tr("Remove toolchain \"%1\"?").arg(toolchainDisplayName(toolchain)),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+    list.removeAt(currentToolchainIndex_);
+    markDirty();
+    const bool any = !list.isEmpty();
+    const int row =
+        any ? qBound(0, currentToolchainIndex_, static_cast<int>(list.size()) - 1)
+            : -1;
+    currentToolchainIndex_ = -1;
+    rebuildToolchainList(any ? row : -1);
+    loadToolchainForm(row);
+    updateKitSuggestions();
+}
+
+void SettingsDialog::checkCurrentToolchain()
+{
+    commitToolchainForm();
+    const QList<Settings::Toolchain>& list = state(currentScope_).toolchains;
+    if (currentToolchainIndex_ < 0 || currentToolchainIndex_ >= list.size()) {
+        return;
+    }
+    const Settings::Toolchain& toolchain = list[currentToolchainIndex_];
+    QStringList missing;
+    for (const ToolchainToolSpec& spec : kToolchainToolSpecs) {
+        const QString path =
+            toolchainPath(toolchain, QLatin1String(spec.key));
+        if (!path.isEmpty() && !QFileInfo::exists(path)) {
+            missing.append(tr("%1: %2")
+                               .arg(tr(spec.label),
+                                    QDir::toNativeSeparators(path)));
         }
-        QStringList items;
-        for (int i = 0; i < list->count(); ++i) {
-            items.append(list->item(i)->text());
+    }
+    if (missing.isEmpty()) {
+        QMessageBox::information(
+            this, tr("Check toolchain"),
+            tr("Every tool named by \"%1\" exists on disk.")
+                .arg(toolchainDisplayName(toolchain)));
+        return;
+    }
+    QMessageBox::warning(this, tr("Check toolchain"),
+                         tr("Missing tools in \"%1\":\n%2")
+                             .arg(toolchainDisplayName(toolchain),
+                                  missing.join(QLatin1Char('\n'))));
+}
+
+void SettingsDialog::identifyToolchainFolder()
+{
+    if (currentToolchainIndex_ < 0
+        || currentToolchainIndex_
+            >= state(currentScope_).toolchains.size()) {
+        return;
+    }
+    const QString dir = QFileDialog::getExistingDirectory(
+        this, tr("Identify tools in a folder"), QString());
+    if (dir.isEmpty()) {
+        return;
+    }
+    commitToolchainForm();
+    Settings::Toolchain& toolchain =
+        state(currentScope_).toolchains[currentToolchainIndex_];
+    const QStringList filled = scanToolchainFolder(dir, &toolchain);
+    loadToolchainForm(currentToolchainIndex_);
+    markDirty();
+    if (filled.isEmpty()) {
+        QMessageBox::information(
+            this, tr("Identify tools"),
+            tr("No known tools were found in\n%1")
+                .arg(QDir::toNativeSeparators(dir)));
+    } else {
+        QStringList names;
+        for (const QString& key : filled) {
+            for (const ToolchainToolSpec& spec : kToolchainToolSpecs) {
+                if (key == QLatin1String(spec.key)) {
+                    names.append(tr(spec.label));
+                }
+            }
         }
-        if (key == QLatin1String("cCompilers")) {
-            lists->cCompilers = items;
-        } else if (key == QLatin1String("cppCompilers")) {
-            lists->cppCompilers = items;
-        } else if (key == QLatin1String("debuggers")) {
-            lists->debuggers = items;
-        } else if (key == QLatin1String("clangd")) {
-            lists->clangd = items;
-        } else if (key == QLatin1String("clangFormat")) {
-            lists->clangFormat = items;
-        } else {
-            lists->buildTools.insert(key, items);
-        }
+        setStatus(tr("Identified in %1: %2")
+                      .arg(QDir::toNativeSeparators(dir),
+                           names.join(QLatin1String(", "))));
     }
 }
 
@@ -1157,6 +1384,8 @@ void SettingsDialog::loadKitForm(int kitIndex)
         kitName_->clear();
         kitEnabled_->setChecked(true);
         kitIsDefault_->setChecked(false);
+        kitInheritToolchain_->setChecked(false);
+        kitToolchainId_->setCurrentText(QString());
         for (QComboBox* combo : {kitCCompiler_, kitCppCompiler_, kitDebugger_,
                                  kitClangd_, kitClangFormat_, kitToolCmake_,
                                  kitToolNinja_, kitToolGnuMake_, kitToolMsbuild_,
@@ -1170,6 +1399,7 @@ void SettingsDialog::loadKitForm(int kitIndex)
         kitGitArgs_->clear();
         configList_->clear();
         clearConfigWidgets(false);
+        updateKitInheritanceUi();
         return;
     }
 
@@ -1178,6 +1408,10 @@ void SettingsDialog::loadKitForm(int kitIndex)
     kitName_->setText(kit.name);
     kitEnabled_->setChecked(kit.enabled);
     kitIsDefault_->setChecked(kit.isDefault);
+    kitInheritToolchain_->setChecked(kit.inheritToolchain);
+    kitToolchainId_->setCurrentText(kit.toolchainId);
+    kitInheritToolchain_->setChecked(kit.inheritToolchain);
+    kitToolchainId_->setCurrentText(kit.toolchainId);
     kitCCompiler_->setCurrentText(kit.cCompiler);
     kitCppCompiler_->setCurrentText(kit.cppCompiler);
     kitDebugger_->setCurrentText(kit.debugger);
@@ -1194,6 +1428,7 @@ void SettingsDialog::loadKitForm(int kitIndex)
     kitGitArgs_->setPlainText(kit.gitArgs.join(QLatin1Char('\n')));
     kitClangFormatStyle_->setCurrentText(kit.clangFormatStyle);
     kitClangdFallbackStyle_->setCurrentText(kit.clangdFallbackStyle);
+    updateKitInheritanceUi();
 
     rebuildConfigList(-1);
     if (!kit.buildConfigurations.isEmpty()) {
@@ -1216,6 +1451,8 @@ void SettingsDialog::commitKitForm()
     kit.name = kitName_->text().trimmed();
     kit.enabled = kitEnabled_->isChecked();
     kit.isDefault = kitIsDefault_->isChecked();
+    kit.inheritToolchain = kitInheritToolchain_->isChecked();
+    kit.toolchainId = kitToolchainId_->currentText().trimmed();
     kit.cCompiler = kitCCompiler_->currentText().trimmed();
     kit.cppCompiler = kitCppCompiler_->currentText().trimmed();
     kit.debugger = kitDebugger_->currentText().trimmed();
@@ -1439,7 +1676,18 @@ void SettingsDialog::removeBuildConfiguration()
 
 void SettingsDialog::updateKitSuggestions()
 {
-    const Settings::ToolchainLists& lists = state(currentScope_).toolchains;
+    // Tool suggestions come from the layer's toolchain entries: every
+    // toolchain contributes its tool to the matching combo.
+    QHash<QString, QStringList> byKey;
+    for (const Settings::Toolchain& toolchain : state(currentScope_).toolchains) {
+        for (const ToolchainToolSpec& spec : kToolchainToolSpecs) {
+            const QString path =
+                toolchainPath(toolchain, QLatin1String(spec.key));
+            if (!path.isEmpty()) {
+                byKey[QLatin1String(spec.key)].append(path);
+            }
+        }
+    }
     const auto suggest = [](QComboBox* combo, const QStringList& items) {
         const QString current = combo->currentText();
         QSignalBlocker blocker(combo);
@@ -1447,15 +1695,43 @@ void SettingsDialog::updateKitSuggestions()
         combo->addItems(items);
         combo->setCurrentText(current);
     };
-    suggest(kitCCompiler_, lists.cCompilers);
-    suggest(kitCppCompiler_, lists.cppCompilers);
-    suggest(kitDebugger_, lists.debuggers);
-    suggest(kitClangd_, lists.clangd);
-    suggest(kitClangFormat_, lists.clangFormat);
-    suggest(kitToolCmake_, lists.buildTools.value(QStringLiteral("cmake")));
-    suggest(kitToolNinja_, lists.buildTools.value(QStringLiteral("ninja")));
-    suggest(kitToolGnuMake_, lists.buildTools.value(QStringLiteral("gnuMake")));
-    suggest(kitToolMsbuild_, lists.buildTools.value(QStringLiteral("msbuild")));
+    suggest(kitCCompiler_, byKey.value(QStringLiteral("cCompiler")));
+    suggest(kitCppCompiler_, byKey.value(QStringLiteral("cppCompiler")));
+    suggest(kitDebugger_, byKey.value(QStringLiteral("debugger")));
+    suggest(kitClangd_, byKey.value(QStringLiteral("clangd")));
+    suggest(kitClangFormat_, byKey.value(QStringLiteral("clangFormat")));
+    suggest(kitToolCmake_, byKey.value(QStringLiteral("cmake")));
+    suggest(kitToolNinja_, byKey.value(QStringLiteral("ninja")));
+    suggest(kitToolGnuMake_, byKey.value(QStringLiteral("gnuMake")));
+    suggest(kitToolMsbuild_, byKey.value(QStringLiteral("msbuild")));
+
+    // The inheritance combo names the toolchains by id.
+    const QString currentToolchainId = kitToolchainId_->currentText();
+    QSignalBlocker blocker(kitToolchainId_);
+    kitToolchainId_->clear();
+    for (const Settings::Toolchain& toolchain : state(currentScope_).toolchains) {
+        if (!toolchain.id.isEmpty()) {
+            kitToolchainId_->addItem(toolchain.id);
+        }
+    }
+    kitToolchainId_->setCurrentText(currentToolchainId);
+}
+
+void SettingsDialog::updateKitInheritanceUi()
+{
+    // Inheriting a toolchain means the kit's own tool fields are fallbacks
+    // filled from the toolchain — the self-selection rows are disabled so
+    // the tools actually used cannot diverge silently from the toolchain.
+    const bool inherit = kitInheritToolchain_->isChecked();
+    kitToolchainId_->setEnabled(inherit);
+    for (QComboBox* combo : {kitCCompiler_, kitCppCompiler_, kitDebugger_,
+                             kitClangd_, kitClangFormat_, kitToolCmake_,
+                             kitToolNinja_, kitToolGnuMake_, kitToolMsbuild_}) {
+        combo->setEnabled(!inherit);
+    }
+    if (kitToolsBox_ != nullptr) {
+        kitToolsBox_->setEnabled(!inherit);
+    }
 }
 
 QString SettingsDialog::uniqueKitId(const QString& base)
@@ -1463,6 +1739,24 @@ QString SettingsDialog::uniqueKitId(const QString& base)
     QSet<QString> taken;
     for (const Settings::Kit& kit : kits()) {
         taken.insert(kit.id);
+    }
+    if (!taken.contains(base)) {
+        return base;
+    }
+    for (int n = 2;; ++n) {
+        const QString candidate =
+            base + QLatin1Char('-') + QString::number(n);
+        if (!taken.contains(candidate)) {
+            return candidate;
+        }
+    }
+}
+
+QString SettingsDialog::uniqueToolchainId(const QString& base)
+{
+    QSet<QString> taken;
+    for (const Settings::Toolchain& toolchain : state(currentScope_).toolchains) {
+        taken.insert(toolchain.id);
     }
     if (!taken.contains(base)) {
         return base;
@@ -1512,12 +1806,7 @@ void SettingsDialog::loadPreferencesPage(const Settings::Preferences& prefs)
     lineEndingDefault_->setCurrentText(prefs.lineEndingDefault.isEmpty()
                                            ? QStringLiteral("auto")
                                            : prefs.lineEndingDefault);
-    lineEndingWindows_->setCurrentText(
-        prefs.lineEndingPlatform.value(QStringLiteral("windows"), QStringLiteral("CRLF")));
-    lineEndingLinux_->setCurrentText(
-        prefs.lineEndingPlatform.value(QStringLiteral("linux"), QStringLiteral("LF")));
-    lineEndingMacos_->setCurrentText(
-        prefs.lineEndingPlatform.value(QStringLiteral("macos"), QStringLiteral("LF")));
+    checkCompilersAtStartup_->setChecked(prefs.checkCompilersAtStartup);
     shortcutClangd_->setKeySequence(
         QKeySequence(prefs.shortcutClangd, QKeySequence::PortableText));
     shortcutClangFormat_->setKeySequence(
@@ -1546,12 +1835,7 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->defaultEncoding = encodingDefault_->currentText().trimmed();
     prefs->detectionPriority = linesOf(encodingPriority_);
     prefs->lineEndingDefault = lineEndingDefault_->currentText();
-    prefs->lineEndingPlatform.insert(QStringLiteral("windows"),
-                                      lineEndingWindows_->currentText());
-    prefs->lineEndingPlatform.insert(QStringLiteral("linux"),
-                                      lineEndingLinux_->currentText());
-    prefs->lineEndingPlatform.insert(QStringLiteral("macos"),
-                                      lineEndingMacos_->currentText());
+    prefs->checkCompilersAtStartup = checkCompilersAtStartup_->isChecked();
     prefs->shortcutClangd =
         shortcutClangd_->keySequence().toString(QKeySequence::PortableText);
     prefs->shortcutClangFormat =
@@ -1578,9 +1862,9 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
 void SettingsDialog::commitUiToState()
 {
     commitKitForm();
+    commitToolchainForm();
     ScopeState& current = state(currentScope_);
     commitDefaultsPage(&current.defaults);
-    commitToolchainsPage(&current.toolchains);
     commitPreferencesPage(&current.preferences);
 }
 
@@ -1603,6 +1887,37 @@ bool SettingsDialog::validateScope(Scope scope, QString* errorMessage) const
             return false;
         }
         ids.insert(kit.id);
+    }
+    QSet<QString> toolchainIds;
+    for (int i = 0; i < current.toolchains.size(); ++i) {
+        const Settings::Toolchain& toolchain = current.toolchains[i];
+        if (toolchain.id.trimmed().isEmpty()) {
+            if (errorMessage != nullptr) {
+                *errorMessage =
+                    tr("Toolchain #%1 has an empty id.").arg(i + 1);
+            }
+            return false;
+        }
+        if (toolchainIds.contains(toolchain.id)) {
+            if (errorMessage != nullptr) {
+                *errorMessage =
+                    tr("Duplicate toolchain id \"%1\".").arg(toolchain.id);
+            }
+            return false;
+        }
+        toolchainIds.insert(toolchain.id);
+    }
+    // Kits that inherit must name an existing toolchain of the same layer.
+    for (int i = 0; i < current.kits.size(); ++i) {
+        const Settings::Kit& kit = current.kits[i];
+        if (kit.inheritToolchain && !toolchainIds.contains(kit.toolchainId)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = tr("Kit \"%1\" inherits from toolchain "
+                                   "\"%2\", which does not exist.")
+                                     .arg(kitDisplayName(kit), kit.toolchainId);
+            }
+            return false;
+        }
     }
     return true;
 }
@@ -1640,7 +1955,11 @@ bool SettingsDialog::saveScope(Scope scope, QString* errorMessage)
         return false;
     };
     ScopeState& current = state(scope);
-    if (!write("toolchains.json", QJsonDocument(Settings::toJson(current.toolchains)))) {
+    QJsonArray toolchainArray;
+    for (const Settings::Toolchain& toolchain : current.toolchains) {
+        toolchainArray.append(Settings::toJson(toolchain));
+    }
+    if (!write("toolchains.json", QJsonDocument(toolchainArray))) {
         return false;
     }
     QJsonArray kitArray;

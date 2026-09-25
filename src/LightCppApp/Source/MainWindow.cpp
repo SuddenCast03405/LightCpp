@@ -362,6 +362,43 @@ MainWindow::MainWindow(QWidget* parent)
     // Syntax checking follows languageService.clangd.enabledByDefault; the
     // Tools menu entry stays checkable so it can still be switched off.
     actSyntaxCheck_->setChecked(clangdEnabledByDefault_);
+
+    // The start-up compiler check runs once the event loop is up: asking
+    // from inside the constructor would open a dialog before the window is
+    // visible.
+    QTimer::singleShot(0, this, &MainWindow::checkStartupCompilers);
+}
+
+void MainWindow::checkStartupCompilers()
+{
+    const LightCpp::Settings::Preferences prefs = settings_->preferences();
+    if (!prefs.checkCompilersAtStartup) {
+        return;
+    }
+    // No usable default kit means nothing is configured yet — a first run
+    // without any toolchain must not nag on every start.
+    const std::optional<LightCpp::Settings::Kit> kit = settings_->defaultKit();
+    if (!kit.has_value()) {
+        return;
+    }
+    QStringList missing;
+    for (const QString& path : {kit->cCompiler, kit->cppCompiler}) {
+        if (!path.isEmpty() && !QFileInfo::exists(path)) {
+            missing.append(QDir::toNativeSeparators(path));
+        }
+    }
+    if (missing.isEmpty()) {
+        return;
+    }
+    const QMessageBox::StandardButton answer = QMessageBox::question(
+        this, tr("Missing compilers"),
+        tr("The default kit's compiler(s) cannot be found:\n%1\n\n"
+           "Open the settings to change it?")
+            .arg(missing.join(QLatin1Char('\n'))),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer == QMessageBox::Yes) {
+        onSettings();
+    }
 }
 
 MainWindow::~MainWindow() = default;
@@ -678,6 +715,8 @@ void MainWindow::createMenuBar()
     foldingMenu->addSeparator();
     foldingMenu->addAction(actFoldAll_);
     foldingMenu->addAction(actUnfoldAll_);
+    editMenu->addSeparator();
+    editMenu->addAction(actSettings_);
 
     auto* projectMenu = menuBar()->addMenu(tr("&Project"));
     projectMenu->addAction(actOpenProject_);
@@ -691,8 +730,6 @@ void MainWindow::createMenuBar()
     projectMenu->addAction(actCloseProject_);
 
     auto* toolsMenu = menuBar()->addMenu(tr("&Tools"));
-    toolsMenu->addAction(actSettings_);
-    toolsMenu->addSeparator();
     toolsMenu->addAction(actSyntaxCheck_);
     toolsMenu->addAction(actReloadSettings_);
     toolsMenu->addAction(actOpenConfigDir_);

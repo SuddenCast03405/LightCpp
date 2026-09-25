@@ -15,10 +15,6 @@
 
 #include <algorithm>
 
-#ifdef Q_OS_WIN
-#include <QSysInfo>
-#endif
-
 namespace LightCpp::Settings {
 
 namespace {
@@ -48,24 +44,6 @@ namespace {
     std::sort(files.begin(), files.end());
     return files;
 }
-
-#ifdef Q_OS_WIN
-[[nodiscard]] QString runningPlatform()
-{
-    return QStringLiteral("windows");
-}
-#else
-[[nodiscard]] QString runningPlatform()
-{
-#if defined(Q_OS_MACOS)
-    return QStringLiteral("macos");
-#elif defined(Q_OS_LINUX)
-    return QStringLiteral("linux");
-#else
-    return QStringLiteral("windows");
-#endif
-}
-#endif
 
 }  // namespace
 
@@ -126,7 +104,7 @@ void SettingsStore::setFallbackToolPaths(const QString& clangdPath,
 bool SettingsStore::reload()
 {
     kitDocs_.clear();
-    mergedToolchains_ = QJsonObject();
+    toolchainDocs_.clear();
     mergedDefaults_ = QJsonObject();
     mergedPreferences_ = QJsonObject();
     errors_.clear();
@@ -142,7 +120,7 @@ bool SettingsStore::reload()
     }
     // The base layer existing but yielding nothing readable is worth
     // reporting; no config at all is the normal first-run state.
-    if (QFileInfo(base).isDir() && kitDocs_.isEmpty() && mergedToolchains_.isEmpty()
+    if (QFileInfo(base).isDir() && kitDocs_.isEmpty() && toolchainDocs_.isEmpty()
         && mergedDefaults_.isEmpty() && mergedPreferences_.isEmpty()) {
         return false;
     }
@@ -203,8 +181,26 @@ QJsonObject SettingsStore::mergeObjects(const QJsonObject& base,
 bool SettingsStore::mergeDocument(const QJsonObject& document, const QString& source)
 {
     const QString type = document.value(QStringLiteral("type")).toString();
+    if (type == QLatin1String("toolchain")) {
+        const QString id = document.value(QStringLiteral("id")).toString();
+        if (id.isEmpty()) {
+            errors_.append(QStringLiteral("%1: toolchain document without an id")
+                               .arg(source));
+            return false;
+        }
+        for (auto& entry : toolchainDocs_) {
+            if (entry.first == id) {
+                entry.second = mergeObjects(entry.second, document);
+                return true;
+            }
+        }
+        toolchainDocs_.append({id, document});
+        return true;
+    }
     if (type == QLatin1String("toolchains")) {
-        mergedToolchains_ = mergeObjects(mergedToolchains_, document);
+        // Legacy registry format (lists of candidate paths), superseded by
+        // per-toolchain documents. Accepted so old config dirs stay quiet;
+        // its contents are simply not consumed.
         return true;
     }
     if (type == QLatin1String("defaults")) {
@@ -247,11 +243,27 @@ GlobalDefaults SettingsStore::defaults() const
     return out;
 }
 
-ToolchainLists SettingsStore::toolchains() const
+QList<Toolchain> SettingsStore::toolchains() const
 {
-    ToolchainLists out;
-    fromJson(mergedToolchains_, out);
+    QList<Toolchain> out;
+    for (const auto& entry : toolchainDocs_) {
+        Toolchain toolchain;
+        fromJson(entry.second, toolchain);
+        out.append(toolchain);
+    }
     return out;
+}
+
+std::optional<Toolchain> SettingsStore::toolchain(const QString& id) const
+{
+    for (const auto& entry : toolchainDocs_) {
+        if (entry.first == id) {
+            Toolchain toolchain;
+            fromJson(entry.second, toolchain);
+            return toolchain;
+        }
+    }
+    return std::nullopt;
 }
 
 Preferences SettingsStore::preferences() const
@@ -261,12 +273,49 @@ Preferences SettingsStore::preferences() const
     return out;
 }
 
+/// Fill the kit's empty tool fields from `toolchain`. The kit's own values
+/// always win, so inheritance is purely a fallback.
+void applyToolchainInheritance(Kit& kit, const Toolchain& toolchain)
+{
+    if (kit.cCompiler.isEmpty()) {
+        kit.cCompiler = toolchain.cCompiler;
+    }
+    if (kit.cppCompiler.isEmpty()) {
+        kit.cppCompiler = toolchain.cppCompiler;
+    }
+    if (kit.debugger.isEmpty()) {
+        kit.debugger = toolchain.debugger;
+    }
+    if (kit.clangd.isEmpty()) {
+        kit.clangd = toolchain.clangd;
+    }
+    if (kit.clangFormat.isEmpty()) {
+        kit.clangFormat = toolchain.clangFormat;
+    }
+    for (const char* tool : {"cmake", "ninja", "gnuMake", "msbuild"}) {
+        const QString inherited = toolchain.buildTools.value(QLatin1String(tool));
+        if (!inherited.isEmpty()
+            && kit.buildTools.value(QLatin1String(tool)).isEmpty()) {
+            kit.buildTools.insert(QLatin1String(tool), inherited);
+        }
+    }
+}
+
 QList<Kit> SettingsStore::kits() const
 {
+    const QList<Toolchain> allToolchains = toolchains();
     QList<Kit> out;
     for (const auto& entry : kitDocs_) {
         Kit kit;
         fromJson(entry.second, kit);
+        if (kit.inheritToolchain && !kit.toolchainId.isEmpty()) {
+            for (const Toolchain& toolchain : allToolchains) {
+                if (toolchain.id == kit.toolchainId) {
+                    applyToolchainInheritance(kit, toolchain);
+                    break;
+                }
+            }
+        }
         out.append(kit);
     }
     return out;
@@ -274,10 +323,9 @@ QList<Kit> SettingsStore::kits() const
 
 std::optional<Kit> SettingsStore::kit(const QString& id) const
 {
-    for (const auto& entry : kitDocs_) {
-        if (entry.first == id) {
-            Kit kit;
-            fromJson(entry.second, kit);
+    const QList<Kit> all = kits();
+    for (const Kit& kit : all) {
+        if (kit.id == id) {
             return kit;
         }
     }
@@ -347,16 +395,7 @@ QString SettingsStore::lineEndingForSaving() const
                                         Qt::CaseInsensitive) == 0) {
         return QStringLiteral("LF");
     }
-    // "auto" (or unset): the platform override wins, then the platform's
-    // own convention.
-    const QString overrideEnding =
-        prefs.lineEndingPlatform.value(runningPlatform());
-    if (overrideEnding.compare(QLatin1String("CRLF"), Qt::CaseInsensitive) == 0) {
-        return QStringLiteral("CRLF");
-    }
-    if (overrideEnding.compare(QLatin1String("LF"), Qt::CaseInsensitive) == 0) {
-        return QStringLiteral("LF");
-    }
+    // "auto" (or unset): the platform's own convention.
 #ifdef Q_OS_WIN
     return QStringLiteral("CRLF");
 #else

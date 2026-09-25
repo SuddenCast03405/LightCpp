@@ -73,7 +73,7 @@ private:
     /// with edits that have not been written yet.
     struct ScopeState {
         LightCpp::Settings::GlobalDefaults defaults;
-        LightCpp::Settings::ToolchainLists toolchains;
+        QList<LightCpp::Settings::Toolchain> toolchains;
         LightCpp::Settings::Preferences preferences;
         QList<LightCpp::Settings::Kit> kits;
         bool loaded = false;
@@ -85,10 +85,11 @@ private:
     struct LoadGuard;
 
     // --- page builders ------------------------------------------------------
-    QWidget* buildDefaultsPage();
+    QWidget* buildGeneralPage();
+    QWidget* buildDefaultsSection(QWidget* parent);
+    QWidget* buildPreferencesSection(QWidget* parent);
     QWidget* buildToolchainsPage();
     QWidget* buildKitsPage();
-    QWidget* buildPreferencesPage();
     /// Wrap a page in a frameless, resizable scroll area.
     QWidget* wrapInScroll(QWidget* page);
     /// The scope combo changed: offer to save the layer being left, then
@@ -115,10 +116,19 @@ private:
 
     void loadDefaultsPage(const LightCpp::Settings::GlobalDefaults& defaults);
     void commitDefaultsPage(LightCpp::Settings::GlobalDefaults* defaults);
-    void loadToolchainsPage(const LightCpp::Settings::ToolchainLists& lists);
-    void commitToolchainsPage(LightCpp::Settings::ToolchainLists* lists);
+    void loadToolchainsPage(const QList<LightCpp::Settings::Toolchain>& toolchains);
+    void commitToolchainsPage(QList<LightCpp::Settings::Toolchain>* toolchains);
     void loadPreferencesPage(const LightCpp::Settings::Preferences& prefs);
     void commitPreferencesPage(LightCpp::Settings::Preferences* prefs);
+
+    // --- toolchain master-detail --------------------------------------------
+    void loadToolchainForm(int toolchainIndex);
+    void commitToolchainForm();
+    void rebuildToolchainList(int selectRow);
+    void addToolchain();
+    void removeToolchain();
+    void checkCurrentToolchain();
+    void identifyToolchainFolder();
 
     // --- kit master-detail --------------------------------------------------
     void loadKitForm(int kitIndex);
@@ -134,6 +144,7 @@ private:
     void removeBuildConfiguration();
     void updateKitSuggestions();
     void updateDefaultsKitItems();
+    void updateKitInheritanceUi();
     void clearConfigWidgets(bool enabled);
 
     // --- save ----------------------------------------------------------------
@@ -147,6 +158,7 @@ private:
     [[nodiscard]] QString scopeDisplayName(Scope scope) const;
     void restoreScopeCombo();
     [[nodiscard]] QString uniqueKitId(const QString& base);
+    [[nodiscard]] QString uniqueToolchainId(const QString& base);
     [[nodiscard]] QString uniqueConfigName(const QString& base);
 
     // --- scope / working state ----------------------------------------------
@@ -162,16 +174,21 @@ private:
     QStackedWidget* pages_ = nullptr;
     QLabel* statusLabel_ = nullptr;
 
-    // --- defaults page -------------------------------------------------------
+    // --- defaults section (general page) --------------------------------------
     QComboBox* defaultsKitId_ = nullptr;
     QComboBox* defaultsBuildConfig_ = nullptr;
     QLineEdit* defaultsGitPath_ = nullptr;
     QLineEdit* defaultsClangdPath_ = nullptr;
     QLineEdit* defaultsClangFormatPath_ = nullptr;
 
-    // --- toolchains page -----------------------------------------------------
-    /// Registry key ("cCompilers", ..., "cmake", ...) -> its path list.
-    QHash<QString, QListWidget*> registryLists_;
+    // --- toolchains page: toolchain form ----------------------------------------
+    QListWidget* toolchainList_ = nullptr;
+    QWidget* toolchainFormContainer_ = nullptr;
+    QLineEdit* toolchainId_ = nullptr;
+    QLineEdit* toolchainName_ = nullptr;
+    /// Spec key ("cCompiler", ..., "cmake", ...) -> its path line edit.
+    QHash<QString, QLineEdit*> toolchainToolEdits_;
+    int currentToolchainIndex_ = -1;
 
     // --- kits page: kit form -------------------------------------------------
     QListWidget* kitList_ = nullptr;
@@ -180,6 +197,9 @@ private:
     QLineEdit* kitName_ = nullptr;
     QCheckBox* kitEnabled_ = nullptr;
     QCheckBox* kitIsDefault_ = nullptr;
+    QCheckBox* kitInheritToolchain_ = nullptr;
+    QComboBox* kitToolchainId_ = nullptr;
+    QWidget* kitToolsBox_ = nullptr;
     QComboBox* kitCCompiler_ = nullptr;
     QComboBox* kitCppCompiler_ = nullptr;
     QComboBox* kitDebugger_ = nullptr;
@@ -223,9 +243,7 @@ private:
     QComboBox* encodingDefault_ = nullptr;
     QPlainTextEdit* encodingPriority_ = nullptr;
     QComboBox* lineEndingDefault_ = nullptr;
-    QComboBox* lineEndingWindows_ = nullptr;
-    QComboBox* lineEndingLinux_ = nullptr;
-    QComboBox* lineEndingMacos_ = nullptr;
+    QCheckBox* checkCompilersAtStartup_ = nullptr;
     QKeySequenceEdit* shortcutClangd_ = nullptr;
     QKeySequenceEdit* shortcutClangFormat_ = nullptr;
     QSpinBox* largeFileHighlight_ = nullptr;

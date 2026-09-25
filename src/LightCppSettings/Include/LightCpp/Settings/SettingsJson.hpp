@@ -10,7 +10,7 @@ namespace LightCpp::Settings {
 // Serialisation — used by the default-config writer and the round-trip tests.
 // ---------------------------------------------------------------------------
 
-[[nodiscard]] QJsonObject toJson(const ToolchainLists& lists);
+[[nodiscard]] QJsonObject toJson(const Toolchain& toolchain);
 [[nodiscard]] QJsonObject toJson(const GlobalDefaults& defaults);
 [[nodiscard]] QJsonObject toJson(const KitBuildConfiguration& config);
 [[nodiscard]] QJsonObject toJson(const Kit& kit);
@@ -25,7 +25,7 @@ namespace LightCpp::Settings {
 // unknown keys are ignored so newer configs still load in an older IDE.
 // ---------------------------------------------------------------------------
 
-void fromJson(const QJsonObject& object, ToolchainLists& out);
+void fromJson(const QJsonObject& object, Toolchain& out);
 void fromJson(const QJsonObject& object, GlobalDefaults& out);
 void fromJson(const QJsonObject& object, KitBuildConfiguration& out);
 void fromJson(const QJsonObject& object, Kit& out);
