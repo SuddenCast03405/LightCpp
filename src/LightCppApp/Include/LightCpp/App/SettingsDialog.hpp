@@ -244,6 +244,8 @@ private:
     QPlainTextEdit* encodingPriority_ = nullptr;
     QComboBox* lineEndingDefault_ = nullptr;
     QCheckBox* checkCompilersAtStartup_ = nullptr;
+    /// run.output: Program Output (captured) vs Console Pauser (external).
+    QComboBox* runOutputMode_ = nullptr;
     QKeySequenceEdit* shortcutClangd_ = nullptr;
     QKeySequenceEdit* shortcutClangFormat_ = nullptr;
     QSpinBox* largeFileHighlight_ = nullptr;

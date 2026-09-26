@@ -825,6 +825,16 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
         tr("When enabled, start-up verifies the default kit's compilers and "
            "offers to open the settings when one is missing."));
     generalForm->addRow(QStringLiteral(), checkCompilersAtStartup_);
+    runOutputMode_ = makeCombo(QStringLiteral("prefs.run.output"), false);
+    runOutputMode_->addItem(tr("Program Output"), QStringLiteral("program"));
+    runOutputMode_->addItem(tr("Console Pauser"), QStringLiteral("consolePauser"));
+    runOutputMode_->setToolTip(
+        tr("How the built program runs.\n"
+           "Program Output: its output is captured in the IDE's Program "
+           "Output channel, with an input field for stdin.\n"
+           "Console Pauser: it runs in an external console window via "
+           "ConsolePauser.exe (copied next to the program when missing)."));
+    generalForm->addRow(tr("Program output"), runOutputMode_);
     column->addWidget(general);
 
     // --- shortcuts ----------------------------------------------------------------
@@ -1831,6 +1841,10 @@ void SettingsDialog::loadPreferencesPage(const Settings::Preferences& prefs)
                                            ? QStringLiteral("auto")
                                            : prefs.lineEndingDefault);
     checkCompilersAtStartup_->setChecked(prefs.checkCompilersAtStartup);
+    {
+        const int runIndex = runOutputMode_->findData(prefs.programOutput);
+        runOutputMode_->setCurrentIndex(runIndex < 0 ? 0 : runIndex);
+    }
     shortcutClangd_->setKeySequence(
         QKeySequence(prefs.shortcutClangd, QKeySequence::PortableText));
     shortcutClangFormat_->setKeySequence(
@@ -1864,6 +1878,7 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->detectionPriority = linesOf(encodingPriority_);
     prefs->lineEndingDefault = lineEndingDefault_->currentText();
     prefs->checkCompilersAtStartup = checkCompilersAtStartup_->isChecked();
+    prefs->programOutput = runOutputMode_->currentData().toString();
     prefs->shortcutClangd =
         shortcutClangd_->keySequence().toString(QKeySequence::PortableText);
     prefs->shortcutClangFormat =

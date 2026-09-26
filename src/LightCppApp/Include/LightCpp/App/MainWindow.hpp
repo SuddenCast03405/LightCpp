@@ -10,6 +10,7 @@
 #include <QString>
 
 #include "LightCpp/App/DebuggerController.hpp"
+#include "LightCpp/App/ConsoleDecoder.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/Project/BuildConfiguration.hpp"
@@ -317,6 +318,15 @@ private:
     [[nodiscard]] BuildTarget resolveBuildTarget(CodeEditor* editor) const;
     /// Launch `exePath`, capturing its output into the Program Output channel.
     void startProgram(const QString& exePath, const QString& workDir);
+    /// Launch `exePath` through ConsolePauser.exe in its own console window
+    /// (preferences run.output = "consolePauser"). Nothing is captured; the
+    /// console owns the program's input and output.
+    void startWithConsolePauser(const QString& exePath, const QString& workDir);
+    /// The ConsolePauser.exe to run a given program with: one next to the
+    /// program, else one next to the IDE, else the compiled-in fallback
+    /// location. When found elsewhere it is copied next to the program, so
+    /// the pairing travels with the binary. Empty when none was found.
+    [[nodiscard]] QString resolveConsolePauser(const QString& exePath) const;
     /// Enable/disable the build and run actions for the current states.
     void updateRunActionStates();
     /// Tell the language server whose headers to resolve includes against,
@@ -488,6 +498,13 @@ private:
     bool runAfterBuild_ = false;
     /// Binary produced by the most recent build, i.e. what "Run" launches.
     QString lastBuildExe_;
+    /// Console-output decoders (UTF-8 vs local code page probe): single-file
+    /// compiler, project build steps, and the embedded program runner.
+    LightCpp::App::ConsoleDecoder buildDecoder_;
+    LightCpp::App::ConsoleDecoder projectBuildDecoder_;
+    LightCpp::App::ConsoleDecoder runDecoder_;
+    /// preferences.run.output — "program" (default) or "consolePauser".
+    QString programOutputMode_ = QStringLiteral("program");
     /// Debug/Release, at the far right of the toolbar.
     QComboBox* configCombo_ = nullptr;
     /// The active kit, at the right of the toolbar next to it.

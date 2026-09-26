@@ -4,6 +4,7 @@
 #include "LightCpp/App/BatchFormatter.hpp"
 #include "LightCpp/App/CodeEditor.hpp"
 #include "LightCpp/App/CodeFormatter.hpp"
+#include "LightCpp/App/ConsoleDecoder.hpp"
 #include "LightCpp/App/DefaultSettings.hpp"
 #include "LightCpp/App/FileExplorer.hpp"
 #include "LightCpp/App/GitClient.hpp"
@@ -65,6 +66,11 @@ namespace {
 // server and the formatter cannot disagree about where the toolchain is.
 using LightCpp::App::kClangdPath;
 using LightCpp::App::kMingwBin;
+
+/// Where ConsolePauser.exe lives today on this machine — the last resort
+/// when neither the program's directory nor the IDE's own has a copy. When
+/// found here it is copied next to the program being run.
+constexpr char kConsolePauserFallback[] = "E:/Cpp/ConsolePauser.exe";
 
 /// How long the editor stays idle before the new text is pushed to the
 /// language server (ms). 300ms keeps up with fast typing without spamming
@@ -339,6 +345,21 @@ MainWindow::MainWindow(QWidget* parent)
     // Clicking a row in the Problems list jumps to the source location.
     connect(outputPanel_, &OutputPanel::problemActivated,
             this, &MainWindow::onProblemActivated);
+    // A line typed into the Program Output channel goes to the running
+    // program's stdin. The IDE's pipes do not echo typed input, so the line
+    // is echoed into the transcript first — it reads like a terminal.
+    connect(outputPanel_, &OutputPanel::programInputSubmitted,
+            this, [this](const QString& text) {
+        if (runner_ == nullptr || runner_->state() == QProcess::NotRunning) {
+            outputPanel_->appendProgramOutput(
+                tr("(no program is running — input was discarded)"));
+            return;
+        }
+        outputPanel_->appendProgramOutput(text);
+        // Console programs read their stdin in the local code page, which is
+        // what a real terminal would have handed them.
+        runner_->write(text.toLocal8Bit() + '\n');
+    });
     connect(tabWidget_, &QTabWidget::currentChanged, [this](int) {
         if (auto* ed = currentEditor()) {
             statusLanguage_->setText(languageFromSuffix(ed->filePath()));
@@ -2289,13 +2310,21 @@ void MainWindow::startProjectBuildSteps()
         projectProcess_->setProcessChannelMode(QProcess::MergedChannels);
         connect(projectProcess_, &QProcess::readyReadStandardOutput, this, [this] {
             if (projectProcess_ == nullptr) return;
-            outputPanel_->appendBuildOutput(
-                QString::fromLocal8Bit(projectProcess_->readAllStandardOutput()));
+            // Probed decoding: MSVC speaks the local code page, MinGW UTF-8.
+            const QString text = projectBuildDecoder_.decode(
+                projectProcess_->readAllStandardOutput());
+            if (!text.isEmpty()) {
+                outputPanel_->appendBuildOutput(text);
+            }
         });
         connect(projectProcess_,
                 QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                 this, [this](int code, QProcess::ExitStatus status) {
             if (projectProcess_ == nullptr) return;
+            const QString tail = projectBuildDecoder_.flush();
+            if (!tail.isEmpty()) {
+                outputPanel_->appendBuildOutput(tail);
+            }
             if (status != QProcess::NormalExit || code != 0) {
                 finishProjectBuild(false, code);
                 return;
@@ -2821,12 +2850,20 @@ void MainWindow::onCompileCurrentFile()
         connect(compiler_, &QProcess::readyReadStandardOutput, this, [this] {
             if (compiler_ == nullptr) return;
             const QByteArray b = compiler_->readAllStandardOutput();
-            outputPanel_->appendBuildOutput(QString::fromLocal8Bit(b));
+            // Probed decoding: MSVC speaks the local code page, MinGW UTF-8.
+            const QString text = buildDecoder_.decode(b);
+            if (!text.isEmpty()) {
+                outputPanel_->appendBuildOutput(text);
+            }
         });
         connect(compiler_,
                 QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                 this, [this](int code, QProcess::ExitStatus status) {
             const int rc = (status == QProcess::NormalExit) ? code : -1;
+            const QString tail = buildDecoder_.flush();
+            if (!tail.isEmpty()) {
+                outputPanel_->appendBuildOutput(tail);
+            }
             outputPanel_->appendBuildOutput(
                 rc == 0 ? tr("--- Build succeeded (exit 0) ---")
                         : tr("--- Build failed (exit %1) ---").arg(rc));
@@ -2977,19 +3014,30 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
             tr("Cannot run: %1 does not exist.").arg(exePath));
         return;
     }
+    // The settings decide where the program runs: captured in the IDE, or
+    // in its own console window via ConsolePauser.exe.
+    if (programOutputMode_ == QLatin1String("consolePauser")) {
+        startWithConsolePauser(exePath, workDir);
+        return;
+    }
     if (runner_ == nullptr) {
         runner_ = new QProcess(this);
         runner_->setProcessChannelMode(QProcess::MergedChannels);
         connect(runner_, &QProcess::readyReadStandardOutput, this, [this] {
             if (runner_ == nullptr) return;
-            const QByteArray b = runner_->readAllStandardOutput();
-            outputPanel_->appendProgramOutput(QString::fromLocal8Bit(b));
+            // Probed decoding: an MSVC-built program speaks the local code
+            // page, an MSYS2/MinGW-built one speaks UTF-8.
+            const QString text = runDecoder_.decode(
+                runner_->readAllStandardOutput());
+            if (!text.isEmpty()) {
+                outputPanel_->appendProgramOutput(text);
+            }
         });
-        // The program has no terminal, so hand it an immediate EOF on stdin:
-        // otherwise a scanf()/getline() would block forever with no way to
-        // feed it. Must run on started() — the channel isn't open before.
-        connect(runner_, &QProcess::started,
-                runner_, &QProcess::closeWriteChannel);
+        // The program's stdin stays open while it runs: the input field in
+        // the Program Output channel feeds it, so scanf()/getline() work.
+        connect(runner_, &QProcess::started, this, [this] {
+            outputPanel_->setProgramInputEnabled(true);
+        });
         connect(runner_, &QProcess::errorOccurred, this,
                 [this](QProcess::ProcessError e) {
             if (runner_ == nullptr) return;
@@ -2997,16 +3045,22 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
                 outputPanel_->appendProgramOutput(
                     tr("Failed to start the program. It probably needs the "
                        "MSYS2 runtime DLLs next to it (or on PATH)."));
+                outputPanel_->setProgramInputEnabled(false);
             }
             updateRunActionStates();
         });
         connect(runner_,
                 QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                 this, [this](int code, QProcess::ExitStatus status) {
+            const QString tail = runDecoder_.flush();
+            if (!tail.isEmpty()) {
+                outputPanel_->appendProgramOutput(tail);
+            }
             outputPanel_->appendProgramOutput(
                 status == QProcess::NormalExit
                     ? tr("--- Program exited with code %1 ---").arg(code)
                     : tr("--- Program was killed ---"));
+            outputPanel_->setProgramInputEnabled(false);
             updateRunActionStates();
         });
     }
@@ -3039,6 +3093,83 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
         tr("--- Running: %1 ---").arg(QFileInfo(exePath).absoluteFilePath()));
     runner_->start(exePath, {});
     updateRunActionStates();
+}
+
+void MainWindow::startWithConsolePauser(const QString& exePath,
+                                        const QString& workDir)
+{
+    outputPanel_->showChannel(OutputPanel::ChannelProgram);
+    const QString pauser = resolveConsolePauser(exePath);
+    if (pauser.isEmpty()) {
+        outputPanel_->appendProgramOutput(
+            tr("Console Pauser is selected, but ConsolePauser.exe was not "
+               "found next to the program or next to the IDE."));
+        return;
+    }
+
+    // Same PATH handling as the embedded runner: even in its own console the
+    // program still needs its toolchain's runtime DLLs to load.
+    QString runtimeBinDir = kMingwBin;
+    if (const auto kit = activeKit(); kit.has_value() && !isMsvcKit(*kit)) {
+        const QString dir = QFileInfo(kit->cppCompiler).absolutePath();
+        if (!dir.isEmpty()) {
+            runtimeBinDir = dir;
+        }
+    }
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("PATH"),
+               runtimeBinDir + QDir::listSeparator()
+                   + env.value(QStringLiteral("PATH")));
+
+    // ConsolePauser.exe <filename> <parameters> — we never pass extra
+    // parameters, so the program itself is the only argument. Detached
+    // start: the console window belongs to the child, the IDE does not
+    // capture anything, and the window stays up after the program exits
+    // (that is the pause the tool adds). The instance overload is used so
+    // the environment and working directory above are honoured.
+    QProcess launcher;
+    launcher.setProgram(pauser);
+    launcher.setArguments({exePath});
+    launcher.setWorkingDirectory(workDir);
+    launcher.setProcessEnvironment(env);
+    if (!launcher.startDetached()) {
+        outputPanel_->appendProgramOutput(
+            tr("Failed to start %1.").arg(QDir::toNativeSeparators(pauser)));
+        return;
+    }
+    outputPanel_->appendProgramOutput(
+        tr("--- Running in an external console (Console Pauser): %1 ---")
+            .arg(QFileInfo(exePath).absoluteFilePath()));
+}
+
+QString MainWindow::resolveConsolePauser(const QString& exePath) const
+{
+    const QString name = QStringLiteral("ConsolePauser.exe");
+    const QString targetDir = QFileInfo(exePath).absolutePath();
+    const QStringList candidates = {
+        QDir(targetDir).filePath(name),
+        QDir(QCoreApplication::applicationDirPath()).filePath(name),
+        QString::fromLatin1(kConsolePauserFallback),
+    };
+    QString found;
+    for (const QString& candidate : candidates) {
+        if (QFileInfo::exists(candidate)) {
+            found = candidate;
+            break;
+        }
+    }
+    if (found.isEmpty()) {
+        return {};
+    }
+    // Console Pauser is a helper of the program being run: keep a copy next
+    // to it, so the pairing survives the IDE being moved or reinstalled.
+    if (QFileInfo(found).absolutePath() != targetDir) {
+        const QString dest = QDir(targetDir).filePath(name);
+        if (QFile::copy(found, dest)) {
+            found = dest;
+        }
+    }
+    return found;
 }
 
 void MainWindow::updateRunActionStates()
@@ -3489,6 +3620,12 @@ void MainWindow::applyPreferences()
     }
     lsp_->setFallbackStyle(clangdStyle);
     lsp_->setServerPath(settings_->clangdPath());
+
+    // --- run ----------------------------------------------------------------
+    // run.output: only "consolePauser" switches away from the embedded
+    // Program Output channel; unknown values fall back to it.
+    programOutputMode_ = prefs.programOutput == QLatin1String("consolePauser")
+        ? QStringLiteral("consolePauser") : QStringLiteral("program");
 
     // --- language service: completion backend -----------------------------
     completionBackend_ = prefs.completion.backend.isEmpty()

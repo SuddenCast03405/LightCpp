@@ -7,6 +7,7 @@
 
 class QComboBox;
 class QLabel;
+class QLineEdit;
 class QStackedWidget;
 class QToolButton;
 class QTreeWidget;
@@ -28,7 +29,8 @@ struct ProblemEntry {
 ///   Clangd Log      — the language server's own log (stderr + window/logMessage)
 ///   Build Log       — compiler output and IDE file operations
 ///   Program Output  — the run console: what the built program prints, plus the
-///                     run banner and its exit status
+///                     run banner and its exit status. A one-line input field
+///                     below the log feeds the program's stdin while it runs.
 ///   Git             — status, diffs and commit output
 ///   Problems        — errors/warnings pushed by clangd, as a clickable list
 ///                     that jumps to the offending source location
@@ -76,16 +78,26 @@ public:
     /// Clear the channel currently on screen.
     void clearOutput();
 
+    /// Enable/disable the program-input field (enabled while a program the
+    /// IDE owns is running; the Console Pauser mode runs in its own console
+    /// and never touches this field).
+    void setProgramInputEnabled(bool enabled);
+
 signals:
     /// The user activated an entry in the Problems list. Line/column are
     /// 0-based, matching the editor's own coordinate system.
     void problemActivated(const QString& filePath, int line, int column);
+    /// The user submitted a line of input for the running program (Enter in
+    /// the input field, or the Send button).
+    void programInputSubmitted(const QString& text);
 
 private:
     /// Refresh the drop-down labels (the Problems entry carries counts).
     void updateChannelLabels();
     /// Rebuild the Problems tree from a flat list.
     void rebuildProblemsTree(const QList<ProblemEntry>& problems);
+    /// Take the text out of the input field and announce it as program input.
+    void submitProgramInput();
 
     QLabel* header_;
     QComboBox* channelCombo_;
@@ -94,6 +106,7 @@ private:
     QPlainTextEdit* serverLog_;
     QPlainTextEdit* buildLog_;
     QPlainTextEdit* programOutput_;
+    QLineEdit* programInput_ = nullptr;  // stdin for the running program
     QPlainTextEdit* gitLog_;
     QPlainTextEdit* debugLog_;
     QTreeWidget* problems_;

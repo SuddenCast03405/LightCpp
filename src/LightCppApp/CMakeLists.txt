@@ -6,6 +6,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/CodeEditor.hpp
     Include/LightCpp/App/CodeFormatter.hpp
     Include/LightCpp/App/CompletionPopup.hpp
+    Include/LightCpp/App/ConsoleDecoder.hpp
     Include/LightCpp/App/CppSyntaxHighlighter.hpp
     Include/LightCpp/App/DefaultSettings.hpp
     Include/LightCpp/App/DebuggerController.hpp
@@ -23,6 +24,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/CodeEditor.cpp
     Source/CodeFormatter.cpp
     Source/CompletionPopup.cpp
+    Source/ConsoleDecoder.cpp
     Source/CppSyntaxHighlighter.cpp
     Source/DefaultSettings.cpp
     Source/DebuggerController.cpp

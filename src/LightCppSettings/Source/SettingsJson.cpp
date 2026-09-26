@@ -335,6 +335,10 @@ QJsonObject toJson(const Preferences& prefs)
     formatting.insert(QStringLiteral("defaultStyleContent"), prefs.defaultStyleContent);
     object.insert(QStringLiteral("formatting"), formatting);
 
+    QJsonObject run;
+    run.insert(QStringLiteral("output"), prefs.programOutput);
+    object.insert(QStringLiteral("run"), run);
+
     return object;
 }
 
@@ -503,6 +507,12 @@ void fromJson(const QJsonObject& object, Preferences& out)
         const QJsonObject formatting = formattingValue.toObject();
         readString(formatting, "globalStyle", out.globalStyle);
         readString(formatting, "defaultStyleContent", out.defaultStyleContent);
+    }
+
+    const QJsonValue runValue = object.value(QLatin1String("run"));
+    if (runValue.isObject()) {
+        const QJsonObject run = runValue.toObject();
+        readString(run, "output", out.programOutput);
     }
 }
 

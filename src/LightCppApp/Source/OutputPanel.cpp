@@ -10,6 +10,7 @@
 #include <QHash>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QSignalBlocker>
 #include <QStackedWidget>
@@ -130,7 +131,35 @@ OutputPanel::OutputPanel(QWidget* parent)
         tr("No debug session yet. Build the program, then Debug > Start Debugging."));
     stack_->addWidget(serverLog_);      // ChannelServer
     stack_->addWidget(buildLog_);       // ChannelBuild
-    stack_->addWidget(programOutput_);  // ChannelProgram
+
+    // The Program channel is a log plus a one-line stdin field: a program
+    // that asks for input must be able to receive it, and the log view is
+    // read-only, so the field lives in its own row below the output.
+    auto* programPage = new QWidget(this);
+    auto* programLayout = new QVBoxLayout(programPage);
+    programLayout->setContentsMargins(0, 0, 0, 0);
+    programLayout->setSpacing(0);
+    programLayout->addWidget(programOutput_, 1);
+    programInput_ = new QLineEdit(programPage);
+    programInput_->setEnabled(false);
+    programInput_->setPlaceholderText(
+        tr("Type program input here, press Enter to send (enabled while a "
+           "program runs)"));
+    connect(programInput_, &QLineEdit::returnPressed,
+            this, &OutputPanel::submitProgramInput);
+    auto* sendButton = new QToolButton(programPage);
+    sendButton->setText(tr("Send"));
+    sendButton->setAutoRaise(true);
+    connect(sendButton, &QToolButton::clicked,
+            this, &OutputPanel::submitProgramInput);
+    auto* sendRow = new QHBoxLayout;
+    sendRow->setContentsMargins(4, 2, 4, 2);
+    sendRow->setSpacing(4);
+    sendRow->addWidget(programInput_, 1);
+    sendRow->addWidget(sendButton);
+    programLayout->addLayout(sendRow);
+    stack_->addWidget(programPage);     // ChannelProgram
+
     stack_->addWidget(gitLog_);         // ChannelGit
     stack_->addWidget(problems_);       // ChannelProblems
     stack_->addWidget(debugLog_);       // ChannelDebug
@@ -196,6 +225,23 @@ void OutputPanel::appendGitOutput(const QString& text)
 void OutputPanel::appendDebugOutput(const QString& text)
 {
     debugLog_->appendPlainText(text);
+}
+
+void OutputPanel::setProgramInputEnabled(bool enabled)
+{
+    if (programInput_ != nullptr) {
+        programInput_->setEnabled(enabled);
+    }
+}
+
+void OutputPanel::submitProgramInput()
+{
+    if (programInput_ == nullptr) {
+        return;
+    }
+    const QString text = programInput_->text();
+    programInput_->clear();
+    emit programInputSubmitted(text);
 }
 
 void OutputPanel::showChannel(Channel channel)

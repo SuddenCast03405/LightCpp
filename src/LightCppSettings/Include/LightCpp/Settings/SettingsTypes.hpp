@@ -194,6 +194,13 @@ struct Preferences {
     QString globalStyle;
     /// Reserved: content for a generated .clang-format (not consumed yet).
     QString defaultStyleContent;
+
+    /// run.output — how the built program is launched. "program" (default)
+    /// captures its output in the IDE's Program Output channel; anything
+    /// else the App layer does not recognise is treated as "program".
+    /// "consolePauser" runs it via ConsolePauser.exe in an external console
+    /// window instead.
+    QString programOutput = QStringLiteral("program");
 };
 
 // ---------------------------------------------------------------------------

@@ -321,6 +321,28 @@ TEST(SettingsJson, WrongTypesKeepDefaults)
     EXPECT_TRUE(kit.buildConfigurations.isEmpty());
 }
 
+TEST(SettingsJson, RunOutputParsesAndRoundTrips)
+{
+    // Absent -> the default ("program": captured in the IDE).
+    Preferences fresh;
+    fromJson(QJsonObject{{"type", "preferences"}}, fresh);
+    EXPECT_EQ(fresh.programOutput, "program");
+
+    // Present -> parsed, and survives a write/read round trip.
+    QJsonObject pauser = examplePreferencesJson();
+    pauser.insert("run", QJsonObject{{"output", "consolePauser"}});
+    Preferences prefs;
+    fromJson(pauser, prefs);
+    EXPECT_EQ(prefs.programOutput, "consolePauser");
+
+    const Preferences roundTripped = [&] {
+        Preferences p;
+        fromJson(toJson(prefs), p);
+        return p;
+    }();
+    EXPECT_EQ(roundTripped.programOutput, "consolePauser");
+}
+
 // ---------------------------------------------------------------------------
 // Store: layers, merging, resolution
 // ---------------------------------------------------------------------------

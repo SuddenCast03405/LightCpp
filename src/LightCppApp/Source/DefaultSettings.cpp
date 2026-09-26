@@ -175,6 +175,10 @@ Preferences starterPreferences()
     prefs.globalStyle = QStringLiteral("file");
     prefs.defaultStyleContent =
         QStringLiteral("BasedOnStyle: LLVM\nIndentWidth: 4\nColumnLimit: 100\n");
+
+    // "Program Output" (captured in the IDE) is the default run mode;
+    // "consolePauser" switches to the external ConsolePauser.exe console.
+    prefs.programOutput = QStringLiteral("program");
     return prefs;
 }
 
