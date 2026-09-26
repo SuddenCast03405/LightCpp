@@ -164,6 +164,14 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
         break;
     case Backend::Lldb:
         arguments << exePath;
+        // LLDB's Windows backend needs the debugger process to own a console
+        // when it creates the debuggee; launched from a GUI process (no
+        // console at all) CreateProcess fails with "The parameter is
+        // incorrect". Grant a console but keep its window hidden.
+        process_->setCreateProcessArgumentsModifier(
+            [](QProcess::CreateProcessArguments* args) {
+                args->flags |= 0x08000000;  // CREATE_NO_WINDOW
+            });
         break;
     case Backend::Cdb:
         // -lines: source-line breakpoints; -y: symbol path from _NT_SYMBOL_PATH
@@ -285,12 +293,21 @@ QStringList DebuggerController::startCommands(
                             .arg(QFileInfo(bp.filePath).fileName())
                             .arg(bp.line + 1);
         }
-        commands << QStringLiteral("run");
+        // "run" would give the debuggee LLDB's own stdio handles, and LLDB's
+        // Windows launcher fails with "The parameter is incorrect" when those
+        // handles are pipes/files — always the case when launched from a GUI
+        // process. Redirecting the debuggee's stdio explicitly (NUL device)
+        // avoids the inherited-handle path entirely; the target's own output
+        // is not captured per-target then, which matches every other backend
+        // showing the console stream in the Debug channel instead.
+        commands << QStringLiteral("process launch -i NUL -o NUL -e NUL");
         break;
     case Backend::Cdb:
-        // .lines enables source-line display so breakpoint hits show the
-        // source line; `bp `file:line`` plants each breakpoint.
-        commands << QStringLiteral(".lines");
+        // Source-line display must be ON for position reports; the debugger
+        // was started with -lines and .lines is a *toggle*, so re-issuing
+        // ".lines" would switch it back off — ".lines -e" is idempotent.
+        // `bp `file:line`` plants each breakpoint.
+        commands << QStringLiteral(".lines -e");
         for (const DebugBreakpoint& bp : breakpoints) {
             commands << QStringLiteral("bp `%1`").arg(breakpointLocation(bp));
         }
@@ -500,17 +517,29 @@ void DebuggerController::handleLldbLine(const QString& line)
 
 void DebuggerController::handleCdbLine(const QString& line)
 {
-    // "Breakpoint 0 hit" — then cdb prints registers and, with .lines, the
-    // source line "E:\path\file.cpp:12".
+    // "Breakpoint 0 hit" — cdb announces the hit but not the position. Ask
+    // for a stack trace: with source lines enabled its innermost frame is
+    // "  ... _app!main+0x4 [E:\path\file.cpp @ 5]".
     static const QRegularExpression bpHit(
         QStringLiteral("Breakpoint\\s+\\d+\\s+hit"));
     if (bpHit.match(line).hasMatch()) {
         paused_ = true;
         pendingCdbBreakpoint_ = true;
+        writeCommand(QStringLiteral("k"));
         return;
     }
     if (paused_ && pendingCdbBreakpoint_) {
-        // The source line follows the register dump: look for file:line.
+        // The stack frame form from the `k` request above.
+        static const QRegularExpression kFrame(
+            QStringLiteral("\\[([A-Za-z]:\\\\[^@\\]]+?) @ (\\d+)\\]"));
+        const auto kMatch = kFrame.match(line);
+        if (kMatch.hasMatch()) {
+            pendingCdbBreakpoint_ = false;
+            emit paused(normalizePath(kMatch.captured(1)),
+                        kMatch.captured(2).toInt() - 1);
+            return;
+        }
+        // Fallback: some setups echo the source line directly as file:line.
         static const QRegularExpression srcLine(
             QStringLiteral("([A-Za-z]:\\\\[^:]+\\.(?:cpp|c|cc|cxx|h|hpp)):(\\d+)"));
         const auto match = srcLine.match(line);
