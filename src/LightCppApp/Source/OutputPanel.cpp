@@ -132,37 +132,25 @@ OutputPanel::OutputPanel(QWidget* parent)
     stack_->addWidget(serverLog_);      // ChannelServer
     stack_->addWidget(buildLog_);       // ChannelBuild
 
-    // The Program channel is a log plus a one-line stdin field: a program
-    // that asks for input must be able to receive it, and the log view is
-    // read-only, so the field lives in its own row below the output.
-    auto* programPage = new QWidget(this);
-    auto* programLayout = new QVBoxLayout(programPage);
-    programLayout->setContentsMargins(0, 0, 0, 0);
-    programLayout->setSpacing(0);
-    programLayout->addWidget(programOutput_, 1);
-    programInput_ = new QLineEdit(programPage);
-    programInput_->setEnabled(false);
-    programInput_->setPlaceholderText(
+    // The Program and Debugger channels are logs plus a one-line input row:
+    // a program that asks for input must be able to receive it, and a live
+    // debugger must accept raw console commands. Both pages are built by the
+    // same helper; the input starts disabled and the owner toggles it.
+    auto* programPage = makeInputLogPage(
+        programOutput_, &programInput_,
         tr("Type program input here, press Enter to send (enabled while a "
-           "program runs)"));
-    connect(programInput_, &QLineEdit::returnPressed,
-            this, &OutputPanel::submitProgramInput);
-    auto* sendButton = new QToolButton(programPage);
-    sendButton->setText(tr("Send"));
-    sendButton->setAutoRaise(true);
-    connect(sendButton, &QToolButton::clicked,
-            this, &OutputPanel::submitProgramInput);
-    auto* sendRow = new QHBoxLayout;
-    sendRow->setContentsMargins(4, 2, 4, 2);
-    sendRow->setSpacing(4);
-    sendRow->addWidget(programInput_, 1);
-    sendRow->addWidget(sendButton);
-    programLayout->addLayout(sendRow);
+           "program runs)"),
+        [this](const QString& text) { emit programInputSubmitted(text); });
     stack_->addWidget(programPage);     // ChannelProgram
 
     stack_->addWidget(gitLog_);         // ChannelGit
     stack_->addWidget(problems_);       // ChannelProblems
-    stack_->addWidget(debugLog_);       // ChannelDebug
+    auto* debugPage = makeInputLogPage(
+        debugLog_, &debuggerInput_,
+        tr("Type a debugger command here, press Enter to send (enabled while "
+           "a session runs)"),
+        [this](const QString& text) { emit debuggerInputSubmitted(text); });
+    stack_->addWidget(debugPage);       // ChannelDebug
 
     problems_->setColumnCount(2);
     problems_->setHeaderLabels({tr("Problem"), tr("Location")});
@@ -234,14 +222,11 @@ void OutputPanel::setProgramInputEnabled(bool enabled)
     }
 }
 
-void OutputPanel::submitProgramInput()
+void OutputPanel::setDebuggerInputEnabled(bool enabled)
 {
-    if (programInput_ == nullptr) {
-        return;
+    if (debuggerInput_ != nullptr) {
+        debuggerInput_->setEnabled(enabled);
     }
-    const QString text = programInput_->text();
-    programInput_->clear();
-    emit programInputSubmitted(text);
 }
 
 void OutputPanel::showChannel(Channel channel)
@@ -360,4 +345,40 @@ void OutputPanel::rebuildProblemsTree(const QList<ProblemEntry>& problems)
 
     problems_->expandAll();
     problems_->setUpdatesEnabled(true);
+}
+
+QWidget* OutputPanel::makeInputLogPage(QPlainTextEdit* log, QLineEdit** inputOut,
+                                       const QString& placeholder,
+                                       const std::function<void(const QString&)>& submit)
+{
+    auto* page = new QWidget(this);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    layout->addWidget(log, 1);
+
+    auto* input = new QLineEdit(page);
+    input->setEnabled(false);
+    input->setPlaceholderText(placeholder);
+    // `submit` is captured by value: the connection outlives this function,
+    // and a by-reference capture would dangle the moment we return.
+    const auto send = [input, submit] {
+        const QString text = input->text();
+        input->clear();
+        submit(text);
+    };
+    connect(input, &QLineEdit::returnPressed, page, send);
+    auto* sendButton = new QToolButton(page);
+    sendButton->setText(tr("Send"));
+    sendButton->setAutoRaise(true);
+    connect(sendButton, &QToolButton::clicked, page, send);
+    auto* sendRow = new QHBoxLayout;
+    sendRow->setContentsMargins(4, 2, 4, 2);
+    sendRow->setSpacing(4);
+    sendRow->addWidget(input, 1);
+    sendRow->addWidget(sendButton);
+    layout->addLayout(sendRow);
+
+    *inputOut = input;
+    return page;
 }

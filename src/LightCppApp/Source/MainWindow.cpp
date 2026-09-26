@@ -327,12 +327,15 @@ MainWindow::MainWindow(QWidget* parent)
             outputPanel_, &OutputPanel::appendDebugOutput);
     connect(debugger_, &LightCpp::App::DebuggerController::started, this, [this] {
         outputPanel_->showChannel(OutputPanel::ChannelDebug);
+        outputPanel_->setDebuggerInputEnabled(true);
         updateRunActionStates();
     });
     connect(debugger_, &LightCpp::App::DebuggerController::paused,
             this, &MainWindow::onDebugPaused);
-    connect(debugger_, &LightCpp::App::DebuggerController::stopped,
-            this, &MainWindow::onDebuggerStopped);
+    connect(debugger_, &LightCpp::App::DebuggerController::stopped, this, [this] {
+        outputPanel_->setDebuggerInputEnabled(false);
+        onDebuggerStopped();
+    });
 
     // --- connections ---
     connect(tabWidget_, &QTabWidget::tabCloseRequested,
@@ -359,6 +362,18 @@ MainWindow::MainWindow(QWidget* parent)
         // Console programs read their stdin in the local code page, which is
         // what a real terminal would have handed them.
         runner_->write(text.toLocal8Bit() + '\n');
+    });
+    // A line typed into the Debugger channel goes straight to the debugger
+    // process (GDB/MI, LLDB or cdb dialect — whatever the session speaks).
+    connect(outputPanel_, &OutputPanel::debuggerInputSubmitted,
+            this, [this](const QString& text) {
+        if (debugger_ == nullptr || !debugger_->isRunning()) {
+            outputPanel_->appendDebugOutput(
+                tr("(no debug session is running — input was discarded)"));
+            return;
+        }
+        outputPanel_->appendDebugOutput(text);
+        debugger_->writeCommand(text);
     });
     connect(tabWidget_, &QTabWidget::currentChanged, [this](int) {
         if (auto* ed = currentEditor()) {
@@ -3014,10 +3029,15 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
             tr("Cannot run: %1 does not exist.").arg(exePath));
         return;
     }
-    // The settings decide where the program runs: captured in the IDE, or
-    // in its own console window via ConsolePauser.exe.
+    // The settings decide where the program runs: captured in the IDE, in
+    // its own console via ConsolePauser.exe, or inside an external terminal.
     if (programOutputMode_ == QLatin1String("consolePauser")) {
         startWithConsolePauser(exePath, workDir);
+        return;
+    }
+    if (programOutputMode_ == QLatin1String("cmd")
+        || programOutputMode_ == QLatin1String("powershell")) {
+        startInTerminal(exePath, workDir);
         return;
     }
     if (runner_ == nullptr) {
@@ -3170,6 +3190,70 @@ QString MainWindow::resolveConsolePauser(const QString& exePath) const
         }
     }
     return found;
+}
+
+void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
+{
+    outputPanel_->showChannel(OutputPanel::ChannelProgram);
+
+    // Pick the terminal: PowerShell prefers pwsh (PowerShell 7+) and falls
+    // back to the Windows PowerShell that ships with the OS. cmd.exe always
+    // exists. /k and -NoExit keep the window up after the program exits —
+    // that is the pause, so ConsolePauser is not involved in these modes.
+    QString program;
+    QStringList args;
+    if (programOutputMode_ == QLatin1String("cmd")) {
+        program = QStandardPaths::findExecutable(QStringLiteral("cmd.exe"));
+        if (program.isEmpty()) {
+            program = QStringLiteral("cmd.exe");
+        }
+        args = {QStringLiteral("/k"), exePath};
+    } else {
+        program = QStandardPaths::findExecutable(QStringLiteral("pwsh.exe"));
+        if (program.isEmpty()) {
+            program = QStandardPaths::findExecutable(QStringLiteral("powershell.exe"));
+        }
+        if (program.isEmpty()) {
+            outputPanel_->appendProgramOutput(
+                tr("Neither pwsh.exe nor powershell.exe was found on PATH."));
+            return;
+        }
+        // & 'path' — the call operator handles paths with spaces.
+        args = {QStringLiteral("-NoExit"), QStringLiteral("-Command"),
+                QStringLiteral("& '%1'").arg(exePath)};
+    }
+
+    // Same PATH handling as the embedded runner: the program still needs its
+    // toolchain's runtime DLLs wherever it ends up running.
+    QString runtimeBinDir = kMingwBin;
+    if (const auto kit = activeKit(); kit.has_value() && !isMsvcKit(*kit)) {
+        const QString dir = QFileInfo(kit->cppCompiler).absolutePath();
+        if (!dir.isEmpty()) {
+            runtimeBinDir = dir;
+        }
+    }
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("PATH"),
+               runtimeBinDir + QDir::listSeparator()
+                   + env.value(QStringLiteral("PATH")));
+
+    // Detached: the terminal window belongs to the child, the IDE captures
+    // nothing. The GUI parent has no console, so the terminal allocates one.
+    QProcess launcher;
+    launcher.setProgram(program);
+    launcher.setArguments(args);
+    launcher.setWorkingDirectory(workDir);
+    launcher.setProcessEnvironment(env);
+    if (!launcher.startDetached()) {
+        outputPanel_->appendProgramOutput(
+            tr("Failed to start %1.").arg(QDir::toNativeSeparators(program)));
+        return;
+    }
+    outputPanel_->appendProgramOutput(
+        tr("--- Running in an external %1 terminal: %2 ---")
+            .arg(programOutputMode_ == QLatin1String("cmd")
+                     ? QStringLiteral("CMD") : QStringLiteral("PowerShell"),
+                 QFileInfo(exePath).absoluteFilePath()));
 }
 
 void MainWindow::updateRunActionStates()
@@ -3622,10 +3706,14 @@ void MainWindow::applyPreferences()
     lsp_->setServerPath(settings_->clangdPath());
 
     // --- run ----------------------------------------------------------------
-    // run.output: only "consolePauser" switches away from the embedded
-    // Program Output channel; unknown values fall back to it.
-    programOutputMode_ = prefs.programOutput == QLatin1String("consolePauser")
-        ? QStringLiteral("consolePauser") : QStringLiteral("program");
+    // run.output: "consolePauser" / "cmd" / "powershell" run the program in
+    // an external console; anything else (and the default) is "program",
+    // captured in the embedded Program Output channel.
+    programOutputMode_ =
+        (prefs.programOutput == QLatin1String("consolePauser")
+         || prefs.programOutput == QLatin1String("cmd")
+         || prefs.programOutput == QLatin1String("powershell"))
+        ? prefs.programOutput : QStringLiteral("program");
 
     // --- language service: completion backend -----------------------------
     completionBackend_ = prefs.completion.backend.isEmpty()

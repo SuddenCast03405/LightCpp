@@ -322,6 +322,10 @@ private:
     /// (preferences run.output = "consolePauser"). Nothing is captured; the
     /// console owns the program's input and output.
     void startWithConsolePauser(const QString& exePath, const QString& workDir);
+    /// Launch `exePath` inside an external terminal window — cmd.exe /k or
+    /// PowerShell -NoExit (preferences run.output = "cmd" / "powershell").
+    /// The terminal stays open after the program exits and owns its stdio.
+    void startInTerminal(const QString& exePath, const QString& workDir);
     /// The ConsolePauser.exe to run a given program with: one next to the
     /// program, else one next to the IDE, else the compiled-in fallback
     /// location. When found elsewhere it is copied next to the program, so

@@ -5,6 +5,8 @@
 #include <QString>
 #include <QWidget>
 
+#include <functional>
+
 class QComboBox;
 class QLabel;
 class QLineEdit;
@@ -35,7 +37,8 @@ struct ProblemEntry {
 ///   Problems        — errors/warnings pushed by clangd, as a clickable list
 ///                     that jumps to the offending source location
 ///   Debugger        — the debug session: debugger console, breakpoints and
-///                     the program's output while it runs under the debugger
+///                     the program's output while it runs under the debugger,
+///                     plus an input row feeding the debugger's console
 ///
 /// Deliberately a plain QWidget (not a QDockWidget): the panel lives inside
 /// the main window's splitter layout and can never be undocked into a
@@ -82,6 +85,9 @@ public:
     /// IDE owns is running; the Console Pauser mode runs in its own console
     /// and never touches this field).
     void setProgramInputEnabled(bool enabled);
+    /// Enable/disable the debugger-input field (enabled while a debug
+    /// session is live).
+    void setDebuggerInputEnabled(bool enabled);
 
 signals:
     /// The user activated an entry in the Problems list. Line/column are
@@ -90,14 +96,20 @@ signals:
     /// The user submitted a line of input for the running program (Enter in
     /// the input field, or the Send button).
     void programInputSubmitted(const QString& text);
+    /// The user submitted a console command for the live debug session.
+    void debuggerInputSubmitted(const QString& text);
 
 private:
     /// Refresh the drop-down labels (the Problems entry carries counts).
     void updateChannelLabels();
     /// Rebuild the Problems tree from a flat list.
     void rebuildProblemsTree(const QList<ProblemEntry>& problems);
-    /// Take the text out of the input field and announce it as program input.
-    void submitProgramInput();
+    /// Build a "log view + one-line input row" page: what the Program and
+    /// Debugger channels share. The input starts disabled; `submit` routes
+    /// the typed line (the field is cleared before `submit` runs).
+    QWidget* makeInputLogPage(QPlainTextEdit* log, QLineEdit** inputOut,
+                              const QString& placeholder,
+                              const std::function<void(const QString&)>& submit);
 
     QLabel* header_;
     QComboBox* channelCombo_;
@@ -107,6 +119,7 @@ private:
     QPlainTextEdit* buildLog_;
     QPlainTextEdit* programOutput_;
     QLineEdit* programInput_ = nullptr;  // stdin for the running program
+    QLineEdit* debuggerInput_ = nullptr;  // raw commands for the live session
     QPlainTextEdit* gitLog_;
     QPlainTextEdit* debugLog_;
     QTreeWidget* problems_;

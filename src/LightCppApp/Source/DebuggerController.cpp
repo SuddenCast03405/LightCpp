@@ -206,6 +206,7 @@ void DebuggerController::stop()
     }
     // Same teardown discipline as GitClient: disconnect our handlers first,
     // then quit/kill synchronously so no lambda can touch a dead pointer.
+    const bool wasRunning = running_;
     process_->disconnect(this);
     if (process_->state() != QProcess::NotRunning) {
         process_->write((quitCommand() + QLatin1Char('\n')).toUtf8());
@@ -220,6 +221,12 @@ void DebuggerController::stop()
     running_ = false;
     paused_ = false;
     emit logLine(tr("--- debug session ended ---"));
+    // The finished handler above is disconnected, so a manual stop would
+    // otherwise never announce its own end — anything keyed on stopped()
+    // (action states, the console input field) would stay live.
+    if (wasRunning) {
+        emit stopped();
+    }
 }
 
 bool DebuggerController::isRunning() const

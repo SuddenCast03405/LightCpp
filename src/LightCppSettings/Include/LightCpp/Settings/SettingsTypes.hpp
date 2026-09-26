@@ -199,7 +199,8 @@ struct Preferences {
     /// captures its output in the IDE's Program Output channel; anything
     /// else the App layer does not recognise is treated as "program".
     /// "consolePauser" runs it via ConsolePauser.exe in an external console
-    /// window instead.
+    /// window; "cmd" / "powershell" run it inside an external cmd.exe /
+    /// PowerShell window that stays open after the program exits.
     QString programOutput = QStringLiteral("program");
 };
 

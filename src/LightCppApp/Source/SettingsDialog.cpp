@@ -828,12 +828,16 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
     runOutputMode_ = makeCombo(QStringLiteral("prefs.run.output"), false);
     runOutputMode_->addItem(tr("Program Output"), QStringLiteral("program"));
     runOutputMode_->addItem(tr("Console Pauser"), QStringLiteral("consolePauser"));
+    runOutputMode_->addItem(tr("CMD"), QStringLiteral("cmd"));
+    runOutputMode_->addItem(tr("PowerShell"), QStringLiteral("powershell"));
     runOutputMode_->setToolTip(
         tr("How the built program runs.\n"
            "Program Output: its output is captured in the IDE's Program "
            "Output channel, with an input field for stdin.\n"
            "Console Pauser: it runs in an external console window via "
-           "ConsolePauser.exe (copied next to the program when missing)."));
+           "ConsolePauser.exe (copied next to the program when missing).\n"
+           "CMD / PowerShell: an external cmd.exe or PowerShell window runs "
+           "the program and stays open after it exits."));
     generalForm->addRow(tr("Program output"), runOutputMode_);
     column->addWidget(general);
 
