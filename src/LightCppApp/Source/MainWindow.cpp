@@ -43,6 +43,7 @@
 #include <QPair>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QSettings>
 #include <QSet>
 #include <QSplitter>
 #include <QStandardPaths>
@@ -312,6 +313,21 @@ MainWindow::MainWindow(QWidget* parent)
     connect(libClang_, &LightCpp::App::LibClangCompleter::logMessage,
             outputPanel_, &OutputPanel::appendServerLog);
 
+    // --- debugger session ---
+    debugger_ = new LightCpp::App::DebuggerController(this);
+    connect(debugger_, &LightCpp::App::DebuggerController::logLine,
+            outputPanel_, &OutputPanel::appendDebugOutput);
+    connect(debugger_, &LightCpp::App::DebuggerController::targetOutput,
+            outputPanel_, &OutputPanel::appendDebugOutput);
+    connect(debugger_, &LightCpp::App::DebuggerController::started, this, [this] {
+        outputPanel_->showChannel(OutputPanel::ChannelDebug);
+        updateRunActionStates();
+    });
+    connect(debugger_, &LightCpp::App::DebuggerController::paused,
+            this, &MainWindow::onDebugPaused);
+    connect(debugger_, &LightCpp::App::DebuggerController::stopped,
+            this, &MainWindow::onDebuggerStopped);
+
     // --- connections ---
     connect(tabWidget_, &QTabWidget::tabCloseRequested,
             this, &MainWindow::onCloseTab);
@@ -543,6 +559,65 @@ void MainWindow::createActions()
     connect(actStopRun_, &QAction::triggered,
             this, &MainWindow::onStopProgram);
 
+    // --- debugging --------------------------------------------------------
+    actToggleBreakpoint_ = new QAction(tr("Toggle &Breakpoint"), this);
+    actToggleBreakpoint_->setShortcut(QKeySequence(Qt::Key_F9));
+    actToggleBreakpoint_->setStatusTip(
+        tr("Set or clear a breakpoint on the current line (F9)"));
+    connect(actToggleBreakpoint_, &QAction::triggered,
+            this, &MainWindow::onToggleBreakpoint);
+
+    actDebugStart_ = new QAction(tr("Start &Debugging"), this);
+    actDebugStart_->setShortcut(QKeySequence(Qt::Key_F4));
+    actDebugStart_->setStatusTip(
+        tr("Run the last build under the kit's debugger (GDB, LLDB or cdb)"));
+    connect(actDebugStart_, &QAction::triggered,
+            this, &MainWindow::onStartDebugging);
+
+    actDebugStop_ = new QAction(tr("Stop &Debugging"), this);
+    actDebugStop_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+F5")));
+    actDebugStop_->setStatusTip(tr("End the debug session"));
+    actDebugStop_->setEnabled(false);
+    connect(actDebugStop_, &QAction::triggered,
+            this, &MainWindow::onStopDebugging);
+
+    actDebugContinue_ = new QAction(tr("&Continue"), this);
+    actDebugContinue_->setStatusTip(
+        tr("Resume execution (while debugging, F5 continues as well)"));
+    actDebugContinue_->setEnabled(false);
+    connect(actDebugContinue_, &QAction::triggered, this, [this] {
+        if (debugger_ != nullptr) {
+            debugger_->cont();
+        }
+    });
+
+    actDebugStepOver_ = new QAction(tr("Step &Over"), this);
+    actDebugStepOver_->setShortcut(QKeySequence(QStringLiteral("F10")));
+    actDebugStepOver_->setEnabled(false);
+    connect(actDebugStepOver_, &QAction::triggered, this, [this] {
+        if (debugger_ != nullptr) {
+            debugger_->stepOver();
+        }
+    });
+
+    actDebugStepInto_ = new QAction(tr("Step &Into"), this);
+    actDebugStepInto_->setShortcut(QKeySequence(QStringLiteral("F11")));
+    actDebugStepInto_->setEnabled(false);
+    connect(actDebugStepInto_, &QAction::triggered, this, [this] {
+        if (debugger_ != nullptr) {
+            debugger_->stepInto();
+        }
+    });
+
+    actDebugStepOut_ = new QAction(tr("Step O&ut"), this);
+    actDebugStepOut_->setShortcut(QKeySequence(QStringLiteral("Shift+F11")));
+    actDebugStepOut_->setEnabled(false);
+    connect(actDebugStepOut_, &QAction::triggered, this, [this] {
+        if (debugger_ != nullptr) {
+            debugger_->stepOut();
+        }
+    });
+
     // The build environment (compilers, debugger, clangd, ...) comes from the
     // settings' kits in config/*.json — there is no hard-coded GCC/Clang/MSVC
     // menu any more. These three actions manage the configuration files instead.
@@ -756,6 +831,17 @@ void MainWindow::createMenuBar()
     toolsMenu->addAction(actCompileRun_);
     toolsMenu->addAction(actRun_);
     toolsMenu->addAction(actStopRun_);
+
+    auto* debugMenu = menuBar()->addMenu(tr("&Debug"));
+    debugMenu->addAction(actToggleBreakpoint_);
+    debugMenu->addSeparator();
+    debugMenu->addAction(actDebugStart_);
+    debugMenu->addAction(actDebugStop_);
+    debugMenu->addSeparator();
+    debugMenu->addAction(actDebugContinue_);
+    debugMenu->addAction(actDebugStepOver_);
+    debugMenu->addAction(actDebugStepInto_);
+    debugMenu->addAction(actDebugStepOut_);
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->addAction(actToggleExplorer_);
@@ -2804,6 +2890,12 @@ void MainWindow::onCompileCurrentFile()
 
 void MainWindow::onCompileAndRun()
 {
+    // While a debug session is paused, F5 means "continue" — the same
+    // convention Visual Studio and other IDEs use.
+    if (debugger_ != nullptr && debugger_->isRunning()) {
+        debugger_->cont();
+        return;
+    }
     // The run step happens in the compiler's finished handler.
     runAfterBuild_ = true;
     onCompileCurrentFile();
@@ -2955,10 +3047,162 @@ void MainWindow::updateRunActionStates()
                           && compiler_->state() != QProcess::NotRunning;
     const bool running = runner_ != nullptr
                          && runner_->state() != QProcess::NotRunning;
+    const bool debugging = debugger_ != nullptr && debugger_->isRunning();
     if (actCompile_)    actCompile_->setEnabled(!building);
     if (actCompileRun_) actCompileRun_->setEnabled(!building && !running);
     if (actRun_)        actRun_->setEnabled(!building && !running);
     if (actStopRun_)    actStopRun_->setEnabled(running);
+    if (actDebugStart_) actDebugStart_->setEnabled(!debugging && !running);
+    if (actDebugStop_)  actDebugStop_->setEnabled(debugging);
+    if (actDebugContinue_) actDebugContinue_->setEnabled(debugging);
+    if (actDebugStepOver_) actDebugStepOver_->setEnabled(debugging);
+    if (actDebugStepInto_) actDebugStepInto_->setEnabled(debugging);
+    if (actDebugStepOut_)  actDebugStepOut_->setEnabled(debugging);
+}
+
+// ---------------------------------------------------------------------------
+// Debugging
+// ---------------------------------------------------------------------------
+
+void MainWindow::onToggleBreakpoint()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr) {
+        return;
+    }
+    const int line = ed->textCursor().blockNumber();
+    const QString path = QDir::fromNativeSeparators(ed->lintPath());
+    const QString key = path + QLatin1Char(':') + QString::number(line);
+    if (breakpointKeys_.contains(key)) {
+        breakpointKeys_.remove(key);
+        if (debugger_ != nullptr) {
+            debugger_->removeBreakpoint({path, line});
+        }
+    } else {
+        breakpointKeys_.insert(key);
+        if (debugger_ != nullptr) {
+            debugger_->addBreakpoint({path, line});
+        }
+    }
+    syncBreakpointMarkers();
+}
+
+void MainWindow::syncBreakpointMarkers()
+{
+    for (int i = 0; i < tabWidget_->count(); ++i) {
+        auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i));
+        if (ed == nullptr) {
+            continue;
+        }
+        const QString path = QDir::fromNativeSeparators(ed->lintPath());
+        const QString prefix = path + QLatin1Char(':');
+        QSet<int> lines;
+        for (const QString& key : std::as_const(breakpointKeys_)) {
+            if (key.startsWith(prefix)) {
+                lines.insert(key.mid(prefix.size()).toInt());
+            }
+        }
+        ed->setBreakpointLines(lines);
+    }
+}
+
+void MainWindow::onStartDebugging()
+{
+    if (debugger_ == nullptr || debugger_->isRunning()) {
+        return;
+    }
+    const QString exe = lastProjectExe_.isEmpty() ? lastBuildExe_
+                                                  : lastProjectExe_;
+    if (exe.isEmpty() || !QFileInfo::exists(exe)) {
+        outputPanel_->appendDebugOutput(
+            tr("Nothing to debug yet — compile first (F7)."));
+        outputPanel_->showChannel(OutputPanel::ChannelDebug);
+        return;
+    }
+    const QString debugger = resolveDebuggerPath();
+    if (debugger.isEmpty()) {
+        outputPanel_->appendDebugOutput(
+            tr("No debugger found. Set one in the kit (debugger field) or "
+               "install the Windows SDK debuggers (cdb.exe) for MSVC kits."));
+        outputPanel_->showChannel(OutputPanel::ChannelDebug);
+        return;
+    }
+    debugger_->setDebuggerPath(debugger);
+
+    QList<LightCpp::App::DebugBreakpoint> breakpoints;
+    breakpoints.reserve(breakpointKeys_.size());
+    for (const QString& key : std::as_const(breakpointKeys_)) {
+        const qsizetype sep = key.lastIndexOf(QLatin1Char(':'));
+        if (sep > 0) {
+            breakpoints.append({key.left(sep), key.mid(sep + 1).toInt()});
+        }
+    }
+    debugger_->start(exe, QFileInfo(exe).absolutePath(), breakpoints);
+    updateRunActionStates();
+}
+
+void MainWindow::onStopDebugging()
+{
+    if (debugger_ != nullptr) {
+        debugger_->stop();
+    }
+    updateRunActionStates();
+}
+
+void MainWindow::onDebuggerStopped()
+{
+    updateRunActionStates();
+}
+
+void MainWindow::onDebugPaused(const QString& file, int line)
+{
+    outputPanel_->appendDebugOutput(
+        file.isEmpty()
+            ? tr("Target paused.")
+            : tr("Target paused at %1:%2").arg(file).arg(line + 1));
+    if (!file.isEmpty() && line >= 0) {
+        jumpToLocation(file, line, 0);
+    }
+    // Pause/step states re-enable the stepping actions implicitly — they are
+    // enabled for the whole session and the debugger itself ignores stepping
+    // while the target runs.
+}
+
+QString MainWindow::resolveDebuggerPath() const
+{
+    // 1) The active kit's debugger field.
+    if (const auto kit = activeKit(); kit.has_value()
+        && !kit->debugger.isEmpty()) {
+        if (QFileInfo::exists(kit->debugger)) {
+            return kit->debugger;
+        }
+    }
+    // 2) The active kit's compiler directory (MSYS2: gdb.exe lives next to
+    // g++.exe).
+    if (const auto kit = activeKit(); kit.has_value()
+        && !kit->cppCompiler.isEmpty()) {
+        const QString candidate =
+            QFileInfo(kit->cppCompiler).absolutePath()
+            + QLatin1Char('/') + QStringLiteral("gdb.exe");
+        if (QFileInfo::exists(candidate)) {
+            return candidate;
+        }
+    }
+    // 3) MSVC kits: the Windows SDK debuggers (cdb.exe), read from the same
+    // KitsRoot10 registry value the MSVC toolchain detection uses. cdb
+    // debugs anything VS2012 (toolset v11.0) or newer produces.
+    QSettings kitsRoot(
+        QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots"),
+        QSettings::NativeFormat);
+    const QString kitsDir = kitsRoot.value(QStringLiteral("KitsRoot10")).toString();
+    if (!kitsDir.isEmpty()) {
+        const QString candidate =
+            QDir(kitsDir).filePath(QStringLiteral("Debuggers/x64/cdb.exe"));
+        if (QFileInfo::exists(candidate)) {
+            return candidate;
+        }
+    }
+    return QString();
 }
 
 void MainWindow::applyToolchainHeaders()

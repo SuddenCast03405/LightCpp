@@ -121,6 +121,15 @@ public:
     void foldAll();
     void unfoldAll();
 
+    // --- debugging --------------------------------------------------------
+    /// The set of 0-based lines carrying breakpoints in this buffer; painted
+    /// as red dots in the gutter. Replaces the previous set wholesale.
+    void setBreakpointLines(const QSet<int>& lines);
+    [[nodiscard]] const QSet<int>& breakpointLines() const noexcept
+    {
+        return breakpointLines_;
+    }
+
 public slots:
     /// Show the completion popup with `items` at the editor cursor's
     /// global position. Hides the popup if the list is empty.
@@ -259,6 +268,7 @@ private:
     QString lintPath_;
     QString encodingLabel_;
     QList<LightCpp::App::LspDiagnostic> diagnostics_;
+    QSet<int> breakpointLines_;  // 0-based lines with breakpoints (gutter dots)
 
     QList<LightCpp::Core::Fold::FoldRegion> foldRegions_;
     QList<FoldAnchor> folded_;

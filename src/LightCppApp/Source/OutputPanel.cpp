@@ -84,6 +84,7 @@ OutputPanel::OutputPanel(QWidget* parent)
     , buildLog_(makeLogView(this))
     , programOutput_(makeLogView(this))
     , gitLog_(makeLogView(this))
+    , debugLog_(makeLogView(this))
     , problems_(new QTreeWidget(this))
 {
     // --- header row: title, channel drop-down, clear ----------------------
@@ -100,6 +101,7 @@ OutputPanel::OutputPanel(QWidget* parent)
     channelCombo_->addItem(tr("Program Output"));   // ChannelProgram
     channelCombo_->addItem(tr("Git"));              // ChannelGit
     channelCombo_->addItem(tr("Problems"));         // ChannelProblems
+    channelCombo_->addItem(tr("Debugger"));         // ChannelDebug
     channelCombo_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     channelCombo_->setToolTip(tr("Choose what the output area shows"));
     connect(channelCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -124,11 +126,14 @@ OutputPanel::OutputPanel(QWidget* parent)
     buildLog_->setPlaceholderText(tr("No build output yet."));
     programOutput_->setPlaceholderText(tr("No program output yet."));
     gitLog_->setPlaceholderText(tr("No git output yet."));
+    debugLog_->setPlaceholderText(
+        tr("No debug session yet. Build the program, then Debug > Start Debugging."));
     stack_->addWidget(serverLog_);      // ChannelServer
     stack_->addWidget(buildLog_);       // ChannelBuild
     stack_->addWidget(programOutput_);  // ChannelProgram
     stack_->addWidget(gitLog_);         // ChannelGit
     stack_->addWidget(problems_);       // ChannelProblems
+    stack_->addWidget(debugLog_);       // ChannelDebug
 
     problems_->setColumnCount(2);
     problems_->setHeaderLabels({tr("Problem"), tr("Location")});
@@ -188,6 +193,11 @@ void OutputPanel::appendGitOutput(const QString& text)
     gitLog_->appendPlainText(text);
 }
 
+void OutputPanel::appendDebugOutput(const QString& text)
+{
+    debugLog_->appendPlainText(text);
+}
+
 void OutputPanel::showChannel(Channel channel)
 {
     const int index = int(channel);
@@ -214,6 +224,7 @@ void OutputPanel::setOutputFont(const QFont& font)
     buildLog_->setFont(font);
     programOutput_->setFont(font);
     gitLog_->setFont(font);
+    debugLog_->setFont(font);
     problems_->setFont(font);
 }
 
@@ -224,6 +235,7 @@ void OutputPanel::clearOutput()
     case ChannelBuild:   buildLog_->clear(); break;
     case ChannelProgram: programOutput_->clear(); break;
     case ChannelGit:     gitLog_->clear(); break;
+    case ChannelDebug:   debugLog_->clear(); break;
     default:             setProblems({}); break;
     }
 }

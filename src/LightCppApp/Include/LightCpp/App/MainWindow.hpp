@@ -9,6 +9,7 @@
 #include <QSet>
 #include <QString>
 
+#include "LightCpp/App/DebuggerController.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/Project/BuildConfiguration.hpp"
@@ -85,6 +86,22 @@ private slots:
     void onRunCurrentFile();
     /// Kill a program started by onRunCurrentFile() / onCompileAndRun().
     void onStopProgram();
+    // --- debugging ---------------------------------------------------------
+    /// F9 on the current editor line: plant or remove a breakpoint.
+    void onToggleBreakpoint();
+    /// Launch the configured debugger on the last built binary.
+    void onStartDebugging();
+    /// Kill the debug session.
+    void onStopDebugging();
+    /// The target hit a breakpoint or signal: jump to the reported position.
+    void onDebugPaused(const QString& file, int line);
+    /// The debugger process ended: restore the action states.
+    void onDebuggerStopped();
+    /// Repaint every open editor's gutter from breakpointKeys_.
+    void syncBreakpointMarkers();
+    /// Debugger for the active kit (kit.debugger / the toolchain directory /
+    /// the Windows SDK cdb for MSVC kits), or empty when none is found.
+    [[nodiscard]] QString resolveDebuggerPath() const;
     /// Jump to the source position of a Problems-list entry.
     /// `line` / `column` are 0-based.
     void onProblemActivated(const QString& filePath, int line, int column);
@@ -372,6 +389,13 @@ private:
     QAction* actCompileRun_ = nullptr;     // compile, then run (F5)
     QAction* actRun_ = nullptr;            // run the last build (Ctrl+F5)
     QAction* actStopRun_ = nullptr;        // kill the running program (Shift+F5)
+    QAction* actDebugStart_ = nullptr;     // start a debug session (F4)
+    QAction* actDebugStop_ = nullptr;      // kill the debug session
+    QAction* actDebugContinue_ = nullptr;  // resume after a breakpoint
+    QAction* actDebugStepOver_ = nullptr;  // F10
+    QAction* actDebugStepInto_ = nullptr;  // F11
+    QAction* actDebugStepOut_ = nullptr;   // Shift+F11
+    QAction* actToggleBreakpoint_ = nullptr;  // F9
     QAction* actFold_ = nullptr;           // collapse the block at the caret
     QAction* actUnfold_ = nullptr;         // expand the block around the caret
     QAction* actFoldAll_ = nullptr;
@@ -454,6 +478,11 @@ private:
     // --- single-file compiler / runner ---
     QProcess* compiler_ = nullptr;   // lazily created; reused across builds
     QProcess* runner_ = nullptr;     // lazily created; reused across runs
+    /// The debug session (gdb / lldb / cdb). Created in the constructor.
+    LightCpp::App::DebuggerController* debugger_ = nullptr;
+    /// Breakpoints as "normalizedPath:line" keys — survives tab switches and
+    /// is replayed into every new debug session.
+    QSet<QString> breakpointKeys_;
     /// Set by onCompileAndRun(): run the produced binary once the build
     /// finishes successfully.
     bool runAfterBuild_ = false;

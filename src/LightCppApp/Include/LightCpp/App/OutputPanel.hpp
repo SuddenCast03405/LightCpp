@@ -23,7 +23,7 @@ struct ProblemEntry {
     QString code;
 };
 
-/// Output area.  Five switchable channels behind one drop-down:
+/// Output area.  Six switchable channels behind one drop-down:
 ///
 ///   Clangd Log      — the language server's own log (stderr + window/logMessage)
 ///   Build Log       — compiler output and IDE file operations
@@ -32,6 +32,8 @@ struct ProblemEntry {
 ///   Git             — status, diffs and commit output
 ///   Problems        — errors/warnings pushed by clangd, as a clickable list
 ///                     that jumps to the offending source location
+///   Debugger        — the debug session: debugger console, breakpoints and
+///                     the program's output while it runs under the debugger
 ///
 /// Deliberately a plain QWidget (not a QDockWidget): the panel lives inside
 /// the main window's splitter layout and can never be undocked into a
@@ -46,6 +48,7 @@ public:
         ChannelProgram = 2,  // the program's own stdout/stderr
         ChannelGit = 3,      // git status / diff / commit
         ChannelProblems = 4, // diagnostics list
+        ChannelDebug = 5,    // debug session console
     };
 
     explicit OutputPanel(QWidget* parent = nullptr);
@@ -58,6 +61,8 @@ public:
     void appendProgramOutput(const QString& text);
     /// Append a line to the git channel.
     void appendGitOutput(const QString& text);
+    /// Append a line to the debugger channel.
+    void appendDebugOutput(const QString& text);
     /// Replace the Problems list. An empty list shows "no problems".
     void setProblems(const QList<ProblemEntry>& problems);
 
@@ -90,5 +95,6 @@ private:
     QPlainTextEdit* buildLog_;
     QPlainTextEdit* programOutput_;
     QPlainTextEdit* gitLog_;
+    QPlainTextEdit* debugLog_;
     QTreeWidget* problems_;
 };

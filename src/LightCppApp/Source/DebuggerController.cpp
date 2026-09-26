@@ -1,0 +1,530 @@
+// DebuggerController — implementation. See the header for the contract.
+
+#include "LightCpp/App/DebuggerController.hpp"
+
+#include <QDir>
+#include <QFileInfo>
+#include <QProcessEnvironment>
+#include <QRegularExpression>
+
+namespace {
+
+using LightCpp::App::DebuggerController;
+using LightCpp::App::DebugBreakpoint;
+
+/// The file name fragment each backend is recognised by.
+DebuggerController::Backend backendForPath(const QString& exePath)
+{
+    const QString name = QFileInfo(exePath).fileName().toLower();
+    if (name.startsWith(QLatin1String("gdb"))) {
+        return DebuggerController::Backend::Gdb;
+    }
+    if (name.startsWith(QLatin1String("lldb")) || name == QLatin1String("lldb-mi")) {
+        return DebuggerController::Backend::Lldb;
+    }
+    if (name == QLatin1String("cdb.exe") || name == QLatin1String("cdb")
+        || name.startsWith(QLatin1String("cdb"))) {
+        return DebuggerController::Backend::Cdb;
+    }
+    return DebuggerController::Backend::Unknown;
+}
+
+/// MI string values escape backslashes and quotes; this undoes the common
+/// subset GDB actually emits for file paths.
+QString unescapeMi(const QString& value)
+{
+    QString out;
+    out.reserve(value.size());
+    for (int i = 0; i < value.size(); ++i) {
+        const QChar ch = value.at(i);
+        if (ch != QLatin1Char('\\') || i + 1 >= value.size()) {
+            out.append(ch);
+            continue;
+        }
+        const QChar next = value.at(++i);
+        switch (next.unicode()) {
+        case '\\': out.append(QLatin1Char('\\')); break;
+        case '"':  out.append(QLatin1Char('"')); break;
+        case 'n':  out.append(QLatin1Char('\n')); break;
+        case 't':  out.append(QLatin1Char('\t')); break;
+        default:   out.append(QLatin1Char('\\')).append(next); break;
+        }
+    }
+    return out;
+}
+
+/// Normalise a debugger-reported path for comparison with editor paths:
+/// forward slashes, lowercased drive letter matches whatever QFileInfo does.
+QString normalizePath(const QString& path)
+{
+    return QDir::fromNativeSeparators(path);
+}
+
+}  // namespace
+
+namespace LightCpp::App {
+
+DebuggerController::DebuggerController(QObject* parent) : QObject(parent) {}
+
+DebuggerController::~DebuggerController()
+{
+    stop();
+}
+
+void DebuggerController::setDebuggerPath(const QString& path)
+{
+    if (debuggerPath_ == path) {
+        return;
+    }
+    debuggerPath_ = path;
+    backend_ = backendForPath(path);
+}
+
+QString DebuggerController::backendName() const
+{
+    switch (backend_) {
+    case Backend::Gdb:   return QStringLiteral("GDB/MI");
+    case Backend::Lldb:  return QStringLiteral("LLDB");
+    case Backend::Cdb:   return QStringLiteral("cdb");
+    default:             return QStringLiteral("unknown");
+    }
+}
+
+bool DebuggerController::isSupportedDebugger(const QString& exePath)
+{
+    return backendForPath(exePath) != Backend::Unknown;
+}
+
+bool DebuggerController::start(const QString& exePath, const QString& workDir,
+                               const QList<DebugBreakpoint>& breakpoints)
+{
+    if (isRunning()) {
+        return true;  // one session at a time
+    }
+    if (debuggerPath_.isEmpty()
+        || !QFileInfo::exists(debuggerPath_)
+        || backend_ == Backend::Unknown) {
+        emit logLine(tr("debugger not usable: %1")
+                         .arg(QDir::toNativeSeparators(debuggerPath_)));
+        return false;
+    }
+    if (!QFileInfo::exists(exePath)) {
+        emit logLine(tr("debug target not found: %1")
+                         .arg(QDir::toNativeSeparators(exePath)));
+        return false;
+    }
+
+    exePath_ = exePath;
+    paused_ = false;
+    pendingCommands_ = startCommands(breakpoints);
+
+    process_ = new QProcess(this);
+    process_->setProcessChannelMode(QProcess::MergedChannels);
+    // The debugger usually lives in a toolchain directory whose DLLs must be
+    // resolvable (MSYS2 gdb needs its siblings).
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    const QString debuggerDir = QFileInfo(debuggerPath_).absolutePath();
+    env.insert(QStringLiteral("PATH"),
+               debuggerDir + QDir::listSeparator() + env.value(QStringLiteral("PATH")));
+    process_->setProcessEnvironment(env);
+    if (!workDir.isEmpty()) {
+        process_->setWorkingDirectory(workDir);
+    }
+
+    connect(process_, &QProcess::readyRead,
+            this, &DebuggerController::onReadyRead);
+    connect(process_, &QProcess::errorOccurred,
+            this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            emit logLine(tr("failed to start debugger: %1").arg(debuggerPath_));
+            running_ = false;
+            stop();
+            emit stopped();
+        }
+    });
+    connect(process_, &QProcess::finished, this, [this](int, QProcess::ExitStatus) {
+        emit stopped();
+        if (process_ == sender()) {
+            process_->deleteLater();
+            process_ = nullptr;
+        }
+        running_ = false;
+        paused_ = false;
+    });
+
+    running_ = true;
+    emit logLine(tr("--- %1 debugging %2 ---")
+                     .arg(backendName(), QDir::toNativeSeparators(exePath)));
+
+    QStringList arguments;
+    switch (backend_) {
+    case Backend::Gdb:
+        arguments << QStringLiteral("--interpreter=mi2")
+                  << QStringLiteral("--quiet") << exePath;
+        break;
+    case Backend::Lldb:
+        arguments << exePath;
+        break;
+    case Backend::Cdb:
+        // -lines: source-line breakpoints; -y: symbol path from _NT_SYMBOL_PATH
+        // (left alone — local builds are debugged without a symbol server).
+        arguments << QStringLiteral("-lines") << exePath;
+        break;
+    default:
+        break;
+    }
+
+    process_->start(debuggerPath_, arguments);
+    if (process_->state() == QProcess::NotRunning) {
+        running_ = false;
+        emit logLine(tr("debugger did not start"));
+        return false;
+    }
+
+    // The initial command batch (breakpoints + run). QProcess buffers writes
+    // made before the process actually starts, so sending now is safe.
+    for (const QString& command : std::as_const(pendingCommands_)) {
+        process_->write((command + QLatin1Char('\n')).toUtf8());
+    }
+    pendingCommands_.clear();
+    emit started();
+    return true;
+}
+
+void DebuggerController::stop()
+{
+    if (process_ == nullptr) {
+        return;
+    }
+    // Same teardown discipline as GitClient: disconnect our handlers first,
+    // then quit/kill synchronously so no lambda can touch a dead pointer.
+    process_->disconnect(this);
+    if (process_->state() != QProcess::NotRunning) {
+        process_->write((quitCommand() + QLatin1Char('\n')).toUtf8());
+        process_->waitForFinished(2000);
+    }
+    if (process_->state() != QProcess::NotRunning) {
+        process_->kill();
+        process_->waitForFinished(2000);
+    }
+    process_->deleteLater();
+    process_ = nullptr;
+    running_ = false;
+    paused_ = false;
+    emit logLine(tr("--- debug session ended ---"));
+}
+
+bool DebuggerController::isRunning() const
+{
+    return running_ && process_ != nullptr
+           && process_->state() != QProcess::NotRunning;
+}
+
+void DebuggerController::addBreakpoint(const DebugBreakpoint& bp)
+{
+    if (isRunning()) {
+        writeCommand(addBreakpointCommand(bp));
+    }
+}
+
+void DebuggerController::removeBreakpoint(const DebugBreakpoint& bp)
+{
+    if (isRunning()) {
+        writeCommand(removeBreakpointCommand(bp));
+    }
+}
+
+void DebuggerController::cont()
+{
+    if (isRunning() && paused_) {
+        writeCommand(contCommand());
+        paused_ = false;
+        emit resumed();
+    }
+}
+
+void DebuggerController::stepOver() { if (isRunning() && paused_) { writeCommand(stepOverCommand()); paused_ = false; emit resumed(); } }
+void DebuggerController::stepInto() { if (isRunning() && paused_) { writeCommand(stepIntoCommand()); paused_ = false; emit resumed(); } }
+void DebuggerController::stepOut()  { if (isRunning() && paused_) { writeCommand(stepOutCommand());  paused_ = false; emit resumed(); } }
+
+void DebuggerController::writeCommand(const QString& command)
+{
+    if (process_ != nullptr
+        && process_->state() != QProcess::NotRunning) {
+        process_->write((command + QLatin1Char('\n')).toUtf8());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-backend command dialects
+// ---------------------------------------------------------------------------
+
+QString DebuggerController::breakpointLocation(const DebugBreakpoint& bp) const
+{
+    // Forward slashes for the Unix-ish backends, native separators for cdb;
+    // all of them accept forward slashes, so keep one form.
+    return QDir::fromNativeSeparators(bp.filePath) + QLatin1Char(':')
+           + QString::number(bp.line + 1);
+}
+
+QStringList DebuggerController::startCommands(
+    const QList<DebugBreakpoint>& breakpoints) const
+{
+    QStringList commands;
+    switch (backend_) {
+    case Backend::Gdb:
+        for (const DebugBreakpoint& bp : breakpoints) {
+            commands << QStringLiteral("-break-insert \"%1\"")
+                            .arg(breakpointLocation(bp));
+        }
+        commands << QStringLiteral("-exec-run");
+        break;
+    case Backend::Lldb:
+        for (const DebugBreakpoint& bp : breakpoints) {
+            commands << QStringLiteral("breakpoint set --file \"%1\" --line %2")
+                            .arg(QFileInfo(bp.filePath).fileName())
+                            .arg(bp.line + 1);
+        }
+        commands << QStringLiteral("run");
+        break;
+    case Backend::Cdb:
+        // .lines enables source-line display so breakpoint hits show the
+        // source line; `bp `file:line`` plants each breakpoint.
+        commands << QStringLiteral(".lines");
+        for (const DebugBreakpoint& bp : breakpoints) {
+            commands << QStringLiteral("bp `%1`").arg(breakpointLocation(bp));
+        }
+        commands << QStringLiteral("g");
+        break;
+    default:
+        break;
+    }
+    return commands;
+}
+
+QString DebuggerController::contCommand() const
+{
+    switch (backend_) {
+    case Backend::Gdb:  return QStringLiteral("-exec-continue");
+    case Backend::Cdb:  return QStringLiteral("g");
+    default:            return QStringLiteral("continue");
+    }
+}
+
+QString DebuggerController::stepOverCommand() const
+{
+    switch (backend_) {
+    case Backend::Gdb:  return QStringLiteral("-exec-next");
+    case Backend::Cdb:  return QStringLiteral("p");
+    default:            return QStringLiteral("thread step-over");
+    }
+}
+
+QString DebuggerController::stepIntoCommand() const
+{
+    switch (backend_) {
+    case Backend::Gdb:  return QStringLiteral("-exec-step");
+    case Backend::Cdb:  return QStringLiteral("t");
+    default:            return QStringLiteral("thread step-in");
+    }
+}
+
+QString DebuggerController::stepOutCommand() const
+{
+    switch (backend_) {
+    case Backend::Gdb:  return QStringLiteral("-exec-finish");
+    case Backend::Cdb:  return QStringLiteral("gu");
+    default:            return QStringLiteral("thread step-out");
+    }
+}
+
+QString DebuggerController::quitCommand() const
+{
+    switch (backend_) {
+    case Backend::Gdb:  return QStringLiteral("-gdb-exit");
+    case Backend::Cdb:  return QStringLiteral("q");
+    default:            return QStringLiteral("quit");
+    }
+}
+
+QString DebuggerController::addBreakpointCommand(const DebugBreakpoint& bp) const
+{
+    switch (backend_) {
+    case Backend::Gdb:  return QStringLiteral("-break-insert \"%1\"")
+                                    .arg(breakpointLocation(bp));
+    case Backend::Cdb:  return QStringLiteral("bp `%1`").arg(breakpointLocation(bp));
+    default:            return QStringLiteral("breakpoint set --file \"%1\" --line %2")
+                                    .arg(QFileInfo(bp.filePath).fileName())
+                                    .arg(bp.line + 1);
+    }
+}
+
+QString DebuggerController::removeBreakpointCommand(const DebugBreakpoint& bp) const
+{
+    switch (backend_) {
+    case Backend::Gdb:
+        // MI's -break-delete wants a breakpoint number we do not track; the
+        // console `clear` command deletes by location, which is what we have.
+        return QStringLiteral("clear %1").arg(breakpointLocation(bp));
+    case Backend::Cdb:
+        return QStringLiteral("bc *");  // cdb has no by-location delete; clear all
+    default:
+        return QStringLiteral("breakpoint delete %1.%2")
+            .arg(QFileInfo(bp.filePath).fileName()).arg(bp.line + 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Output handling
+// ---------------------------------------------------------------------------
+
+void DebuggerController::onReadyRead()
+{
+    if (process_ == nullptr) {
+        return;
+    }
+    outputBuffer_ += process_->readAll();
+    // Drain every complete line; one chunk can carry several MI records and
+    // gdb stays quiet after "*running", so leftovers would never be seen.
+    for (;;) {
+        const qsizetype newline = outputBuffer_.indexOf(u'\n');
+        if (newline < 0) {
+            break;
+        }
+        QString line = QString::fromLocal8Bit(outputBuffer_.left(newline));
+        outputBuffer_.remove(0, newline + 1);
+        handleLine(line.remove(QLatin1Char('\r')));
+    }
+    // No complete line yet — but a prompt (cdb's `0:000>`, lldb's `(lldb)`)
+    // ends a chunk without a newline; flush it as a line.
+    const QString pending = QString::fromLocal8Bit(outputBuffer_);
+    if (pending.contains(QLatin1String("0:000>"))
+        || pending.contains(QLatin1String("(lldb)"))) {
+        outputBuffer_.clear();
+        handleLine(pending);
+    }
+}
+
+void DebuggerController::handleLine(const QString& line)
+{
+    emit logLine(line);
+    switch (backend_) {
+    case Backend::Gdb:  handleGdbLine(line); break;
+    case Backend::Lldb: handleLldbLine(line); break;
+    case Backend::Cdb:  handleCdbLine(line); break;
+    default:            break;
+    }
+}
+
+void DebuggerController::handleGdbLine(const QString& line)
+{
+    // Console stream output: ~"text"
+    if (line.startsWith(QLatin1String("~\""))) {
+        const int end = line.lastIndexOf(QLatin1Char('"'));
+        if (end > 2) {
+            emit logLine(unescapeMi(line.mid(2, end - 2)));
+        }
+        return;
+    }
+    // Target (program) output: @"text" or ~"text" depending on tty setup.
+    if (line.startsWith(QLatin1String("@\""))) {
+        const int end = line.lastIndexOf(QLatin1Char('"'));
+        if (end > 2) {
+            emit targetOutput(unescapeMi(line.mid(2, end - 2)));
+        }
+        return;
+    }
+    // *stopped,reason="breakpoint-hit",...,frame={...,file="E:/x/f.cpp",line="12",...}
+    if (line.startsWith(QLatin1String("*stopped"))) {
+        // The program ending normally also arrives as *stopped — but there
+        // is no frame to jump to and "paused" would be the wrong state.
+        if (line.contains(QLatin1String("reason=\"exited-normally\""))
+            || line.contains(QLatin1String("reason=\"exited\""))) {
+            paused_ = false;
+            emit logLine(tr("target exited"));
+            return;
+        }
+        paused_ = true;
+        static const QRegularExpression filePattern(
+            QStringLiteral("file=\"([^\"]*)\""));
+        static const QRegularExpression linePattern(
+            QStringLiteral("line=\"(\\d+)\""));
+        const auto fileMatch = filePattern.match(line);
+        const auto lineMatch = linePattern.match(line);
+        QString file;
+        int lineNumber = -1;
+        if (fileMatch.hasMatch()) {
+            file = normalizePath(unescapeMi(fileMatch.captured(1)));
+        }
+        if (lineMatch.hasMatch()) {
+            lineNumber = lineMatch.captured(1).toInt() - 1;  // MI is 1-based
+        }
+        emit paused(file, lineNumber);
+        return;
+    }
+    if (line.startsWith(QLatin1String("^error"))) {
+        emit logLine(tr("debugger command failed: %1").arg(line));
+        return;
+    }
+    if (line.startsWith(QLatin1String("*running"))) {
+        paused_ = false;
+        emit resumed();
+    }
+}
+
+void DebuggerController::handleLldbLine(const QString& line)
+{
+    // "Process 1234 stopped" + "stop reason = breakpoint 1.1", followed by
+    // "frame #0: 0x... app`main at main.cpp:8".
+    if (line.contains(QLatin1String("stop reason ="))) {
+        paused_ = true;
+        return;
+    }
+    if (line.contains(QLatin1String("frame #"))
+        && line.contains(QLatin1String(" at "))) {
+        static const QRegularExpression framePattern(
+            QStringLiteral("at ([^:]+):(\\d+)"));
+        const auto match = framePattern.match(line);
+        if (match.hasMatch()) {
+            emit paused(normalizePath(match.captured(1)),
+                        match.captured(2).toInt() - 1);
+            return;
+        }
+    }
+    if (line.contains(QLatin1String("Process "))
+        && line.contains(QLatin1String("exited"))) {
+        paused_ = false;
+        emit logLine(tr("target exited"));
+    }
+}
+
+void DebuggerController::handleCdbLine(const QString& line)
+{
+    // "Breakpoint 0 hit" — then cdb prints registers and, with .lines, the
+    // source line "E:\path\file.cpp:12".
+    static const QRegularExpression bpHit(
+        QStringLiteral("Breakpoint\\s+\\d+\\s+hit"));
+    if (bpHit.match(line).hasMatch()) {
+        paused_ = true;
+        pendingCdbBreakpoint_ = true;
+        return;
+    }
+    if (paused_ && pendingCdbBreakpoint_) {
+        // The source line follows the register dump: look for file:line.
+        static const QRegularExpression srcLine(
+            QStringLiteral("([A-Za-z]:\\\\[^:]+\\.(?:cpp|c|cc|cxx|h|hpp)):(\\d+)"));
+        const auto match = srcLine.match(line);
+        if (match.hasMatch()) {
+            pendingCdbBreakpoint_ = false;
+            emit paused(normalizePath(match.captured(1)),
+                        match.captured(2).toInt() - 1);
+        }
+        return;
+    }
+    if (line.contains(QLatin1String(" exited, returning "))) {
+        paused_ = false;
+        emit logLine(tr("target exited"));
+    }
+}
+
+}  // namespace LightCpp::App

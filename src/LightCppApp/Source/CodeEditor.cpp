@@ -338,6 +338,15 @@ void CodeEditor::updateExtraSelections()
     lineNumberArea_->update();
 }
 
+void CodeEditor::setBreakpointLines(const QSet<int>& lines)
+{
+    if (breakpointLines_ == lines) {
+        return;
+    }
+    breakpointLines_ = lines;
+    updateExtraSelections();  // keeps the gutter repaint simple and central
+}
+
 void CodeEditor::setDiagnostics(const QList<LightCpp::App::LspDiagnostic>& diagnostics)
 {
     diagnostics_ = diagnostics;
@@ -1500,6 +1509,16 @@ void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event)
                              lineNumberArea_->width() - 2 - kFoldColumnWidth,
                              fontMetrics().height(),
                              Qt::AlignRight | Qt::AlignVCenter, number);
+
+            // Breakpoint marker: a filled red dot at the far left of the
+            // gutter, left of the fold strip.
+            if (breakpointLines_.contains(blockNumber)) {
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(Qt::red));
+                painter.drawEllipse(2, top + qMax(0, int((bottom - top) / 2) - 4),
+                                    8, 8);
+                painter.setBrush(Qt::NoBrush);
+            }
 
             // Diagnostic marker, just right of the fold strip.
             const int sev = lineSeverity.value(blockNumber, 0);
