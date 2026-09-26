@@ -186,6 +186,13 @@ private:
     /// Delete both halves of an empty pair — `(|)` + Backspace removes the
     /// pair instead of leaving a stray `)`. Returns true when handled.
     bool backspaceEmptyPair();
+    /// Smart Backspace: when only whitespace sits between the line start and
+    /// the caret, one Backspace removes a whole indent unit (back to the
+    /// previous tab stop — a 4-space step for space indentation, one tab for
+    /// tab indentation). Returns true when handled; anything else (text
+    /// before the caret, a selection, column 0) falls through to the
+    /// default single-character delete.
+    bool smartBackspace();
     /// Auto-indent on Enter: the new line inherits the current line's
     /// indentation, one level deeper when the text before the caret ends
     /// with `{`. When the auto-inserted `}` sits right after the caret

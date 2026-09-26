@@ -579,6 +579,49 @@ bool CodeEditor::backspaceEmptyPair()
     return true;
 }
 
+bool CodeEditor::smartBackspace()
+{
+    if (isReadOnly()) {
+        return false;
+    }
+    QTextCursor cursor = textCursor();
+    if (cursor.hasSelection()) {
+        return false;
+    }
+    const int col = cursor.positionInBlock();
+    if (col <= 0) {
+        return false;
+    }
+    const QString line = cursor.block().text();
+    // Only whitespace between the line start and the caret turns Backspace
+    // into a dedent; with real text before the caret it stays a normal
+    // single-character delete.
+    for (int i = 0; i < col; ++i) {
+        const QChar ch = line.at(i);
+        if (ch != QLatin1Char(' ') && ch != QLatin1Char('\t')) {
+            return false;
+        }
+    }
+    // A leading tab already IS one indent unit — the default delete removes
+    // it in one press, so there is nothing smarter to do.
+    if (line.at(col - 1) == QLatin1Char('\t')) {
+        return false;
+    }
+    // All spaces: delete back to the previous tab stop (the 4-space indent
+    // unit this editor displays). col=4 -> 4, col=5..7 -> to col 4, col=2 -> 2.
+    const int remove = col - 4 * ((col - 1) / 4);
+    if (remove <= 0) {
+        return false;
+    }
+    cursor.beginEditBlock();
+    cursor.setPosition(cursor.position() - remove);
+    cursor.setPosition(cursor.position() + remove, QTextCursor::KeepAnchor);
+    cursor.removeSelectedText();
+    cursor.endEditBlock();
+    setTextCursor(cursor);
+    return true;
+}
+
 bool CodeEditor::autoIndentOnReturn()
 {
     if (isReadOnly()) {
@@ -755,14 +798,16 @@ void CodeEditor::keyPressEvent(QKeyEvent* event)
         return;
     }
 
-    // Backspace between the two halves of an empty pair removes both.
-    if (key == Qt::Key_Backspace && !event->isAutoRepeat()
-        && backspaceEmptyPair()) {
-        completionIdleTimer_->stop();
-        if (popup_ && popup_->isVisible()) {
-            dismissPopup();
+    // Backspace between the two halves of an empty pair removes both;
+    // over leading whitespace it dedents a whole indent unit.
+    if (key == Qt::Key_Backspace && !event->isAutoRepeat()) {
+        if (backspaceEmptyPair() || smartBackspace()) {
+            completionIdleTimer_->stop();
+            if (popup_ && popup_->isVisible()) {
+                dismissPopup();
+            }
+            return;
         }
-        return;
     }
 
     // A `}` typed at the start of an indented line dedents first, so it
@@ -1034,28 +1079,43 @@ void CodeEditor::applyCompletionItem(const LightCpp::App::LspCompletionItem& ite
     // If the cursor is right after a trigger char (".", ":", ">"), do not
     // treat the trigger as a partial identifier — leave it alone.
     int i = posInBlock - 1;
+    bool replacePrefix = true;
     if (i >= 0) {
         const QChar prevCh = blockText.at(i);
         if (prevCh == '.' || prevCh == ':' || prevCh == '>') {
             // Insert after the trigger; no prefix to replace.
-            c.insertText(item.insertText);
-            setTextCursor(c);
-            return;
+            replacePrefix = false;
         }
     }
-    // Otherwise: select the identifier chars before the cursor and replace.
-    while (i >= 0) {
-        const QChar ch = blockText.at(i);
-        if (ch.isLetterOrNumber() || ch == '_') {
-            --i;
-        } else {
-            break;
+    if (replacePrefix) {
+        // Otherwise: select the identifier chars before the cursor and replace.
+        while (i >= 0) {
+            const QChar ch = blockText.at(i);
+            if (ch.isLetterOrNumber() || ch == '_') {
+                --i;
+            } else {
+                break;
+            }
         }
+        const int wordStart = blockPos + i + 1;
+        c.setPosition(wordStart);
+        c.setPosition(blockPos + posInBlock, QTextCursor::KeepAnchor);
     }
-    const int wordStart = blockPos + i + 1;
-    c.setPosition(wordStart);
-    c.setPosition(blockPos + posInBlock, QTextCursor::KeepAnchor);
-    c.insertText(item.insertText);
+
+    const QString insert = item.insertText.isEmpty() ? item.label : item.insertText;
+    // A function/method/constructor completes with its call parentheses and
+    // the caret parked between them, ready for the arguments. An insertion
+    // that already carries "(" (snippets do) or an existing "(" right after
+    // the caret are left alone.
+    const bool callable = item.kind == 2   // Method
+                       || item.kind == 3   // Function
+                       || item.kind == 4;  // Constructor
+    const bool addParens = callable && !insert.contains(QLatin1Char('('))
+                           && characterAfter(c) != QLatin1Char('(');
+    c.insertText(addParens ? insert + QStringLiteral("()") : insert);
+    if (addParens) {
+        c.movePosition(QTextCursor::PreviousCharacter);
+    }
     setTextCursor(c);
 }
 
