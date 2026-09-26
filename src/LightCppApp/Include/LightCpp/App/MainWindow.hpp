@@ -8,6 +8,7 @@
 #include <QPointer>
 #include <QSet>
 #include <QString>
+#include <QByteArray>
 
 #include "LightCpp/App/DebuggerController.hpp"
 #include "LightCpp/App/ConsoleDecoder.hpp"
@@ -232,6 +233,12 @@ private:
     void setEncodingInfo(CodeEditor* editor, const QString& encodingName);
     /// Re-open the current editor's file with a forced encoding.
     void reloadWithEncoding(LightCpp::Text::TextEncoding encoding);
+    /// Encode the editor's buffer for saving in the tab's own encoding
+    /// (the encoding drop-down selection), including the CRLF translation
+    /// and the UTF-16/32 byte-order mark. nullopt (after showing an error
+    /// message) when the encoding cannot represent the text — the caller
+    /// must not write a half-converted file in that case.
+    [[nodiscard]] std::optional<QByteArray> encodedSavePayload(CodeEditor* editor);
     /// Push the editor's current text to the language server (debounced).
     void scheduleLint(CodeEditor* editor);
     /// Show `filePath` at (line, column): focus the tab that already holds it
@@ -318,13 +325,18 @@ private:
     [[nodiscard]] BuildTarget resolveBuildTarget(CodeEditor* editor) const;
     /// Launch `exePath`, capturing its output into the Program Output channel.
     void startProgram(const QString& exePath, const QString& workDir);
+    /// Create the embedded program runner (a merged-channel QProcess whose
+    /// output goes through the run decoder) exactly once. Used both by the
+    /// captured Program Output mode and by embedded terminal modes.
+    QProcess* ensureProgramRunner();
     /// Launch `exePath` through ConsolePauser.exe in its own console window
     /// (preferences run.output = "consolePauser"). Nothing is captured; the
     /// console owns the program's input and output.
     void startWithConsolePauser(const QString& exePath, const QString& workDir);
-    /// Launch `exePath` inside an external terminal window — cmd.exe /k or
-    /// PowerShell -NoExit (preferences run.output = "cmd" / "powershell").
-    /// The terminal stays open after the program exits and owns its stdio.
+    /// Launch `exePath` inside a user-defined terminal from the editable
+    /// list (preferences run.output = a terminal id). Embedded terminals are
+    /// captured by the Program Output channel; non-embedded ones open their
+    /// own console window. Either way the IDE keeps no input field.
     void startInTerminal(const QString& exePath, const QString& workDir);
     /// The ConsolePauser.exe to run a given program with: one next to the
     /// program, else one next to the IDE, else the compiled-in fallback
@@ -507,8 +519,14 @@ private:
     LightCpp::App::ConsoleDecoder buildDecoder_;
     LightCpp::App::ConsoleDecoder projectBuildDecoder_;
     LightCpp::App::ConsoleDecoder runDecoder_;
-    /// preferences.run.output — "program" (default) or "consolePauser".
+    /// preferences.run.output — "program" (default), "consolePauser", or
+    /// the id of a terminal from the editable list.
     QString programOutputMode_ = QStringLiteral("program");
+    /// The selected terminal's fields, valid when programOutputMode_ refers
+    /// to a terminal id (not "program"/"consolePauser").
+    QString runTerminalName_;
+    QString runTerminalCommand_;
+    bool runTerminalEmbedded_ = true;
     /// Debug/Release, at the far right of the toolbar.
     QComboBox* configCombo_ = nullptr;
     /// The active kit, at the right of the toolbar next to it.

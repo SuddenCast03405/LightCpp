@@ -343,6 +343,50 @@ TEST(SettingsJson, RunOutputParsesAndRoundTrips)
     EXPECT_EQ(roundTripped.programOutput, "consolePauser");
 }
 
+TEST(SettingsJson, RunTerminalsParseAndRoundTrip)
+{
+    // Absent -> the two default Windows terminals are seeded.
+    Preferences fresh;
+    fromJson(QJsonObject{{"type", "preferences"}}, fresh);
+    ASSERT_EQ(fresh.terminals.size(), 2);
+    EXPECT_EQ(fresh.terminals[0].id, "cmd");
+    EXPECT_EQ(fresh.terminals[0].name,
+              QString::fromUtf8("Windows Command Prompt"));
+    EXPECT_TRUE(fresh.terminals[0].embedded);
+    EXPECT_EQ(fresh.terminals[1].id, "powershell");
+    EXPECT_TRUE(fresh.terminals[1].embedded);
+
+    // Present -> the list replaces the defaults verbatim (an empty array
+    // stays empty: the user deleted every terminal on purpose).
+    const QJsonArray terminalArray{
+        QJsonObject{{"id", "myterm"},
+                     {"name", "My Terminal"},
+                     {"command", "cmd.exe /k"},
+                     {"embedded", false}},
+    };
+    Preferences prefs;
+    fromJson(QJsonObject{{"type", "preferences"},
+                          {"run", QJsonObject{{"output", "myterm"},
+                                               {"terminals", terminalArray}}}},
+             prefs);
+    ASSERT_EQ(prefs.terminals.size(), 1);
+    EXPECT_EQ(prefs.terminals[0].id, "myterm");
+    EXPECT_EQ(prefs.terminals[0].name, "My Terminal");
+    EXPECT_EQ(prefs.terminals[0].command, "cmd.exe /k");
+    EXPECT_FALSE(prefs.terminals[0].embedded);
+
+    const Preferences roundTripped = [&] {
+        Preferences p;
+        fromJson(toJson(prefs), p);
+        return p;
+    }();
+    ASSERT_EQ(roundTripped.terminals.size(), 1);
+    EXPECT_EQ(roundTripped.terminals[0].id, "myterm");
+    EXPECT_EQ(roundTripped.terminals[0].name, "My Terminal");
+    EXPECT_EQ(roundTripped.terminals[0].command, "cmd.exe /k");
+    EXPECT_FALSE(roundTripped.terminals[0].embedded);
+}
+
 // ---------------------------------------------------------------------------
 // Store: layers, merging, resolution
 // ---------------------------------------------------------------------------

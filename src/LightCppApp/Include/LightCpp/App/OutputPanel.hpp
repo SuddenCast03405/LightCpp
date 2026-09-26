@@ -85,6 +85,10 @@ public:
     /// IDE owns is running; the Console Pauser mode runs in its own console
     /// and never touches this field).
     void setProgramInputEnabled(bool enabled);
+    /// Show/hide the program input row entirely. Only the captured Program
+    /// Output mode feeds stdin; Console Pauser and external/embedded
+    /// terminals have no IDE-side input, so the Send row is hidden there.
+    void setProgramInputVisible(bool visible);
     /// Enable/disable the debugger-input field (enabled while a debug
     /// session is live).
     void setDebuggerInputEnabled(bool enabled);
@@ -106,10 +110,13 @@ private:
     void rebuildProblemsTree(const QList<ProblemEntry>& problems);
     /// Build a "log view + one-line input row" page: what the Program and
     /// Debugger channels share. The input starts disabled; `submit` routes
-    /// the typed line (the field is cleared before `submit` runs).
+    /// the typed line (the field is cleared before `submit` runs). When
+    /// `rowOut` is given it receives the whole input-row container, so the
+    /// owner can hide the row (not just disable the field).
     QWidget* makeInputLogPage(QPlainTextEdit* log, QLineEdit** inputOut,
                               const QString& placeholder,
-                              const std::function<void(const QString&)>& submit);
+                              const std::function<void(const QString&)>& submit,
+                              QWidget** rowOut = nullptr);
 
     QLabel* header_;
     QComboBox* channelCombo_;
@@ -119,6 +126,9 @@ private:
     QPlainTextEdit* buildLog_;
     QPlainTextEdit* programOutput_;
     QLineEdit* programInput_ = nullptr;  // stdin for the running program
+    /// The whole input row (field + Send) of the Program channel; hidden
+    /// when the run mode does not capture the program in the IDE.
+    QWidget* programInputRow_ = nullptr;
     QLineEdit* debuggerInput_ = nullptr;  // raw commands for the live session
     QPlainTextEdit* gitLog_;
     QPlainTextEdit* debugLog_;

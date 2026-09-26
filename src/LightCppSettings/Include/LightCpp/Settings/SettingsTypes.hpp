@@ -167,6 +167,36 @@ struct ClangFormatService {
     QString style;
 };
 
+/// One user-editable "run program in ..." terminal from the run.output
+/// list. The launcher `command` is split command-line style and the program
+/// path is appended as one final (quoted as needed) argument, e.g.
+/// `cmd.exe /k` + `D:\demo.exe` -> `cmd.exe /k D:\demo.exe`.
+struct RunTerminal {
+    /// Stable key referenced by Preferences::programOutput. The two built-in
+    /// entries use the fixed ids "cmd" and "powershell"; user-added entries
+    /// get a generated id.
+    QString id;
+    QString name;         ///< display name, e.g. "Windows Command Prompt"
+    QString command;      ///< launcher; the program path is appended
+    bool embedded = true; ///< true: captured in the Program Output channel
+};
+
+/// The two terminals every configuration starts with (deletable copies in
+/// the user's list; the function returns fresh values each call).
+inline QList<RunTerminal> defaultRunTerminals()
+{
+    return {
+        {QStringLiteral("cmd"),
+         QStringLiteral("Windows Command Prompt"),
+         QStringLiteral("cmd.exe /k"),
+         true},
+        {QStringLiteral("powershell"),
+         QStringLiteral("Windows PowerShell"),
+         QStringLiteral("powershell.exe -NoExit -Command"),
+         true},
+    };
+}
+
 struct Preferences {
     FontSpec toolbarFont;
     FontSpec editorFont;
@@ -196,12 +226,15 @@ struct Preferences {
     QString defaultStyleContent;
 
     /// run.output — how the built program is launched. "program" (default)
-    /// captures its output in the IDE's Program Output channel; anything
-    /// else the App layer does not recognise is treated as "program".
-    /// "consolePauser" runs it via ConsolePauser.exe in an external console
-    /// window; "cmd" / "powershell" run it inside an external cmd.exe /
-    /// PowerShell window that stays open after the program exits.
+    /// captures its output in the IDE's Program Output channel (with the
+    /// stdin input row); "consolePauser" runs it via ConsolePauser.exe in
+    /// its own console window; any other value names a terminal from
+    /// `terminals` by id. Unknown values fall back to "program".
     QString programOutput = QStringLiteral("program");
+    /// The editable run.output list. Program Output and Console Pauser are
+    /// fixed options outside it; every entry here can be edited, added or
+    /// removed. Seeded with the two Windows terminals on first run.
+    QList<RunTerminal> terminals = defaultRunTerminals();
 };
 
 // ---------------------------------------------------------------------------

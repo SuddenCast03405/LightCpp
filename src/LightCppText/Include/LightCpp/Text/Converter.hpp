@@ -55,4 +55,20 @@ using ConvertResult = LightCpp::Core::Result<QByteArray, ConvertError>;
     TextEncoding encoding,
     bool stripBom = true);
 
+/// Encode `text` into the byte representation of `encoding` — the inverse
+/// of decodeToQString(). Used when saving a buffer whose tab has a
+/// non-UTF-8 encoding selected.
+///
+/// When `addBom` is true a byte-order mark is written for the UTF-16/32
+/// encodings (never for UTF-8 — this build saves UTF-8 without BOM).
+///
+/// Returns ConvertError::InvalidInput when the encoding cannot represent
+/// every character of `text` (no silent best-fit '?' substitution), and
+/// ConvertError::PlatformUnsupported for legacy codecs on platforms
+/// without the platform converter API.
+[[nodiscard]] ConvertResult encodeFromQString(
+    const QString& text,
+    TextEncoding encoding,
+    bool addBom = false);
+
 }  // namespace LightCpp::Text

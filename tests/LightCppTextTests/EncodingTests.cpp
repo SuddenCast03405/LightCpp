@@ -321,6 +321,102 @@ TEST(EncodingConvert, UnpairedSurrogateRejected)
     EXPECT_FALSE(converted.hasValue());
 }
 
+// --- encoding: QString -> target bytes (the save path) --------------------------
+
+TEST(EncodingEncode, Utf8NoBom)
+{
+    const QString text = "你好 hello";
+    const auto encoded =
+        LightCpp::Text::encodeFromQString(text, TextEncoding::Utf8);
+    ASSERT_TRUE(encoded.hasValue());
+    EXPECT_EQ(encoded.value(), text.toUtf8());
+}
+
+TEST(EncodingEncode, Utf16LeWithBom)
+{
+    const QString text = "你好 world";
+    const auto encoded =
+        LightCpp::Text::encodeFromQString(text, TextEncoding::Utf16Le, true);
+    ASSERT_TRUE(encoded.hasValue());
+    // Re-decoding must restore the text and report the BOM.
+    bool hadBom = false;
+    const auto decoded = LightCpp::Text::decodeToQString(
+        encoded.value(), TextEncoding::Utf16Le, true, &hadBom);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_TRUE(hadBom);
+    EXPECT_EQ(*decoded, text);
+}
+
+TEST(EncodingEncode, Utf16BeNoBomByDefault)
+{
+    const auto encoded =
+        LightCpp::Text::encodeFromQString("abc", TextEncoding::Utf16Be);
+    ASSERT_TRUE(encoded.hasValue());
+    EXPECT_EQ(encoded.value().size(), 6);  // 3 chars * 2 bytes, no BOM
+}
+
+TEST(EncodingEncode, Latin1)
+{
+    const auto encoded =
+        LightCpp::Text::encodeFromQString(QString::fromUtf8("caf\xC3\xA9"), TextEncoding::Latin1);
+    ASSERT_TRUE(encoded.hasValue());
+    EXPECT_EQ(encoded.value(), QByteArray("caf\xE9"));
+}
+
+TEST(EncodingEncode, EmptyInput)
+{
+    for (const TextEncoding encoding : {
+             TextEncoding::Utf8, TextEncoding::Utf16Le, TextEncoding::Utf16Be,
+             TextEncoding::Gb18030, TextEncoding::Big5, TextEncoding::Latin1}) {
+        const auto encoded =
+            LightCpp::Text::encodeFromQString(QString(), encoding, true);
+        ASSERT_TRUE(encoded.hasValue());
+        // Encoded empty text is either empty or just the requested BOM.
+        EXPECT_LE(encoded.value().size(), 4);
+    }
+}
+
+TEST(EncodingEncode, UnsupportedEncodingRejected)
+{
+    const auto encoded =
+        LightCpp::Text::encodeFromQString("x", TextEncoding::Binary);
+    EXPECT_FALSE(encoded.hasValue());
+}
+
+#ifdef _WIN32
+
+TEST(EncodingEncode, GbkRoundTripThroughDecode)
+{
+    const QString text = "中文注释 // comment";
+    const auto encoded =
+        LightCpp::Text::encodeFromQString(text, TextEncoding::Gbk);
+    ASSERT_TRUE(encoded.hasValue());
+    const auto decoded =
+        LightCpp::Text::decodeToQString(encoded.value(), TextEncoding::Gbk);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(*decoded, text);
+}
+
+TEST(EncodingEncode, UnmappableCharacterRejected)
+{
+    // U+3053 is hiragana — not representable in Windows-1252. The encoder
+    // must fail instead of silently writing a best-fit '?' byte.
+    const auto encoded = LightCpp::Text::encodeFromQString(
+        QString::fromUtf8("\xE3\x81\x93"), TextEncoding::Windows1252);
+    EXPECT_FALSE(encoded.hasValue());
+}
+
+TEST(EncodingEncode, GbkUnmappableEmojiRejected)
+{
+    // Emoji are outside GBK: saving a GBK tab containing one must fail.
+    const auto encoded = LightCpp::Text::encodeFromQString(
+        QString::fromUtf8("\xF0\x9F\x98\x80"), TextEncoding::Gbk);
+    EXPECT_FALSE(encoded.hasValue());
+}
+
+#endif  // _WIN32
+
+
 // --- name mapping ----------------------------------------------------------------
 
 TEST(EncodingNames, RoundTrip)

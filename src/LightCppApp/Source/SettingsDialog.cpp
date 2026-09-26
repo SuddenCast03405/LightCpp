@@ -22,6 +22,7 @@
 #include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
@@ -36,6 +37,9 @@
 #include <QSet>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QTableWidget>
+#include <QTableWidgetItem>
+#include <QUuid>
 #include <QVBoxLayout>
 
 namespace LightCpp::App {
@@ -828,17 +832,78 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
     runOutputMode_ = makeCombo(QStringLiteral("prefs.run.output"), false);
     runOutputMode_->addItem(tr("Program Output"), QStringLiteral("program"));
     runOutputMode_->addItem(tr("Console Pauser"), QStringLiteral("consolePauser"));
-    runOutputMode_->addItem(tr("CMD"), QStringLiteral("cmd"));
-    runOutputMode_->addItem(tr("PowerShell"), QStringLiteral("powershell"));
     runOutputMode_->setToolTip(
         tr("How the built program runs.\n"
            "Program Output: its output is captured in the IDE's Program "
            "Output channel, with an input field for stdin.\n"
-           "Console Pauser: it runs in an external console window via "
+           "Console Pauser: it runs in its own console window via "
            "ConsolePauser.exe (copied next to the program when missing).\n"
-           "CMD / PowerShell: an external cmd.exe or PowerShell window runs "
-           "the program and stays open after it exits."));
+           "The other entries come from the editable terminal list below; "
+           "an embedded terminal captures the output in the Program Output "
+           "channel, an external one opens its own console window."));
     generalForm->addRow(tr("Program output"), runOutputMode_);
+
+    // The editable terminal list: Program Output and Console Pauser are
+    // fixed, everything here can be renamed, edited, added or removed.
+    auto* terminalsRow = new QHBoxLayout;
+    runTerminals_ = new QTableWidget(0, 3, this);
+    runTerminals_->setObjectName(QStringLiteral("prefs.run.terminals"));
+    runTerminals_->setHorizontalHeaderLabels(
+        {tr("Name"), tr("Command + program path"), tr("Embedded")});
+    runTerminals_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    runTerminals_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    runTerminals_->verticalHeader()->setVisible(false);
+    runTerminals_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    runTerminals_->setSelectionMode(QAbstractItemView::SingleSelection);
+    runTerminals_->setMinimumHeight(96);
+    runTerminals_->setToolTip(
+        tr("Terminals the program can run in. The command is split command-"
+           "line style and the program path is appended as one final "
+           "argument (e.g. \"cmd.exe /k\"); for a PowerShell-style command "
+           "ending in -Command the call operator and quotes are added "
+           "automatically. Embedded terminals are captured in the Program "
+           "Output channel, non-embedded ones open their own console."));
+    connect(runTerminals_, &QTableWidget::itemChanged,
+            this, [this](QTableWidgetItem*) {
+        if (runTerminalsLoaded_) {
+            rebuildRunTerminalCombo();
+            markDirty();
+        }
+    });
+    terminalsRow->addWidget(runTerminals_, 1);
+    auto* terminalButtons = new QVBoxLayout;
+    auto* addTerminal = new QPushButton(tr("Add"), this);
+    connect(addTerminal, &QPushButton::clicked, this, [this] {
+        // A new row gets a generated id (kept in the name item's data) so
+        // the selection can reference it after the settings are saved.
+        const QString id = QStringLiteral("terminal-")
+            + QUuid::createUuid().toString(QUuid::WithoutBraces);
+        const int row = runTerminals_->rowCount();
+        runTerminals_->insertRow(row);
+        auto* nameItem = new QTableWidgetItem(tr("New terminal"));
+        nameItem->setData(Qt::UserRole, id);
+        runTerminals_->setItem(row, 0, nameItem);
+        runTerminals_->setItem(row, 1, new QTableWidgetItem(QString()));
+        auto* embeddedItem = new QTableWidgetItem();
+        embeddedItem->setCheckState(Qt::Checked);
+        embeddedItem->setFlags(embeddedItem->flags()
+                               | Qt::ItemIsUserCheckable);
+        runTerminals_->setItem(row, 2, embeddedItem);
+        runTerminals_->editItem(nameItem);
+    });
+    auto* removeTerminal = new QPushButton(tr("Remove"), this);
+    removeTerminal->setToolTip(tr("Delete the selected terminal"));
+    connect(removeTerminal, &QPushButton::clicked, this, [this] {
+        const int row = runTerminals_->currentRow();
+        if (row >= 0) {
+            runTerminals_->removeRow(row);
+        }
+    });
+    terminalButtons->addWidget(addTerminal);
+    terminalButtons->addWidget(removeTerminal);
+    terminalButtons->addStretch(1);
+    terminalsRow->addLayout(terminalButtons);
+    generalForm->addRow(tr("Terminals"), terminalsRow);
     column->addWidget(general);
 
     // --- shortcuts ----------------------------------------------------------------
@@ -1845,6 +1910,29 @@ void SettingsDialog::loadPreferencesPage(const Settings::Preferences& prefs)
                                            ? QStringLiteral("auto")
                                            : prefs.lineEndingDefault);
     checkCompilersAtStartup_->setChecked(prefs.checkCompilersAtStartup);
+    // Fill the editable terminal table from the settings. The guard keeps
+    // itemChanged from treating this as a user edit; ids ride in the name
+    // item's UserRole so the selection survives a reload.
+    runTerminalsLoaded_ = false;
+    runTerminals_->setRowCount(0);
+    for (const auto& terminal : prefs.terminals) {
+        const int row = runTerminals_->rowCount();
+        runTerminals_->insertRow(row);
+        auto* nameItem = new QTableWidgetItem(terminal.name);
+        nameItem->setData(Qt::UserRole, terminal.id);
+        runTerminals_->setItem(row, 0, nameItem);
+        runTerminals_->setItem(row, 1, new QTableWidgetItem(terminal.command));
+        auto* embeddedItem = new QTableWidgetItem();
+        embeddedItem->setCheckState(terminal.embedded ? Qt::Checked
+                                                      : Qt::Unchecked);
+        embeddedItem->setFlags(embeddedItem->flags() | Qt::ItemIsUserCheckable);
+        runTerminals_->setItem(row, 2, embeddedItem);
+    }
+    runTerminalsLoaded_ = true;
+    // Mirror the table into the combo, then apply the saved selection —
+    // which may point at a custom terminal id, not a fixed entry.
+    runOutputMode_->setCurrentIndex(0);
+    rebuildRunTerminalCombo();
     {
         const int runIndex = runOutputMode_->findData(prefs.programOutput);
         runOutputMode_->setCurrentIndex(runIndex < 0 ? 0 : runIndex);
@@ -1883,6 +1971,30 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->lineEndingDefault = lineEndingDefault_->currentText();
     prefs->checkCompilersAtStartup = checkCompilersAtStartup_->isChecked();
     prefs->programOutput = runOutputMode_->currentData().toString();
+    // Read the terminal table back. Rows keep the id generated for them
+    // (or the one loaded from disk); a row without an id gets a fresh one.
+    prefs->terminals.clear();
+    for (int row = 0; row < runTerminals_->rowCount(); ++row) {
+        Settings::RunTerminal terminal;
+        if (auto* nameItem = runTerminals_->item(row, 0)) {
+            terminal.id = nameItem->data(Qt::UserRole).toString();
+            terminal.name = nameItem->text();
+        }
+        if (terminal.id.isEmpty()) {
+            terminal.id = QStringLiteral("terminal-")
+                + QUuid::createUuid().toString(QUuid::WithoutBraces);
+        }
+        if (auto* commandItem = runTerminals_->item(row, 1)) {
+            terminal.command = commandItem->text().trimmed();
+        }
+        if (auto* embeddedItem = runTerminals_->item(row, 2)) {
+            terminal.embedded = embeddedItem->checkState() == Qt::Checked;
+        }
+        if (terminal.name.trimmed().isEmpty()) {
+            terminal.name = tr("Terminal %1").arg(row + 1);
+        }
+        prefs->terminals.push_back(terminal);
+    }
     prefs->shortcutClangd =
         shortcutClangd_->keySequence().toString(QKeySequence::PortableText);
     prefs->shortcutClangFormat =
@@ -1902,6 +2014,26 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->clangFormat.style = clangFormatStyle_->currentText().trimmed();
     prefs->globalStyle = formattingGlobalStyle_->currentText().trimmed();
     prefs->defaultStyleContent = formattingDefaultStyleContent_->toPlainText();
+}
+
+void SettingsDialog::rebuildRunTerminalCombo()
+{
+    // Keep the two fixed entries, drop the rest, then mirror the table.
+    const QString selected = runOutputMode_->currentData().toString();
+    while (runOutputMode_->count() > 2) {
+        runOutputMode_->removeItem(runOutputMode_->count() - 1);
+    }
+    for (int row = 0; row < runTerminals_->rowCount(); ++row) {
+        auto* nameItem = runTerminals_->item(row, 0);
+        if (nameItem == nullptr || nameItem->text().trimmed().isEmpty()) {
+            continue;
+        }
+        const QString id = nameItem->data(Qt::UserRole).toString();
+        runOutputMode_->addItem(nameItem->text(), id);
+    }
+    // Preserve the selection when its terminal still exists.
+    const int index = runOutputMode_->findData(selected);
+    runOutputMode_->setCurrentIndex(index < 0 ? 0 : index);
 }
 
 // ---------------------------------------------------------------------------

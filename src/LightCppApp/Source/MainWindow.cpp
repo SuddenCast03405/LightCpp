@@ -15,6 +15,7 @@
 #include "LightCpp/App/SettingsDialog.hpp"
 #include "LightCpp/App/ToolchainPaths.hpp"
 
+#include "LightCpp/Text/Converter.hpp"
 #include "LightCpp/Text/Encoding.hpp"
 #include "LightCpp/Text/TextFile.hpp"
 
@@ -1155,6 +1156,46 @@ void MainWindow::onOpenFile()
     }
 }
 
+std::optional<QByteArray> MainWindow::encodedSavePayload(CodeEditor* ed)
+{
+    namespace LT = LightCpp::Text;
+
+    // The tab's encoding — what the drop-down shows — decides the bytes on
+    // disk. An unparseable label falls back to UTF-8 (the historical
+    // behavior for buffers that never touched the encoding UI).
+    const auto parsed = LT::fromName(ed->encodingLabel().toUtf8());
+    const LT::TextEncoding encoding =
+        parsed.value_or(LT::TextEncoding::Utf8);
+
+    // UTF-16/32 files get a BOM so detection on reopen is unambiguous;
+    // UTF-8 stays BOM-less as before.
+    const bool addBom = encoding == LT::TextEncoding::Utf16Le
+                        || encoding == LT::TextEncoding::Utf16Be
+                        || encoding == LT::TextEncoding::Utf32Le
+                        || encoding == LT::TextEncoding::Utf32Be;
+
+    // Newline translation happens on the text (before encoding): a byte
+    // level 0x0A->0x0D0A replace would corrupt UTF-16/32 payloads.
+    QString text = ed->toPlainText();
+    if (lineEndingForSaving_ == QLatin1String("CRLF")) {
+        text.replace(u'\n', QStringLiteral("\r\n"));
+    }
+
+    const LT::ConvertResult result = LT::encodeFromQString(text, encoding, addBom);
+    if (!result.hasValue()) {
+        QMessageBox::warning(
+            this, tr("Encoding Error"),
+            tr("Cannot save %1 in %2: %3.\nThe text contains characters the "
+               "encoding cannot represent; switch the encoding (e.g. to "
+               "UTF-8) or remove those characters.")
+                .arg(tabTitleFor(ed),
+                     QString::fromLatin1(LT::toName(encoding)),
+                     QString::fromLatin1(LT::toString(result.error()))));
+        return std::nullopt;
+    }
+    return result.value();
+}
+
 void MainWindow::onSaveFile()
 {
     CodeEditor* ed = currentEditor();
@@ -1169,14 +1210,13 @@ void MainWindow::onSaveFile()
         ed->setFilePath(path);
     }
 
+    const std::optional<QByteArray> payload = encodedSavePayload(ed);
+    if (!payload.has_value()) {
+        return;
+    }
+
     if (QFile f(path); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        QByteArray bytes = ed->toUtf8();
-        // files.lineEnding: the document works in LF internally; the bytes
-        // on disk get the configured ending (CRLF on Windows by default).
-        if (lineEndingForSaving_ == QLatin1String("CRLF")) {
-            bytes.replace('\n', "\r\n");
-        }
-        f.write(bytes);
+        f.write(*payload);
         f.close();
         ed->setModified(false);
         const int idx = tabWidget_->indexOf(ed);
@@ -2719,17 +2759,30 @@ void MainWindow::onCompileCurrentFile()
     // its path so the compiler reads the latest content.
     if (target.tempSource) {
         QDir().mkpath(QFileInfo(srcPath).absolutePath());
-        if (QFile f(srcPath); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            f.write(ed->toUtf8());
+        if (std::optional<QByteArray> payload = encodedSavePayload(ed);
+            payload.has_value()) {
+            if (QFile f(srcPath);
+                f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                f.write(*payload);
+            } else {
+                outputPanel_->showChannel(OutputPanel::ChannelBuild);
+                outputPanel_->appendBuildOutput(
+                    tr("Cannot write temp file: %1").arg(srcPath));
+                runAfterBuild_ = false;
+                return;
+            }
         } else {
-            outputPanel_->showChannel(OutputPanel::ChannelBuild);
-            outputPanel_->appendBuildOutput(tr("Cannot write temp file: %1").arg(srcPath));
             runAfterBuild_ = false;
-            return;
+            return;  // encoding error already reported by the helper
         }
     } else if (ed->isModified()) {
+        std::optional<QByteArray> payload = encodedSavePayload(ed);
+        if (!payload.has_value()) {
+            runAfterBuild_ = false;
+            return;  // encoding error already reported by the helper
+        }
         if (QFile f(srcPath); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            f.write(ed->toUtf8());
+            f.write(*payload);
             // setModified(false) emits modificationChanged, which strips
             // the tab's modification dot (see createEditorTab).
             ed->setModified(false);
@@ -3022,24 +3075,8 @@ void MainWindow::onStopProgram()
     runner_->kill();
 }
 
-void MainWindow::startProgram(const QString& exePath, const QString& workDir)
+QProcess* MainWindow::ensureProgramRunner()
 {
-    if (exePath.isEmpty() || !QFileInfo::exists(exePath)) {
-        outputPanel_->appendProgramOutput(
-            tr("Cannot run: %1 does not exist.").arg(exePath));
-        return;
-    }
-    // The settings decide where the program runs: captured in the IDE, in
-    // its own console via ConsolePauser.exe, or inside an external terminal.
-    if (programOutputMode_ == QLatin1String("consolePauser")) {
-        startWithConsolePauser(exePath, workDir);
-        return;
-    }
-    if (programOutputMode_ == QLatin1String("cmd")
-        || programOutputMode_ == QLatin1String("powershell")) {
-        startInTerminal(exePath, workDir);
-        return;
-    }
     if (runner_ == nullptr) {
         runner_ = new QProcess(this);
         runner_->setProcessChannelMode(QProcess::MergedChannels);
@@ -3055,8 +3092,11 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
         });
         // The program's stdin stays open while it runs: the input field in
         // the Program Output channel feeds it, so scanf()/getline() work.
+        // Terminal modes share this runner but expose no input field, so
+        // the field only wakes up in the captured program mode.
         connect(runner_, &QProcess::started, this, [this] {
-            outputPanel_->setProgramInputEnabled(true);
+            outputPanel_->setProgramInputEnabled(
+                programOutputMode_ == QLatin1String("program"));
         });
         connect(runner_, &QProcess::errorOccurred, this,
                 [this](QProcess::ProcessError e) {
@@ -3084,8 +3124,30 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
             updateRunActionStates();
         });
     }
+    return runner_;
+}
 
-    if (runner_->state() != QProcess::NotRunning) {
+void MainWindow::startProgram(const QString& exePath, const QString& workDir)
+{
+    if (exePath.isEmpty() || !QFileInfo::exists(exePath)) {
+        outputPanel_->appendProgramOutput(
+            tr("Cannot run: %1 does not exist.").arg(exePath));
+        return;
+    }
+    // The settings decide where the program runs: captured in the IDE, in
+    // its own console via ConsolePauser.exe, or inside a terminal from the
+    // editable list (embedded: captured, non-embedded: its own console).
+    if (programOutputMode_ == QLatin1String("consolePauser")) {
+        startWithConsolePauser(exePath, workDir);
+        return;
+    }
+    if (programOutputMode_ != QLatin1String("program")) {
+        startInTerminal(exePath, workDir);
+        return;
+    }
+    QProcess* runner = ensureProgramRunner();
+
+    if (runner->state() != QProcess::NotRunning) {
         outputPanel_->showChannel(OutputPanel::ChannelProgram);
         outputPanel_->appendProgramOutput(tr("A program is already running."));
         return;
@@ -3114,7 +3176,6 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
     runner_->start(exePath, {});
     updateRunActionStates();
 }
-
 void MainWindow::startWithConsolePauser(const QString& exePath,
                                         const QString& workDir)
 {
@@ -3160,6 +3221,8 @@ void MainWindow::startWithConsolePauser(const QString& exePath,
     outputPanel_->appendProgramOutput(
         tr("--- Running in an external console (Console Pauser): %1 ---")
             .arg(QFileInfo(exePath).absoluteFilePath()));
+    // Nothing is captured, so there is nothing to stop from the IDE.
+    updateRunActionStates();
 }
 
 QString MainWindow::resolveConsolePauser(const QString& exePath) const
@@ -3196,35 +3259,32 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
 {
     outputPanel_->showChannel(OutputPanel::ChannelProgram);
 
-    // Pick the terminal: PowerShell prefers pwsh (PowerShell 7+) and falls
-    // back to the Windows PowerShell that ships with the OS. cmd.exe always
-    // exists. /k and -NoExit keep the window up after the program exits —
-    // that is the pause, so ConsolePauser is not involved in these modes.
-    QString program;
-    QStringList args;
-    if (programOutputMode_ == QLatin1String("cmd")) {
-        program = QStandardPaths::findExecutable(QStringLiteral("cmd.exe"));
-        if (program.isEmpty()) {
-            program = QStringLiteral("cmd.exe");
-        }
-        args = {QStringLiteral("/k"), exePath};
+    // The selected terminal from the editable list: "command" is split
+    // command-line style and the program path becomes the final argument.
+    // A PowerShell-style template ending in -Command/-c gets the call
+    // operator (& 'path') so paths with spaces still execute.
+    const QStringList tokens = QProcess::splitCommand(runTerminalCommand_);
+    if (tokens.isEmpty()) {
+        outputPanel_->appendProgramOutput(
+            tr("Terminal \"%1\" has no command configured.")
+                .arg(runTerminalName_));
+        return;
+    }
+    QString program = QStandardPaths::findExecutable(tokens.first());
+    if (program.isEmpty()) {
+        program = tokens.first();
+    }
+    QStringList args = tokens.mid(1);
+    const QString lastToken = args.isEmpty() ? QString() : args.last();
+    if (lastToken.compare(QLatin1String("-Command"), Qt::CaseInsensitive) == 0
+        || lastToken.compare(QLatin1String("-c"), Qt::CaseInsensitive) == 0) {
+        args << QStringLiteral("& '%1'").arg(exePath);
     } else {
-        program = QStandardPaths::findExecutable(QStringLiteral("pwsh.exe"));
-        if (program.isEmpty()) {
-            program = QStandardPaths::findExecutable(QStringLiteral("powershell.exe"));
-        }
-        if (program.isEmpty()) {
-            outputPanel_->appendProgramOutput(
-                tr("Neither pwsh.exe nor powershell.exe was found on PATH."));
-            return;
-        }
-        // & 'path' — the call operator handles paths with spaces.
-        args = {QStringLiteral("-NoExit"), QStringLiteral("-Command"),
-                QStringLiteral("& '%1'").arg(exePath)};
+        args << exePath;
     }
 
-    // Same PATH handling as the embedded runner: the program still needs its
-    // toolchain's runtime DLLs wherever it ends up running.
+    // The program needs its toolchain's runtime DLLs wherever it ends up
+    // running, so the active kit's compiler directory goes on PATH first.
     QString runtimeBinDir = kMingwBin;
     if (const auto kit = activeKit(); kit.has_value() && !isMsvcKit(*kit)) {
         const QString dir = QFileInfo(kit->cppCompiler).absolutePath();
@@ -3237,8 +3297,29 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
                runtimeBinDir + QDir::listSeparator()
                    + env.value(QStringLiteral("PATH")));
 
-    // Detached: the terminal window belongs to the child, the IDE captures
-    // nothing. The GUI parent has no console, so the terminal allocates one.
+    const QString terminalLabel =
+        runTerminalName_.isEmpty() ? program : runTerminalName_;
+    if (runTerminalEmbedded_) {
+        // Embedded (VSCode style): the terminal's output — banner, prompts
+        // and the program's own — is captured in the Program Output channel.
+        // No input field: stdin is not forwarded in terminal modes.
+        QProcess* runner = ensureProgramRunner();
+        if (runner->state() != QProcess::NotRunning) {
+            outputPanel_->appendProgramOutput(tr("A program is already running."));
+            return;
+        }
+        runner->setProcessEnvironment(env);
+        runner->setWorkingDirectory(workDir);
+        outputPanel_->appendProgramOutput(
+            tr("--- Running in %1 (embedded): %2 ---")
+                .arg(terminalLabel, QFileInfo(exePath).absoluteFilePath()));
+        runner->start(program, args);
+        updateRunActionStates();
+        return;
+    }
+
+    // Non-embedded: the terminal opens its own console window and owns the
+    // program's stdio; the IDE captures nothing.
     QProcess launcher;
     launcher.setProgram(program);
     launcher.setArguments(args);
@@ -3250,10 +3331,8 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
         return;
     }
     outputPanel_->appendProgramOutput(
-        tr("--- Running in an external %1 terminal: %2 ---")
-            .arg(programOutputMode_ == QLatin1String("cmd")
-                     ? QStringLiteral("CMD") : QStringLiteral("PowerShell"),
-                 QFileInfo(exePath).absoluteFilePath()));
+        tr("--- Running in %1 (external console): %2 ---")
+            .arg(terminalLabel, QFileInfo(exePath).absoluteFilePath()));
 }
 
 void MainWindow::updateRunActionStates()
@@ -3706,14 +3785,33 @@ void MainWindow::applyPreferences()
     lsp_->setServerPath(settings_->clangdPath());
 
     // --- run ----------------------------------------------------------------
-    // run.output: "consolePauser" / "cmd" / "powershell" run the program in
-    // an external console; anything else (and the default) is "program",
-    // captured in the embedded Program Output channel.
-    programOutputMode_ =
-        (prefs.programOutput == QLatin1String("consolePauser")
-         || prefs.programOutput == QLatin1String("cmd")
-         || prefs.programOutput == QLatin1String("powershell"))
-        ? prefs.programOutput : QStringLiteral("program");
+    // run.output: "consolePauser" runs the program in its own console via
+    // ConsolePauser.exe, a terminal id selects an entry from the editable
+    // terminal list, and anything else (and the default) is "program",
+    // captured in the embedded Program Output channel. Unknown ids fall
+    // back to "program".
+    programOutputMode_ = QStringLiteral("program");
+    runTerminalName_.clear();
+    runTerminalCommand_.clear();
+    runTerminalEmbedded_ = true;
+    if (prefs.programOutput == QLatin1String("consolePauser")) {
+        programOutputMode_ = prefs.programOutput;
+    } else if (prefs.programOutput != QLatin1String("program")) {
+        for (const auto& terminal : prefs.terminals) {
+            if (terminal.id == prefs.programOutput
+                && !terminal.command.trimmed().isEmpty()) {
+                programOutputMode_ = terminal.id;
+                runTerminalName_ = terminal.name;
+                runTerminalCommand_ = terminal.command;
+                runTerminalEmbedded_ = terminal.embedded;
+                break;
+            }
+        }
+    }
+    // Only the captured program mode has an IDE-side stdin field; Console
+    // Pauser and the terminals (embedded or not) hide the Send row.
+    outputPanel_->setProgramInputVisible(
+        programOutputMode_ == QLatin1String("program"));
 
     // --- language service: completion backend -----------------------------
     completionBackend_ = prefs.completion.backend.isEmpty()

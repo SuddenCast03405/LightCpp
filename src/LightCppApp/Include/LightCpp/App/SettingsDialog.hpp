@@ -19,6 +19,7 @@ class QListWidget;
 class QPlainTextEdit;
 class QSpinBox;
 class QStackedWidget;
+class QTableWidget;
 
 namespace LightCpp::App {
 
@@ -120,6 +121,10 @@ private:
     void commitToolchainsPage(QList<LightCpp::Settings::Toolchain>* toolchains);
     void loadPreferencesPage(const LightCpp::Settings::Preferences& prefs);
     void commitPreferencesPage(LightCpp::Settings::Preferences* prefs);
+    /// Sync the run-output combo with the terminal table: the two fixed
+    /// entries stay first, then one entry per table row (data = terminal id).
+    /// The current selection survives when its id is still present.
+    void rebuildRunTerminalCombo();
 
     // --- toolchain master-detail --------------------------------------------
     void loadToolchainForm(int toolchainIndex);
@@ -246,6 +251,12 @@ private:
     QCheckBox* checkCompilersAtStartup_ = nullptr;
     /// run.output: Program Output (captured) vs Console Pauser (external).
     QComboBox* runOutputMode_ = nullptr;
+    /// Editable terminal list (Name / Command / Embedded); Program Output
+    /// and Console Pauser are fixed and live outside this table.
+    QTableWidget* runTerminals_ = nullptr;
+    /// false while the terminal table is being filled programmatically so
+    /// itemChanged does not treat the load as a user edit.
+    bool runTerminalsLoaded_ = false;
     QKeySequenceEdit* shortcutClangd_ = nullptr;
     QKeySequenceEdit* shortcutClangFormat_ = nullptr;
     QSpinBox* largeFileHighlight_ = nullptr;

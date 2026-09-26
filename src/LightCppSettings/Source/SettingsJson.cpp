@@ -337,6 +337,16 @@ QJsonObject toJson(const Preferences& prefs)
 
     QJsonObject run;
     run.insert(QStringLiteral("output"), prefs.programOutput);
+    QJsonArray terminals;
+    for (const RunTerminal& terminal : prefs.terminals) {
+        terminals.append(QJsonObject{
+            {QStringLiteral("id"), terminal.id},
+            {QStringLiteral("name"), terminal.name},
+            {QStringLiteral("command"), terminal.command},
+            {QStringLiteral("embedded"), terminal.embedded},
+        });
+    }
+    run.insert(QStringLiteral("terminals"), terminals);
     object.insert(QStringLiteral("run"), run);
 
     return object;
@@ -513,6 +523,29 @@ void fromJson(const QJsonObject& object, Preferences& out)
     if (runValue.isObject()) {
         const QJsonObject run = runValue.toObject();
         readString(run, "output", out.programOutput);
+        // Legacy documents have no terminals key: keep the seeded defaults
+        // so "cmd"/"powershell" selections keep resolving. A present-but-
+        // empty array means the user deleted every entry — honour that.
+        if (run.contains(QLatin1String("terminals"))) {
+            out.terminals.clear();
+            const QJsonValue terminalsValue = run.value(QLatin1String("terminals"));
+            if (terminalsValue.isArray()) {
+                for (const QJsonValue& item : terminalsValue.toArray()) {
+                    if (!item.isObject()) {
+                        continue;
+                    }
+                    const QJsonObject terminal = item.toObject();
+                    RunTerminal parsed;
+                    readString(terminal, "id", parsed.id);
+                    readString(terminal, "name", parsed.name);
+                    readString(terminal, "command", parsed.command);
+                    readBool(terminal, "embedded", parsed.embedded);
+                    if (!parsed.id.isEmpty() && !parsed.name.isEmpty()) {
+                        out.terminals.append(parsed);
+                    }
+                }
+            }
+        }
     }
 }
 

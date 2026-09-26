@@ -140,7 +140,8 @@ OutputPanel::OutputPanel(QWidget* parent)
         programOutput_, &programInput_,
         tr("Type program input here, press Enter to send (enabled while a "
            "program runs)"),
-        [this](const QString& text) { emit programInputSubmitted(text); });
+        [this](const QString& text) { emit programInputSubmitted(text); },
+        &programInputRow_);
     stack_->addWidget(programPage);     // ChannelProgram
 
     stack_->addWidget(gitLog_);         // ChannelGit
@@ -219,6 +220,13 @@ void OutputPanel::setProgramInputEnabled(bool enabled)
 {
     if (programInput_ != nullptr) {
         programInput_->setEnabled(enabled);
+    }
+}
+
+void OutputPanel::setProgramInputVisible(bool visible)
+{
+    if (programInputRow_ != nullptr) {
+        programInputRow_->setVisible(visible);
     }
 }
 
@@ -349,7 +357,8 @@ void OutputPanel::rebuildProblemsTree(const QList<ProblemEntry>& problems)
 
 QWidget* OutputPanel::makeInputLogPage(QPlainTextEdit* log, QLineEdit** inputOut,
                                        const QString& placeholder,
-                                       const std::function<void(const QString&)>& submit)
+                                       const std::function<void(const QString&)>& submit,
+                                       QWidget** rowOut)
 {
     auto* page = new QWidget(this);
     auto* layout = new QVBoxLayout(page);
@@ -377,8 +386,15 @@ QWidget* OutputPanel::makeInputLogPage(QPlainTextEdit* log, QLineEdit** inputOut
     sendRow->setSpacing(4);
     sendRow->addWidget(input, 1);
     sendRow->addWidget(sendButton);
-    layout->addLayout(sendRow);
+    // The row lives in its own container so the owner can hide the whole
+    // thing (Send area is only meaningful for the captured mode).
+    auto* rowWidget = new QWidget(page);
+    rowWidget->setLayout(sendRow);
+    layout->addWidget(rowWidget);
 
     *inputOut = input;
+    if (rowOut != nullptr) {
+        *rowOut = rowWidget;
+    }
     return page;
 }
