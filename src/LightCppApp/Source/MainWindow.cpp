@@ -9,6 +9,7 @@
 #include "LightCpp/App/GitClient.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
+#include "LightCpp/App/LibClangCompleter.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/App/SettingsDialog.hpp"
 #include "LightCpp/App/ToolchainPaths.hpp"
@@ -263,6 +264,13 @@ MainWindow::MainWindow(QWidget* parent)
         // QPointer auto-nulls when the editor (tab) was destroyed while
         // the request was in flight — drop the response in that case.
         if (CodeEditor* ed = it.value()) {
+            if (items.isEmpty() && scheduleCompletionRetry()) {
+                // The backend answered "nothing", which after a crash or a
+                // restart is more often "not ready yet" than "no symbols".
+                // A retry was scheduled — do not dismiss a popup for it.
+                pendingCompletions_.erase(it);
+                return;
+            }
             ed->presentPopup(items);
         }
         pendingCompletions_.erase(it);
@@ -292,7 +300,17 @@ MainWindow::MainWindow(QWidget* parent)
         // Surface the reason instead of leaving the user with a silent pane.
         outputPanel_->showChannel(OutputPanel::ChannelServer);
         actSyntaxCheck_->setChecked(false);
+        // A completion was on its way: burn one retry attempt on bringing
+        // the server back up. Bounded by preferences.completion.retryCount.
+        if (completionBackend_ != QStringLiteral("libclang")) {
+            scheduleCompletionRetry();
+        }
     });
+
+    // --- libclang (in-process completion engine) ---
+    libClang_ = new LightCpp::App::LibClangCompleter(this);
+    connect(libClang_, &LightCpp::App::LibClangCompleter::logMessage,
+            outputPanel_, &OutputPanel::appendServerLog);
 
     // --- connections ---
     connect(tabWidget_, &QTabWidget::tabCloseRequested,
@@ -1245,32 +1263,15 @@ CodeEditor* MainWindow::createEditorTab(const QString& title)
         rebuildProblems();
     });
 
-    // Forward manual / trigger-char completion requests from the editor
-    // to clangd. The requestId is tracked in pendingCompletions_ so the
-    // async response can be routed back to the right popup.
+    // Forward manual / trigger-char completion requests from the editor to
+    // the configured backend (clangd/ccls over LSP, or libclang in-process).
+    // The requestId is tracked in pendingCompletions_ so the async response
+    // can be routed back to the right popup.
     QPointer<CodeEditor> edPtr(editor);
     connect(editor, &CodeEditor::completionRequested,
             this, [this, edPtr](int line, int column,
                                  const QString& triggerChar) {
-        CodeEditor* ed = edPtr;
-        if (ed == nullptr || !lsp_->isRunning()) {
-            return;
-        }
-        const QString lintPath = ed->lintPath();
-        if (lintPath.isEmpty() || !isCppLikeFile(lintPath)) {
-            return;
-        }
-        // Push the current text first: the lint didChange is debounced
-        // (300ms), so without this the completion request would arrive
-        // while clangd still has stale content and return nothing (or
-        // results for the wrong prefix).
-        lsp_->changeDocument(lintPath, ed->toPlainText());
-        const int reqId = lsp_->requestCompletion(
-            lintPath, line, column, triggerChar);
-        if (reqId > 0) {
-            latestCompletionId_ = reqId;
-            pendingCompletions_[reqId] = edPtr;
-        }
+        requestCompletionFor(edPtr, line, column, triggerChar);
     });
 
     // Ctrl+Click / F12 in the editor becomes a textDocument/definition
@@ -2973,6 +2974,22 @@ void MainWindow::applyToolchainHeaders()
     }
     lsp_->setToolchainHeaders(headers);
 
+    // The libclang engine parses in-process: give it the same include
+    // paths as a compile_flags.txt would carry (-target, -isystem, extra
+    // flags). Cheap to keep up to date here — libclang re-reads the args
+    // on every request.
+    if (libClang_ != nullptr) {
+        QStringList args;
+        if (!headers.target.isEmpty()) {
+            args << QStringLiteral("-target") << headers.target;
+        }
+        for (const QString& dir : headers.includeDirs) {
+            args << QStringLiteral("-isystem") << dir;
+        }
+        args.append(headers.extraFlags);
+        libClang_->setCompilerArgs(args);
+    }
+
     // clangd reads its include paths once, when it starts, so a server that is
     // already up keeps answering from the old ones until it is restarted.
     if (!lsp_->isRunning()) {
@@ -2984,6 +3001,162 @@ void MainWindow::applyToolchainHeaders()
         headers.isEmpty()
             ? tr("Restarting the language server with its own headers")
             : tr("Restarting the language server for %1").arg(msvcToolchain_.label));
+}
+
+// ---------------------------------------------------------------------------
+// Code-completion backends
+// ---------------------------------------------------------------------------
+
+void MainWindow::requestCompletionFor(CodeEditor* ed, int line, int column,
+                                      const QString& triggerChar)
+{
+    if (ed == nullptr || !clangdCompletionEnabled_) {
+        return;
+    }
+    const QString lintPath = ed->lintPath();
+    if (lintPath.isEmpty() || !isCppLikeFile(lintPath)) {
+        return;
+    }
+    // Remember the request so a failure can be retried at the same spot.
+    lastCompletion_ = PendingCompletion{ed, lintPath, line, column, triggerChar};
+    completionAttempts_ = 0;
+
+    if (completionBackend_ == QStringLiteral("libclang")) {
+        if (libClang_ == nullptr || !libClang_->isLoaded()) {
+            // Never loaded (path missing): fall through to clangd rather
+            // than pretending completion is unavailable.
+            outputPanel_->appendServerLog(
+                tr("libclang unavailable; completion request went to the "
+                   "language server"));
+        } else {
+            deliverLibClangCompletion();
+            return;
+        }
+    }
+
+    // --- language-server backends (clangd / ccls) -------------------------
+    if (!lsp_->isRunning()) {
+        // The server is down. One retry budget entry: bring it up and
+        // re-issue. If it cannot be started, the bounded retry loop ends
+        // with the error in the log — and not with a hung editor. When the
+        // user turned syntax check off, respect that and just drop the
+        // request (completion has always required the server to be up).
+        if (actSyntaxCheck_ != nullptr && actSyntaxCheck_->isChecked()) {
+            scheduleCompletionRetry();
+        }
+        return;
+    }
+    // Push the current text first: the lint didChange is debounced
+    // (300ms), so without this the completion request would arrive while
+    // the server still has stale content and return nothing (or results
+    // for the wrong prefix).
+    lsp_->changeDocument(lintPath, ed->toPlainText());
+    const int reqId = lsp_->requestCompletion(lintPath, line, column,
+                                              triggerChar);
+    if (reqId > 0) {
+        latestCompletionId_ = reqId;
+        pendingCompletions_[reqId] = ed;
+    }
+}
+
+void MainWindow::deliverLibClangCompletion()
+{
+    CodeEditor* ed = lastCompletion_.editor.data();
+    if (ed == nullptr || libClang_ == nullptr) {
+        return;
+    }
+    QString error;
+    const auto items = libClang_->complete(
+        {lastCompletion_.lintPath, ed->toPlainText(), lastCompletion_.line,
+         lastCompletion_.column},
+        &error);
+    if (items.isEmpty() && !error.isEmpty()) {
+        outputPanel_->appendServerLog(error);
+        if (scheduleCompletionRetry()) {
+            return;  // the retry timer will call back into this
+        }
+    }
+    ed->presentPopup(items);
+}
+
+bool MainWindow::scheduleCompletionRetry()
+{
+    if (completionRetryCount_ <= 0
+        || completionAttempts_ >= completionRetryCount_) {
+        return false;  // budget spent — let the empty result stand
+    }
+    ++completionAttempts_;
+    CodeEditor* ed = lastCompletion_.editor.data();
+    if (ed == nullptr) {
+        return false;
+    }
+    QTimer::singleShot(400, this, [this, ed] {
+        if (ed == nullptr) {
+            return;  // tab closed in the meantime
+        }
+        if (completionBackend_ == QStringLiteral("libclang")) {
+            deliverLibClangCompletion();
+            return;
+        }
+        if (!lsp_->isRunning()) {
+            lsp_->start();
+        }
+        if (!lsp_->isRunning()) {
+            return;  // start() failed again; serverFailed already logged it
+        }
+        lsp_->changeDocument(lastCompletion_.lintPath, ed->toPlainText());
+        const int reqId = lsp_->requestCompletion(
+            lastCompletion_.lintPath, lastCompletion_.line,
+            lastCompletion_.column, lastCompletion_.triggerChar);
+        if (reqId > 0) {
+            latestCompletionId_ = reqId;
+            pendingCompletions_[reqId] = ed;
+        }
+    });
+    return true;
+}
+
+QString MainWindow::resolveCompletionServerPath(const QString& backend) const
+{
+    // clangd keeps its existing resolution: whatever defaults.clangdPath
+    // names (or the built-in fallback the settings store computes).
+    const QString clangdPath = settings_->clangdPath();
+    if (backend != QStringLiteral("ccls")) {
+        return clangdPath;
+    }
+    const QString exeName = QStringLiteral("ccls.exe");
+    QStringList candidates;
+    // ccls usually sits in the same toolchain directory as clangd.
+    if (!clangdPath.isEmpty()) {
+        candidates << QFileInfo(clangdPath).absolutePath()
+                          + QLatin1Char('/') + exeName;
+    }
+    candidates << QCoreApplication::applicationDirPath()
+                      + QLatin1Char('/') + exeName;
+    for (const QString& candidate : candidates) {
+        if (QFileInfo::exists(candidate)) {
+            return candidate;
+        }
+    }
+    const QString onPath = QStandardPaths::findExecutable(exeName);
+    return onPath.isEmpty() ? exeName : onPath;
+}
+
+QString MainWindow::resolveLibClangPath() const
+{
+    QStringList dirs;
+    const QString clangdPath = settings_->clangdPath();
+    if (!clangdPath.isEmpty()) {
+        dirs << QFileInfo(clangdPath).absolutePath();
+    }
+    dirs << QCoreApplication::applicationDirPath();
+    for (const QString& dir : dirs) {
+        const QString candidate = dir + QLatin1Char('/') + QStringLiteral("libclang.dll");
+        if (QFileInfo::exists(candidate)) {
+            return candidate;
+        }
+    }
+    return QString();
 }
 
 // ---------------------------------------------------------------------------
@@ -3072,6 +3245,44 @@ void MainWindow::applyPreferences()
     }
     lsp_->setFallbackStyle(clangdStyle);
     lsp_->setServerPath(settings_->clangdPath());
+
+    // --- language service: completion backend -----------------------------
+    completionBackend_ = prefs.completion.backend.isEmpty()
+        ? QStringLiteral("clangd") : prefs.completion.backend;
+    completionRetryCount_ = qMax(0, prefs.completion.retryCount);
+    completionAttempts_ = 0;
+    if (completionBackend_ == QStringLiteral("libclang")) {
+        if (libClang_ != nullptr && !libClang_->isLoaded()) {
+            const QString libPath = resolveLibClangPath();
+            if (!libPath.isEmpty()) {
+                libClang_->load(libPath);
+            } else {
+                outputPanel_->appendServerLog(
+                    tr("libclang.dll was not found next to clangd or the "
+                       "executable; completion stays on clangd"));
+                completionBackend_ = QStringLiteral("clangd");
+            }
+        }
+    } else {
+        // clangd (the default) or ccls — both are language servers.
+        if (completionBackend_ != QStringLiteral("clangd")
+            && completionBackend_ != QStringLiteral("ccls")) {
+            completionBackend_ = QStringLiteral("clangd");
+        }
+        const QString serverPath = resolveCompletionServerPath(completionBackend_);
+        if (lsp_->serverPath() != serverPath) {
+            lsp_->setServerPath(serverPath);
+            // The running process is still the old server; restart it so
+            // the switch takes effect immediately.
+            if (lsp_->isRunning()) {
+                lsp_->stop();
+                lsp_->start();
+                outputPanel_->appendServerLog(
+                    tr("Language server switched to %1")
+                        .arg(QDir::toNativeSeparators(serverPath)));
+            }
+        }
+    }
 
     // --- language service: clang-format ----------------------------------
     clangFormatEnabled_ = prefs.clangFormat.enabled;

@@ -149,6 +149,16 @@ struct ClangdService {
     QString fallbackStyle;  ///< "" or "file" = clangd's own default
 };
 
+/// Which engine answers code-completion requests, and how stubbornly the IDE
+/// retries when it cannot.
+struct CompletionService {
+    /// "clangd" (default) | "libclang" | "ccls".
+    QString backend = QStringLiteral("clangd");
+    /// How many times a failed completion request (empty answer, server that
+    /// would not start or died) is retried before giving up. 0 = no retry.
+    int retryCount = 2;
+};
+
 struct ClangFormatService {
     bool enabled = true;
     bool formatOnSave = false;
@@ -176,6 +186,8 @@ struct Preferences {
     LargeFileLimits largeFile;
     ClangdService clangd;
     ClangFormatService clangFormat;
+    /// Code-completion engine selection + failure retry policy.
+    CompletionService completion;
 
     /// Global formatting style: "file" = keep the built-in fallback,
     /// otherwise the --fallback-style passed to clang-format.

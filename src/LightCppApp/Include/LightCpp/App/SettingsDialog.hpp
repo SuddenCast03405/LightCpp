@@ -254,6 +254,8 @@ private:
     QCheckBox* clangdDiagnostics_ = nullptr;
     QCheckBox* clangdIndexing_ = nullptr;
     QComboBox* clangdFallbackStyle_ = nullptr;
+    QComboBox* completionBackend_ = nullptr;
+    QSpinBox* completionRetry_ = nullptr;
     QCheckBox* clangFormatEnabled_ = nullptr;
     QCheckBox* clangFormatOnSave_ = nullptr;
     QComboBox* clangFormatStyle_ = nullptr;

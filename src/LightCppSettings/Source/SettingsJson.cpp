@@ -319,6 +319,10 @@ QJsonObject toJson(const Preferences& prefs)
     clangd.insert(QStringLiteral("indexing"), prefs.clangd.indexing);
     clangd.insert(QStringLiteral("fallbackStyle"), prefs.clangd.fallbackStyle);
     languageService.insert(QStringLiteral("clangd"), clangd);
+    QJsonObject completion;
+    completion.insert(QStringLiteral("backend"), prefs.completion.backend);
+    completion.insert(QStringLiteral("retryCount"), prefs.completion.retryCount);
+    languageService.insert(QStringLiteral("completion"), completion);
     QJsonObject clangFormat;
     clangFormat.insert(QStringLiteral("enabled"), prefs.clangFormat.enabled);
     clangFormat.insert(QStringLiteral("formatOnSave"), prefs.clangFormat.formatOnSave);
@@ -475,6 +479,15 @@ void fromJson(const QJsonObject& object, Preferences& out)
             readBool(clangd, "diagnostics", out.clangd.diagnostics);
             readBool(clangd, "indexing", out.clangd.indexing);
             readOptionalString(clangd, "fallbackStyle", out.clangd.fallbackStyle);
+        }
+        const QJsonValue completionValue = language.value(QLatin1String("completion"));
+        if (completionValue.isObject()) {
+            const QJsonObject completion = completionValue.toObject();
+            readString(completion, "backend", out.completion.backend);
+            readInt(completion, "retryCount", out.completion.retryCount);
+            if (out.completion.retryCount < 0) {
+                out.completion.retryCount = 0;
+            }
         }
         const QJsonValue formatValue = language.value(QLatin1String("clangFormat"));
         if (formatValue.isObject()) {

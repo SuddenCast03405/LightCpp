@@ -36,6 +36,7 @@ class BatchFormatter;
 class CodeFormatter;
 class GitClient;
 class LanguageServerClient;
+class LibClangCompleter;
 }
 
 /// Main IDE window — menu bar, toolbar, tabbed editors and a status bar
@@ -305,6 +306,43 @@ private:
     /// following the selected toolchain, and restart it when that changes —
     /// clangd reads its include paths once, at start-up.
     void applyToolchainHeaders();
+
+    // --- code-completion backends -----------------------------------------
+    /// Route a completion request to the configured backend (clangd/ccls as
+    /// language servers, libclang in-process). Shared by every editor tab.
+    void requestCompletionFor(CodeEditor* editor, int line, int column,
+                              const QString& triggerChar);
+    /// Run the last completion request against libclang and show the popup.
+    void deliverLibClangCompletion();
+    /// Schedule one re-issue of the most recent completion request. Returns
+    /// false when the retry budget (preferences.completion.retryCount) is
+    /// spent or nothing is pending.
+    bool scheduleCompletionRetry();
+    /// The LSP server executable for `backend` ("clangd" | "ccls"): the
+    /// configured clangd path, else the same directory, else PATH. A bare
+    /// file name comes back when nothing was found, so the failure surfaces
+    /// in the server log with the path that was tried.
+    [[nodiscard]] QString resolveCompletionServerPath(const QString& backend) const;
+    /// Where libclang.dll lives (toolchain dir, exe dir), or empty.
+    [[nodiscard]] QString resolveLibClangPath() const;
+
+    /// A completion request kept around so a failed one can be re-issued.
+    struct PendingCompletion {
+        QPointer<CodeEditor> editor;
+        QString lintPath;
+        int line = 0;
+        int column = 0;
+        QString triggerChar;
+    };
+    /// preferences.completion.*: which engine answers completions, and how
+    /// many times a failed request is retried.
+    QString completionBackend_ = QStringLiteral("clangd");
+    int completionRetryCount_ = 2;
+    int completionAttempts_ = 0;
+    PendingCompletion lastCompletion_;
+    /// In-process completion engine (libclang.dll), used when the
+    /// preferences name it as the backend. Created in the constructor.
+    LightCpp::App::LibClangCompleter* libClang_ = nullptr;
 
     // --- widgets ---
     std::unique_ptr<LightCpp::Settings::SettingsStore> settings_;

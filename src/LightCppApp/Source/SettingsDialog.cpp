@@ -893,6 +893,30 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
     clangdStyleForm->addRow(tr("Clangd fallback style"), clangdFallbackStyle_);
     serviceLayout->addLayout(clangdStyleForm);
 
+    // --- code-completion engine -------------------------------------------------
+    auto* completionForm = new QFormLayout;
+    completionBackend_ = makeCombo(QStringLiteral("prefs.completion.backend"), false);
+    completionBackend_->addItem(QStringLiteral("clangd"));
+    completionBackend_->addItem(QStringLiteral("libclang"));
+    completionBackend_->addItem(QStringLiteral("ccls"));
+    completionBackend_->setToolTip(
+        tr("Engine that answers code-completion requests.\n"
+           "clangd / ccls are language servers; libclang parses the file\n"
+           "in-process. When the chosen engine cannot answer, the request\n"
+           "is retried the number of times set below."));
+    completionForm->addRow(tr("Default completion backend"), completionBackend_);
+    completionRetry_ = new QSpinBox(this);
+    completionRetry_->setObjectName(QStringLiteral("prefs.completion.retryCount"));
+    completionRetry_->setRange(0, 20);
+    completionRetry_->setSpecialValueText(tr("no retry"));
+    completionRetry_->setToolTip(
+        tr("How many times a failed completion request is retried\n"
+           "(server missing, crashed, or returned nothing)."));
+    connect(completionRetry_, &QSpinBox::valueChanged, this,
+            [this](int) { markDirty(); });
+    completionForm->addRow(tr("Completion retry count"), completionRetry_);
+    serviceLayout->addLayout(completionForm);
+
     clangFormatEnabled_ = makeCheck(QStringLiteral("prefs.clangFormat.enabled"),
                                     tr("Enable clang-format"));
     serviceLayout->addWidget(clangFormatEnabled_);
@@ -1819,6 +1843,10 @@ void SettingsDialog::loadPreferencesPage(const Settings::Preferences& prefs)
     clangdDiagnostics_->setChecked(prefs.clangd.diagnostics);
     clangdIndexing_->setChecked(prefs.clangd.indexing);
     clangdFallbackStyle_->setCurrentText(prefs.clangd.fallbackStyle);
+    completionBackend_->setCurrentText(
+        prefs.completion.backend.isEmpty() ? QStringLiteral("clangd")
+                                           : prefs.completion.backend);
+    completionRetry_->setValue(prefs.completion.retryCount);
     clangFormatEnabled_->setChecked(prefs.clangFormat.enabled);
     clangFormatOnSave_->setChecked(prefs.clangFormat.formatOnSave);
     clangFormatStyle_->setCurrentText(prefs.clangFormat.style);
@@ -1848,6 +1876,8 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->clangd.diagnostics = clangdDiagnostics_->isChecked();
     prefs->clangd.indexing = clangdIndexing_->isChecked();
     prefs->clangd.fallbackStyle = clangdFallbackStyle_->currentText().trimmed();
+    prefs->completion.backend = completionBackend_->currentText().trimmed();
+    prefs->completion.retryCount = completionRetry_->value();
     prefs->clangFormat.enabled = clangFormatEnabled_->isChecked();
     prefs->clangFormat.formatOnSave = clangFormatOnSave_->isChecked();
     prefs->clangFormat.style = clangFormatStyle_->currentText().trimmed();

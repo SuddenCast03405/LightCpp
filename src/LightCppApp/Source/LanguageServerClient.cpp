@@ -209,15 +209,26 @@ void LanguageServerClient::start()
 
     // Light options: no background indexing, no clang-tidy checks — this is
     // a plain syntax-check integration; full compilation-database support
-    // can come later.
-    QStringList args{QStringLiteral("--background-index=false"),
-                     QStringLiteral("--clang-tidy=false"),
-                     QStringLiteral("--pch-storage=memory")};
+    // can come later. These flags are clangd-specific: ccls understands the
+    // LSP protocol but not clangd's command line, so it gets only the
+    // compile-commands directory it does share.
+    const bool isCcls = QFileInfo(serverPath_).fileName()
+                            .contains(QLatin1String("ccls"),
+                                      Qt::CaseInsensitive);
+    QStringList args;
+    if (isCcls) {
+        args.append(QStringLiteral("--background-index=false"));
+    } else {
+        args << QStringLiteral("--background-index=false")
+             << QStringLiteral("--clang-tidy=false")
+             << QStringLiteral("--pch-storage=memory");
+    }
 
     // The settings' clangd fallback style, when it names a real preset.
     // "file" would make clangd look for a .clang-format it usually cannot
     // find, which only changes its format-on-type answers for the worse.
-    if (!fallbackStyle_.isEmpty()
+    // ccls has no such flag.
+    if (!isCcls && !fallbackStyle_.isEmpty()
         && fallbackStyle_.compare(QLatin1String("file"), Qt::CaseInsensitive) != 0) {
         args.append(QStringLiteral("--fallback-style=") + fallbackStyle_);
     }
