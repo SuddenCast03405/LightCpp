@@ -1,6 +1,7 @@
 {
     "name": "DevCppProject",
     "version": "1.0.0",
+    "publisher": "LightCpp",
     "description": "Dev-C++ (*.dev) project support: importing and building classic Bloodshed Dev-C++ projects.",
     "vendor": "LightCpp"
 }

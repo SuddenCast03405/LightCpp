@@ -29,9 +29,15 @@ public:
 
     /// One plugin that came up successfully.
     struct Loaded {
+        /// Where the plugin's code came from — the driver behind the
+        /// kind tag in the plugin management panel.
+        enum class Kind { Cpp, Lua };
+
         QString path;      // the dll / registration source
         QString name;
         QString version;
+        QString publisher; // empty when the plugin declares none
+        Kind kind = Kind::Cpp;
         bool hasBackend = false;  // also implements ProjectBackend
     };
 

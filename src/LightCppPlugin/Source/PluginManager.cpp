@@ -4,6 +4,7 @@
 #include "LightCpp/Plugin/ProjectBackend.hpp"
 
 #include <QDir>
+#include <QJsonObject>
 #include <QPluginLoader>
 
 namespace LightCpp::Plugin {
@@ -63,6 +64,14 @@ QStringList PluginManager::loadSharedPlugins(const QString& directory,
         record.path = path;
         record.name = plugin->name();
         record.version = plugin->version();
+        record.kind = Loaded::Kind::Cpp;
+        // Publisher comes straight from the plugin's metadata.json.
+        record.publisher =
+            loader->metaData()
+                .value(QStringLiteral("MetaData"))
+                .toObject()
+                .value(QStringLiteral("publisher"))
+                .toString();
 
         if (auto* backend = qobject_cast<ProjectBackend*>(instance);
             backend != nullptr) {
@@ -94,6 +103,8 @@ void PluginManager::registerPlugin(std::unique_ptr<Plugin> plugin,
     record.path = source;
     record.name = plugin->name();
     record.version = plugin->version();
+    record.kind = Loaded::Kind::Lua;
+    record.publisher = plugin->publisher();
     if (!plugin->initialize(services_)) {
         errors_.append(QStringLiteral("%1: initialize() failed").arg(source));
         return;  // unique_ptr drops the failed plugin here

@@ -100,11 +100,14 @@ public:
     /// Choose which compiler's headers the server resolves includes against.
     ///
     /// clangd has no other way to be told this: include paths reach it only
-    /// through a compilation database. This client therefore writes a
-    /// single-file database (compile_flags.txt) inside the temp directory —
-    /// never in the user's source tree — and starts clangd with
-    /// --compile-commands-dir pointing at it. An empty `headers` skips all of
-    /// that and leaves clangd's own defaults in place.
+    /// through a compilation database. When the project owns one (a
+    /// compile_commands.json under the project root or a build directory),
+    /// start() points clangd at it and it takes precedence — it carries the
+    /// project's own -I flags. Otherwise this client writes a single-file
+    /// database (compile_flags.txt) inside the temp directory — never in the
+    /// user's source tree — and starts clangd with --compile-commands-dir
+    /// pointing at it. An empty `headers` skips all of that and leaves
+    /// clangd's own defaults in place.
     void setToolchainHeaders(const ToolchainHeaders& headers);
 
     /// The headers the server is currently configured with. Empty means it is

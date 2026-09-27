@@ -857,12 +857,12 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
     runTerminals_->setSelectionMode(QAbstractItemView::SingleSelection);
     runTerminals_->setMinimumHeight(96);
     runTerminals_->setToolTip(
-        tr("Terminals the program can run in. The command is split command-"
-           "line style and the program path is appended as one final "
-           "argument (e.g. \"cmd.exe /k\"); for a PowerShell-style command "
-           "ending in -Command the call operator and quotes are added "
-           "automatically. Embedded terminals are captured in the Program "
-           "Output channel, non-embedded ones open their own console."));
+        tr("Terminals the program can run in. The command starts the shell "
+           "(e.g. \"cmd.exe /k\"). Embedded terminals run in the Program "
+           "Output channel: the program's path is typed in as the first "
+           "line of input and the input field stays live for stdin. "
+           "Non-embedded terminals open their own console and get the "
+           "program path as a command-line argument."));
     connect(runTerminals_, &QTableWidget::itemChanged,
             this, [this](QTableWidgetItem*) {
         if (runTerminalsLoaded_) {

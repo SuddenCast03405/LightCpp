@@ -52,6 +52,7 @@ public:
 
     [[nodiscard]] QString name() const override;
     [[nodiscard]] QString version() const override;
+    [[nodiscard]] QString publisher() const override;
     bool initialize(::LightCpp::Plugin::IdeServices* services) override;
     void shutdown() override;
 
@@ -62,6 +63,7 @@ private:
     std::unique_ptr<Impl> impl_;
     QString name_;
     QString version_;
+    QString publisher_;
 };
 
 class LuaPluginHost {

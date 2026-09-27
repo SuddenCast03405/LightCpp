@@ -527,6 +527,11 @@ QString LuaPlugin::version() const
     return version_;
 }
 
+QString LuaPlugin::publisher() const
+{
+    return publisher_;
+}
+
 bool LuaPlugin::initialize(::LightCpp::Plugin::IdeServices* /*services*/)
 {
     // Services were wired at load time: the script needs `ide` as soon as
@@ -605,6 +610,7 @@ LuaPluginHost::LoadResult LuaPluginHost::loadPlugin(
     auto plugin = std::unique_ptr<LuaPlugin>(new LuaPlugin(std::move(impl)));
     plugin->name_ = name;
     plugin->version_ = version;
+    plugin->publisher_ = metaString(L, "publisher", QString());
     result.plugin = std::move(plugin);
     return result;
 }

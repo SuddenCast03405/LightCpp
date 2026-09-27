@@ -27,6 +27,10 @@ public:
     /// Human-readable plugin name, shown in the Plugins output channel.
     [[nodiscard]] virtual QString name() const = 0;
     [[nodiscard]] virtual QString version() const = 0;
+    /// Publisher shown as a tag in the plugin management panel. C++ plugins
+    /// get it from their metadata.json ("publisher"); Lua scripts from
+    /// plugin.publisher. Empty means "no publisher declared".
+    [[nodiscard]] virtual QString publisher() const { return {}; }
 
     /// Called once, right after loading, before the main window is shown.
     /// Return false to refuse loading (the reason is returned as an error

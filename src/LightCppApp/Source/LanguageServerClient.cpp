@@ -86,6 +86,44 @@ QString clangdFlagsDir()
     return QDir(QDir::tempPath()).filePath(QStringLiteral("lightcpp-clangd"));
 }
 
+/// Locate a compilation database the project itself owns — CMake's
+/// CMAKE_EXPORT_COMPILE_COMMANDS output. Probes the project root and the
+/// conventional build-directory layouts one and two levels below it
+/// (build/, build/Debug, out/build/Debug, ...). Returns the directory that
+/// holds compile_commands.json, or empty when the project has none.
+QString findProjectCompileCommandsDir(const QString& rootPath)
+{
+    if (rootPath.isEmpty()) {
+        return {};
+    }
+    const QDir root(rootPath);
+    if (!root.exists()) {
+        return {};
+    }
+    QStringList dirs;
+    dirs.append(root.absolutePath());
+    const QStringList topLevel =
+        root.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString& entry : topLevel) {
+        const QDir level1(root.filePath(entry));
+        dirs.append(level1.absolutePath());
+        dirs.append(level1.filePath(QStringLiteral("Debug")));
+        dirs.append(level1.filePath(QStringLiteral("Release")));
+        const QStringList nested =
+            level1.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString& nestedEntry : nested) {
+            dirs.append(level1.filePath(nestedEntry));
+        }
+    }
+    for (const QString& dir : dirs) {
+        if (QFileInfo::exists(QDir(dir).filePath(
+                QStringLiteral("compile_commands.json")))) {
+            return QDir(dir).absolutePath();
+        }
+    }
+    return {};
+}
+
 /// Write the one-file compilation database clangd reads its include paths from.
 ///
 /// compile_flags.txt takes one argument per line, applied to every file, which
@@ -233,11 +271,22 @@ void LanguageServerClient::start()
         args.append(QStringLiteral("--fallback-style=") + fallbackStyle_);
     }
 
-    // clangd has no flag for "use this compiler's headers"; include paths reach
-    // it only through a compilation database. Synthesising a one-file database
-    // and pointing clangd at it is the documented way to do this without
-    // writing into the user's project.
-    if (!headers_.isEmpty()) {
+    // Include paths reach clangd only through a compilation database. When
+    // the project owns one (CMake's CMAKE_EXPORT_COMPILE_COMMANDS output in
+    // a build directory), it is the authoritative source — it carries the
+    // per-target -I flags for the project's own headers — so it wins over
+    // the synthesized file. The compiler's builtin headers still resolve:
+    // clangd queries the compiler named inside the database itself.
+    const QString projectDbDir = findProjectCompileCommandsDir(rootPath_);
+    if (!projectDbDir.isEmpty()) {
+        args.append(QStringLiteral("--compile-commands-dir=") + projectDbDir);
+        emit serverLog(tr("using project compilation database: %1")
+                           .arg(QDir::toNativeSeparators(QDir(projectDbDir)
+                               .filePath(QStringLiteral("compile_commands.json")))));
+    } else if (!headers_.isEmpty()) {
+        // No project database: synthesise a one-file database pointing at the
+        // selected toolchain's headers and start clangd against it, without
+        // writing anything into the user's project.
         if (writeClangdFlags(headers_)) {
             args.append(QStringLiteral("--compile-commands-dir=") + clangdFlagsDir());
         } else {

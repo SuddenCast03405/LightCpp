@@ -12,6 +12,7 @@
 plugin = {
     name = "zh-CN 简体中文",
     version = "1.0.0",
+    publisher = "LightCpp",
     description = "把 LightC++ 的界面文本换成简体中文（中国大陆）",
 }
 
