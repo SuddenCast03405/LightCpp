@@ -581,6 +581,17 @@ bool MainWindow::persistPluginLists(const QStringList& disabled,
         out.insert(QStringLiteral("plugins"), plugins);
         return out;
     };
+    // Write the file and reload the store right away: the panel refresh and
+    // the next enable/disable read their snapshot from settings_, so the
+    // in-memory state must see the new lists, not the start-up copy.
+    const auto save = [this, &path](const QJsonDocument& document) {
+        const bool ok =
+            LightCpp::Settings::SettingsStore::writeDocument(path, document);
+        if (ok && settings_ != nullptr) {
+            settings_->reload();
+        }
+        return ok;
+    };
     if (doc.isArray()) {
         QJsonArray arr = doc.array();
         for (int i = 0; i < arr.size(); ++i) {
@@ -590,18 +601,16 @@ bool MainWindow::persistPluginLists(const QStringList& disabled,
                 arr[i] = apply(obj, disabled, pendingDeletes);
             }
         }
-        return LightCpp::Settings::SettingsStore::writeDocument(
-            path, QJsonDocument(arr));
+        return save(QJsonDocument(arr));
     }
     if (doc.isObject()) {
-        return LightCpp::Settings::SettingsStore::writeDocument(
-            path, QJsonDocument(apply(doc.object(), disabled, pendingDeletes)));
+        return save(QJsonDocument(apply(doc.object(), disabled,
+                                        pendingDeletes)));
     }
     // No usable document yet: create a minimal preferences document.
     QJsonObject obj;
     obj.insert(QStringLiteral("type"), QStringLiteral("preferences"));
-    return LightCpp::Settings::SettingsStore::writeDocument(
-        path, QJsonDocument(apply(obj, disabled, pendingDeletes)));
+    return save(QJsonDocument(apply(obj, disabled, pendingDeletes)));
 }
 
 QList<MainWindow::PluginCandidate> MainWindow::pluginCandidates() const
