@@ -165,14 +165,15 @@ OutputPanel::OutputPanel(QWidget* parent)
     // Both Problems channels share the same tree shape and click behaviour:
     // single click jumps, like the problem lists in other IDEs.
     for (QTreeWidget* tree : {problems_, compilerProblems_}) {
-        tree->setColumnCount(2);
-        tree->setHeaderLabels({tr("Problem"), tr("Location")});
+        tree->setColumnCount(3);
+        tree->setHeaderLabels({tr("Problem"), tr("Location"), tr("File")});
         tree->setRootIsDecorated(true);
         tree->setUniformRowHeights(true);
         tree->setAllColumnsShowFocus(true);
         tree->setSelectionMode(QAbstractItemView::SingleSelection);
         tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
         tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        tree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
         connect(tree, &QTreeWidget::itemClicked, this,
                 [this](QTreeWidgetItem* item, int) {
             if (item == nullptr) {
@@ -440,12 +441,17 @@ void OutputPanel::rebuildProblemsTree(QTreeWidget* tree,
                              .arg(severityWord(p.severity), p.message, suffix));
         item->setForeground(0, severityColor(p.severity));
         item->setText(1, tr("Ln %1, Col %2").arg(p.line + 1).arg(p.column + 1));
+        // The file column repeats what the group header says, but a row is
+        // what gets copied or screenshotted — give it the full context there.
+        item->setText(2, p.filePath.isEmpty() ? QString()
+                                              : QFileInfo(p.filePath).fileName());
         const QString tip = tr("%1 at %2:%3:%4")
                                 .arg(severityWord(p.severity), p.filePath)
                                 .arg(p.line + 1)
                                 .arg(p.column + 1);
         item->setToolTip(0, tip);
         item->setToolTip(1, tip);
+        item->setToolTip(2, p.filePath);
         item->setData(0, kRolePath, p.filePath);
         item->setData(0, kRoleLine, p.line);
         item->setData(0, kRoleColumn, p.column);
