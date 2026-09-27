@@ -614,6 +614,13 @@ QWidget* SettingsDialog::buildKitsPage()
     form->addRow(tr("Toolchain"), inheritRow);
     connect(kitInheritToolchain_, &QCheckBox::toggled, this,
             [this](bool) { updateKitInheritanceUi(); });
+    // Switching the referenced toolchain re-resolves the inherited display
+    // (only while the kit actually inherits).
+    connect(kitToolchainId_, &QComboBox::currentTextChanged, this, [this](const QString&) {
+        if (kitInheritToolchain_->isChecked()) {
+            updateKitInheritanceUi();
+        }
+    });
 
     kitCCompiler_ = makeCombo(QStringLiteral("kit.cCompiler"), true);
     form->addRow(tr("C compiler"), kitCCompiler_);
@@ -1476,6 +1483,9 @@ void SettingsDialog::identifyToolchainFolder()
 void SettingsDialog::loadKitForm(int kitIndex)
 {
     LoadGuard guard(this);
+    // The inheritance display snapshot belongs to the kit being shown; drop
+    // any leftover from the previously selected kit first.
+    kitToolFieldsBackup_.clear();
     currentKitIndex_ = kitIndex;
     currentConfigIndex_ = -1;
     const QList<Settings::Kit>& list = kits();
@@ -1513,8 +1523,6 @@ void SettingsDialog::loadKitForm(int kitIndex)
     kitIsDefault_->setChecked(kit.isDefault);
     kitInheritToolchain_->setChecked(kit.inheritToolchain);
     kitToolchainId_->setCurrentText(kit.toolchainId);
-    kitInheritToolchain_->setChecked(kit.inheritToolchain);
-    kitToolchainId_->setCurrentText(kit.toolchainId);
     kitCCompiler_->setCurrentText(kit.cCompiler);
     kitCppCompiler_->setCurrentText(kit.cppCompiler);
     kitDebugger_->setCurrentText(kit.debugger);
@@ -1531,6 +1539,9 @@ void SettingsDialog::loadKitForm(int kitIndex)
     kitGitArgs_->setPlainText(kit.gitArgs.join(QLatin1Char('\n')));
     kitClangFormatStyle_->setCurrentText(kit.clangFormatStyle);
     kitClangdFallbackStyle_->setCurrentText(kit.clangdFallbackStyle);
+    // The fields now show the kit's own values: that is the snapshot the
+    // inheritance display restores from and treats as "the kit's own".
+    saveKitToolFieldsSnapshot();
     updateKitInheritanceUi();
 
     rebuildConfigList(-1);
@@ -1556,20 +1567,26 @@ void SettingsDialog::commitKitForm()
     kit.isDefault = kitIsDefault_->isChecked();
     kit.inheritToolchain = kitInheritToolchain_->isChecked();
     kit.toolchainId = kitToolchainId_->currentText().trimmed();
-    kit.cCompiler = kitCCompiler_->currentText().trimmed();
-    kit.cppCompiler = kitCppCompiler_->currentText().trimmed();
-    kit.debugger = kitDebugger_->currentText().trimmed();
-    kit.clangd = kitClangd_->currentText().trimmed();
-    kit.clangFormat = kitClangFormat_->currentText().trimmed();
-    const QHash<QComboBox*, const char*> toolFields = {
-        {kitToolCmake_, "cmake"}, {kitToolNinja_, "ninja"},
-        {kitToolGnuMake_, "gnuMake"}, {kitToolMsbuild_, "msbuild"}};
-    for (auto it = toolFields.constBegin(); it != toolFields.constEnd(); ++it) {
-        const QString path = it.key()->currentText().trimmed();
-        if (path.isEmpty()) {
-            kit.buildTools.remove(QLatin1String(it.value()));
-        } else {
-            kit.buildTools.insert(QLatin1String(it.value()), path);
+    // While inheriting, the tool widgets display the resolved toolchain
+    // paths; committing them would freeze today's toolchain into the kit's
+    // own fields and silently break the inheritance (non-empty kit fields
+    // win over the toolchain). Leave the stored fallbacks untouched.
+    if (!kit.inheritToolchain) {
+        kit.cCompiler = kitCCompiler_->currentText().trimmed();
+        kit.cppCompiler = kitCppCompiler_->currentText().trimmed();
+        kit.debugger = kitDebugger_->currentText().trimmed();
+        kit.clangd = kitClangd_->currentText().trimmed();
+        kit.clangFormat = kitClangFormat_->currentText().trimmed();
+        const QHash<QComboBox*, const char*> toolFields = {
+            {kitToolCmake_, "cmake"}, {kitToolNinja_, "ninja"},
+            {kitToolGnuMake_, "gnuMake"}, {kitToolMsbuild_, "msbuild"}};
+        for (auto it = toolFields.constBegin(); it != toolFields.constEnd(); ++it) {
+            const QString path = it.key()->currentText().trimmed();
+            if (path.isEmpty()) {
+                kit.buildTools.remove(QLatin1String(it.value()));
+            } else {
+                kit.buildTools.insert(QLatin1String(it.value()), path);
+            }
         }
     }
     kit.cppStandard = kitCppStandard_->currentText().trimmed();
@@ -1822,19 +1839,82 @@ void SettingsDialog::updateKitSuggestions()
 
 void SettingsDialog::updateKitInheritanceUi()
 {
-    // Inheriting a toolchain means the kit's own tool fields are fallbacks
-    // filled from the toolchain — the self-selection rows are disabled so
-    // the tools actually used cannot diverge silently from the toolchain.
+    // Inheriting a toolchain means the kit's tool fields show what actually
+    // takes effect — the referenced toolchain's paths wherever the kit does
+    // not name its own — and the self-selection rows are disabled so the
+    // tools actually used cannot diverge silently from the toolchain.
     const bool inherit = kitInheritToolchain_->isChecked();
     kitToolchainId_->setEnabled(inherit);
-    for (QComboBox* combo : {kitCCompiler_, kitCppCompiler_, kitDebugger_,
-                             kitClangd_, kitClangFormat_, kitToolCmake_,
-                             kitToolNinja_, kitToolGnuMake_, kitToolMsbuild_}) {
+    const QList<QComboBox*> toolCombos = {
+        kitCCompiler_, kitCppCompiler_, kitDebugger_, kitClangd_,
+        kitClangFormat_, kitToolCmake_, kitToolNinja_, kitToolGnuMake_,
+        kitToolMsbuild_};
+    for (QComboBox* combo : toolCombos) {
         combo->setEnabled(!inherit);
     }
     if (kitToolsBox_ != nullptr) {
         kitToolsBox_->setEnabled(!inherit);
     }
+    if (inherit) {
+        if (kitToolFieldsBackup_.isEmpty()) {
+            // Manual tick: capture what the user sees right now (the kit's
+            // own values, including uncommitted edits) before display takes
+            // over. loadKitForm re-snapshots after refilling the fields.
+            saveKitToolFieldsSnapshot();
+        }
+        applyKitInheritanceDisplay();
+    } else {
+        for (auto it = kitToolFieldsBackup_.constBegin();
+             it != kitToolFieldsBackup_.constEnd(); ++it) {
+            QSignalBlocker blocker(it.key());
+            it.key()->setCurrentText(it.value());
+        }
+        kitToolFieldsBackup_.clear();
+    }
+}
+
+void SettingsDialog::saveKitToolFieldsSnapshot()
+{
+    const QList<QComboBox*> toolCombos = {
+        kitCCompiler_, kitCppCompiler_, kitDebugger_, kitClangd_,
+        kitClangFormat_, kitToolCmake_, kitToolNinja_, kitToolGnuMake_,
+        kitToolMsbuild_};
+    kitToolFieldsBackup_.clear();
+    for (QComboBox* combo : toolCombos) {
+        kitToolFieldsBackup_.insert(combo, combo->currentText());
+    }
+}
+
+void SettingsDialog::applyKitInheritanceDisplay()
+{
+    const QString toolchainId = kitToolchainId_->currentText().trimmed();
+    const Settings::Toolchain* toolchain = nullptr;
+    for (const Settings::Toolchain& candidate : state(currentScope_).toolchains) {
+        if (candidate.id == toolchainId) {
+            toolchain = &candidate;
+            break;
+        }
+    }
+    if (toolchain == nullptr) {
+        // Nothing to inherit from: keep showing the kit's own values.
+        return;
+    }
+    // Mirror SettingsStore::applyToolchainInheritance — fields the kit names
+    // itself still win, so show the kit's snapshot value when non-empty.
+    const auto show = [this](QComboBox* combo, const QString& inherited) {
+        const QString own = kitToolFieldsBackup_.value(combo);
+        QSignalBlocker blocker(combo);
+        combo->setCurrentText(own.isEmpty() ? inherited : own);
+    };
+    show(kitCCompiler_, toolchain->cCompiler);
+    show(kitCppCompiler_, toolchain->cppCompiler);
+    show(kitDebugger_, toolchain->debugger);
+    show(kitClangd_, toolchain->clangd);
+    show(kitClangFormat_, toolchain->clangFormat);
+    show(kitToolCmake_, toolchain->buildTools.value(QStringLiteral("cmake")));
+    show(kitToolNinja_, toolchain->buildTools.value(QStringLiteral("ninja")));
+    show(kitToolGnuMake_, toolchain->buildTools.value(QStringLiteral("gnuMake")));
+    show(kitToolMsbuild_, toolchain->buildTools.value(QStringLiteral("msbuild")));
 }
 
 QString SettingsDialog::uniqueKitId(const QString& base)

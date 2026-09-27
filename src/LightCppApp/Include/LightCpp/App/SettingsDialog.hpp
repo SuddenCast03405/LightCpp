@@ -150,6 +150,14 @@ private:
     void updateKitSuggestions();
     void updateDefaultsKitItems();
     void updateKitInheritanceUi();
+    /// Snapshot the kit's own tool-field values (what the widgets show right
+    /// before inheritance display takes over). Restored when the user unticks
+    /// "Inherit toolchain" so uncommitted edits survive the round trip.
+    void saveKitToolFieldsSnapshot();
+    /// Show, per tool field, what actually takes effect: the kit's own value
+    /// when set, else the referenced toolchain's value (mirrors
+    /// SettingsStore::applyToolchainInheritance). Fields stay disabled.
+    void applyKitInheritanceDisplay();
     void clearConfigWidgets(bool enabled);
 
     // --- save ----------------------------------------------------------------
@@ -222,6 +230,8 @@ private:
     QComboBox* kitClangFormatStyle_ = nullptr;
     QComboBox* kitClangdFallbackStyle_ = nullptr;
     int currentKitIndex_ = -1;
+    /// Tool-field texts captured while inheritance display replaces them.
+    QHash<QComboBox*, QString> kitToolFieldsBackup_;
 
     // --- kits page: build-configuration form ---------------------------------
     QGroupBox* configGroup_ = nullptr;  // needed by QGroupBox forward decl? no — include
