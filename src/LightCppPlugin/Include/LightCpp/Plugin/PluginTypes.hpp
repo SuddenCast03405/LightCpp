@@ -31,6 +31,9 @@ struct ProjectSummary {
     QString filePath;         // the descriptor itself, absolute
     QString projectDir;       // the project's root directory
     QString name;             // display name, for the window title
+    /// What opened it, for the build banner ("Dev-C++", "Visual Studio").
+    /// Empty means the backend did not say; the banner then stays generic.
+    QString formatName;
     QString targetLabel;      // what it builds, e.g. "Console Application"
     QString outputPath;       // the binary the build will produce
     int unitCount = 0;        // units listed in the file

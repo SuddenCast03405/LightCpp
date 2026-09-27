@@ -27,7 +27,7 @@ endif()
 # Dependencies (spec 2: Qt 6.5 Widgets is the UI shell; this module only
 # needs QtCore so far, which the MSYS2 toolchain provides)
 # ---------------------------------------------------------------------------
-find_package(Qt6 6.5 COMPONENTS Core Widgets REQUIRED)
+find_package(Qt6 6.5 COMPONENTS Core Widgets Xml REQUIRED)
 
 # ---------------------------------------------------------------------------
 # CPM.cmake dependency management (spec 4.2: all third-party deps via CPM)

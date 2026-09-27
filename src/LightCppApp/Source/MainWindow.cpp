@@ -2910,8 +2910,7 @@ void MainWindow::openFolder(const QString& dir)
                 tr("Project closed: %1 was left behind.").arg(previous));
         }
         outputPanel_->appendBuildOutput(
-            tr("No CMakeLists.txt or .dev project here — showing the folder "
-               "on its own."));
+            tr("No project descriptor here — showing the folder on its own."));
         // Leaving the previous project also drops its config/ overlay; the
         // base settings apply again from here on.
         syncSettingsOverlays();
@@ -2926,13 +2925,33 @@ void MainWindow::openFolder(const QString& dir)
 
 void MainWindow::onOpenProject()
 {
-    // One dialog for both formats. Which one it is can be told from the name,
-    // and asking the user to say it would be asking them to make a distinction
-    // the file already makes.
-    const QString path = QFileDialog::getOpenFileName(
-        this, tr("Open Project"), QString(),
-        tr("Projects (CMakeLists.txt *.dev);;CMake (CMakeLists.txt);;"
-           "Dev-C++ (*.dev);;All files (*)"));
+    // One dialog for every format. The combined first entry is assembled
+    // from the backends' own filters, so a new project plugin shows up here
+    // without this code learning its extension — asking the user to say
+    // which format they have would be asking them to make a distinction the
+    // file already makes.
+    QStringList pluginFilters;
+    if (pluginManager_ != nullptr) {
+        pluginFilters = pluginManager_->projectFilters();
+    }
+    QStringList allPatterns{QStringLiteral("CMakeLists.txt")};
+    for (const QString& filter : pluginFilters) {
+        // "Dev-C++ (*.dev)" → "*.dev", folded into the combined line.
+        const qsizetype open = filter.indexOf(QLatin1Char('('));
+        const qsizetype close = filter.lastIndexOf(QLatin1Char(')'));
+        if (open >= 0 && close > open) {
+            allPatterns.append(filter.mid(open + 1, close - open - 1)
+                                   .split(QLatin1Char(' '), Qt::SkipEmptyParts));
+        }
+    }
+    QString filter = tr("Projects (%1)").arg(allPatterns.join(QLatin1Char(' ')));
+    filter += QStringLiteral(";;CMake (CMakeLists.txt)");
+    if (!pluginFilters.isEmpty()) {
+        filter += QStringLiteral(";;") + pluginFilters.join(QStringLiteral(";;"));
+    }
+    filter += QStringLiteral(";;") + tr("All files (*)");
+    const QString path =
+        QFileDialog::getOpenFileName(this, tr("Open Project"), QString(), filter);
     if (!path.isEmpty()) {
         openProjectFile(path, true);
     }
@@ -3085,9 +3104,16 @@ void MainWindow::openProjectFile(const QString& path, bool showInExplorer)
         projectKind_ = ProjectKind::DevCpp;
         projectPath_ = info.absoluteFilePath();
         lastProjectExe_ = summary.outputPath;
+        // The format that claimed the file names the banner; every backend
+        // that fills formatName gets "X project opened", the rest stay
+        // generic rather than claiming a format they are not.
+        const QString formatName = summary.formatName.isEmpty()
+                                       ? tr("Project")
+                                       : summary.formatName;
         outputPanel_->appendBuildOutput(
-            tr("Dev-C++ project opened: %1 [%2, %3 unit(s)]")
-                .arg(summary.name.isEmpty() ? info.fileName() : summary.name,
+            tr("%1 project opened: %2 [%3, %4 unit(s)]")
+                .arg(formatName,
+                     summary.name.isEmpty() ? info.fileName() : summary.name,
                      summary.targetLabel)
                 .arg(summary.unitCount));
         outputPanel_->appendBuildOutput(
@@ -3197,7 +3223,18 @@ QList<MainWindow::ProjectStep> MainWindow::projectBuildSteps()
                     .arg(devSummary_.filePath));
             return {};
         }
-        return toProjectSteps(backend->buildSteps(makeBuildRequest()));
+        QList<ProjectStep> steps =
+            toProjectSteps(backend->buildSteps(makeBuildRequest()));
+        if (steps.isEmpty()) {
+            // The backend declined (its build tools are missing, most
+            // likely) — a silent "nothing happens" is the one outcome worse
+            // than a failure, so say why the queue is empty.
+            outputPanel_->appendBuildOutput(
+                tr("No build steps for %1 — the required build tools are "
+                   "missing. See the Plugins channel for details.")
+                    .arg(devSummary_.filePath));
+        }
+        return steps;
     }
 
     outputPanel_->appendBuildOutput(tr("No project is open."));

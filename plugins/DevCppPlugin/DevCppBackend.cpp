@@ -82,6 +82,7 @@ public:
             summary->filePath = project_.filePath;
             summary->projectDir = project_.projectDir;
             summary->name = project_.name;
+            summary->formatName = QStringLiteral("Dev-C++");
             summary->targetLabel = project_.targetLabel();
             summary->outputPath = project_.outputPath();
             summary->unitCount = project_.units.size();

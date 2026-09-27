@@ -1,0 +1,7 @@
+{
+    "name": "MsvcProject",
+    "version": "1.0.0",
+    "publisher": "LightCpp",
+    "description": "Microsoft C/C++ project support: importing and building .vcxproj (MSBuild) and .vcproj (VS2005-2008) projects.",
+    "vendor": "LightCpp"
+}

@@ -9,6 +9,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include <QFile>
 #include <QFileInfo>
 #include <QPluginLoader>
@@ -108,16 +110,27 @@ TEST(PluginManager, DevCppPluginLoadsOpensAndAnswersBuildSteps)
         << errors.join(QStringLiteral("; ")).toStdString();
 
     // The Dev-C++ plugin is present and registered as a project backend.
+    // The exact loaded count grows with the first-party plugin set (the
+    // MSVC project plugin ships next to this one), so this test pins the
+    // Dev-C++ entry rather than the total.
     ASSERT_FALSE(manager.loaded().isEmpty());
-    ASSERT_EQ(manager.backends().size(), 1);
-    EXPECT_EQ(manager.loaded().first().name, QStringLiteral("DevCppProject"));
-    EXPECT_TRUE(manager.loaded().first().hasBackend);
+    ASSERT_FALSE(manager.backends().isEmpty());
+    const auto devPlugin = std::find_if(manager.loaded().cbegin(),
+                                        manager.loaded().cend(),
+                                        [](const auto& entry) {
+                                            return entry.name
+                                                   == QStringLiteral(
+                                                       "DevCppProject");
+                                        });
+    ASSERT_TRUE(devPlugin != manager.loaded().cend());
+    EXPECT_TRUE(devPlugin->hasBackend);
 
     const QString filter = manager.projectFilters().join(QLatin1Char(';'));
     EXPECT_TRUE(filter.contains(QStringLiteral("*.dev")));
 
     auto* backend = manager.backendFor(QStringLiteral("anything.dev"));
-    EXPECT_NE(backend, nullptr);
+    ASSERT_NE(backend, nullptr);
+    EXPECT_EQ(backend->projectFilter(), QStringLiteral("Dev-C++ (*.dev)"));
     EXPECT_EQ(manager.backendFor(QStringLiteral("anything.txt")), nullptr);
 
     // Open a real .dev fixture through the plugin.
@@ -215,12 +228,14 @@ TEST(PluginManager, RegisteredPluginHotUnloadsBySource)
 TEST(PluginManager, DisabledSharedPluginsAreSkipped)
 {
     // A disable list entry that matches a dll file name keeps the loader
-    // from even trying that dll — the point of the disable feature.
+    // from even trying that dll — the point of the disable feature. Every
+    // first-party backend plugin is listed, so nothing loads at all.
     SilentServices services;
     LightCpp::Plugin::PluginManager manager;
     const QStringList errors = manager.loadSharedPlugins(
         QStringLiteral(LIGHTCPP_BUILT_PLUGIN_DIR), &services,
-        {QStringLiteral("libdevcppplugin.dll")});
+        {QStringLiteral("libdevcppplugin.dll"),
+         QStringLiteral("libmsvcplugin.dll")});
     EXPECT_TRUE(errors.isEmpty());
     EXPECT_TRUE(manager.loaded().isEmpty());
     EXPECT_TRUE(manager.backends().isEmpty());

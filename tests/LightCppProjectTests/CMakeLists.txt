@@ -7,6 +7,7 @@ add_executable(LightCppProjectTests
     DevCppProjectTests.cpp
     FolderContentsTests.cpp
     GitStatusTests.cpp
+    MsvcProjectTests.cpp
 )
 
 target_link_libraries(LightCppProjectTests PRIVATE

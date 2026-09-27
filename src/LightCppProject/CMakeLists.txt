@@ -13,6 +13,8 @@ add_library(LightCppProject STATIC
     Source/DevCppProject.cpp
     Source/FolderContents.cpp
     Source/GitStatus.cpp
+    Source/MsvcProject.cpp
+    Source/ProjectText.cpp
 )
 
 add_library(LightCpp::Project ALIAS LightCppProject)
@@ -26,6 +28,8 @@ target_compile_features(LightCppProject PUBLIC cxx_std_20)
 
 target_link_libraries(LightCppProject
     PUBLIC Qt6::Core
+    # .vcxproj/.vcproj are XML: QDomDocument lives in Qt6::Xml.
+    PUBLIC Qt6::Xml
     PRIVATE LightCppWarnings
     # .dev descriptors (and the makefiles generated from them) go through the
     # encoding detector/codec: Dev-C++ writes them in the machine's ANSI page.

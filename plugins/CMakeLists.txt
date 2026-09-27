@@ -5,4 +5,5 @@
 # Lua host from <exe dir>/plugins/lua.
 
 add_subdirectory(DevCppPlugin)
+add_subdirectory(MsvcPlugin)
 
