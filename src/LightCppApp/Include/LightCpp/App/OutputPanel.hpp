@@ -82,7 +82,7 @@ public:
     /// Terminal style drop-down entry for one shell session. The log is
     /// cleared, the channel brought to front and the input row enabled.
     /// Returns the channel index.
-    int openTerminalChannel(const QString& title);
+    int openTerminalChannel(const QString& title, bool resetBuffer = true);
     /// Append raw terminal output (already byte-decoded) at the cursor,
     /// without appendPlainText's per-line paragraph logic: an unfinished
     /// line — a prompt such as "D:\>" that never ends with a newline —

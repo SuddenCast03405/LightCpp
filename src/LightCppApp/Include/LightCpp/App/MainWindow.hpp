@@ -2,6 +2,7 @@
 
 #include <QMainWindow>
 #include <QFont>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QList>
 #include <QMap>
@@ -382,6 +383,17 @@ private:
     /// lazily created and separate from runner_: its raw bytes land in the
     /// dedicated terminal channel, not in Program Output.
     QProcess* ensureTerminalRunner();
+    /// Begin watching the user program launched inside the embedded
+    /// terminal: a Toolhelp32 poll pairs the shell's PID with the program's
+    /// image name, so "can run again" follows the program's lifetime, not
+    /// the shell's (a `cmd /k` shell outlives the program by design).
+    void startTerminalProgramWatch(const QString& exePath);
+    /// One poll tick: update the embedded-terminal program-alive state.
+    void pollTerminalProgram();
+    /// True when a live process whose parent is `shellPid` carries
+    /// `imageLower` (case-insensitive, e.g. "main.exe").
+    [[nodiscard]] static bool shellHasChildImage(unsigned long shellPid,
+                                                 const QString& imageLower);
     /// Launch `exePath` through ConsolePauser.exe in its own console window
     /// (preferences run.output = "consolePauser"). Nothing is captured; the
     /// console owns the program's input and output.
@@ -602,6 +614,14 @@ private:
     /// The embedded terminal session's shell, separate from runner_: its
     /// raw output goes to the dedicated terminal channel.
     QProcess* terminalRunner_ = nullptr;
+    /// Terminal-program lifetime watch: image name of the exe typed into
+    /// the shell, whether it has been observed alive at least once, the
+    /// current aliveness, and the launch-time grace timer source.
+    QString terminalProgramImage_;
+    bool terminalProgramSeen_ = false;
+    bool terminalProgramRunning_ = false;
+    QElapsedTimer terminalProgramLaunch_;
+    QTimer* terminalProgramTimer_ = nullptr;
     /// The terminal channel's stack/combo index once it has been opened.
     int terminalChannel_ = -1;
     /// The debug session (gdb / lldb / cdb). Created in the constructor.

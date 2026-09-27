@@ -31,6 +31,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <QAction>
 #include <QActionGroup>
@@ -3895,6 +3896,73 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
     runner_->start(exePath, {});
     updateRunActionStates();
 }
+void MainWindow::startTerminalProgramWatch(const QString& exePath)
+{
+    terminalProgramImage_ = QFileInfo(exePath).fileName().toLower();
+    terminalProgramSeen_ = false;
+    // Assume alive during the grace window so the run actions do not
+    // flicker; the first poll corrects this if the program never appears.
+    terminalProgramRunning_ = true;
+    terminalProgramLaunch_.start();
+    if (terminalProgramTimer_ == nullptr) {
+        terminalProgramTimer_ = new QTimer(this);
+        terminalProgramTimer_->setInterval(300);
+        connect(terminalProgramTimer_, &QTimer::timeout,
+                this, &MainWindow::pollTerminalProgram);
+    }
+    terminalProgramTimer_->start();
+}
+
+void MainWindow::pollTerminalProgram()
+{
+    if (terminalRunner_ == nullptr
+        || terminalRunner_->state() == QProcess::NotRunning
+        || terminalProgramImage_.isEmpty()) {
+        terminalProgramTimer_->stop();
+        terminalProgramRunning_ = false;
+        updateRunActionStates();
+        return;
+    }
+    const bool alive = shellHasChildImage(
+        static_cast<unsigned long>(terminalRunner_->processId()),
+        terminalProgramImage_);
+    if (alive) {
+        terminalProgramSeen_ = true;
+        terminalProgramRunning_ = true;
+    } else if (terminalProgramSeen_
+               || terminalProgramLaunch_.elapsed() > 2000) {
+        // Observed once and gone, or never showed up within the grace
+        // window (a slow shell may still be resolving the command — do not
+        // confuse that with an exit).
+        terminalProgramRunning_ = false;
+    }
+    updateRunActionStates();
+}
+
+bool MainWindow::shellHasChildImage(unsigned long shellPid,
+                                    const QString& imageLower)
+{
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    PROCESSENTRY32W entry;
+    entry.dwSize = sizeof(entry);
+    bool found = false;
+    if (Process32FirstW(snap, &entry)) {
+        do {
+            if (entry.th32ParentProcessID == shellPid
+                && QString::fromWCharArray(entry.szExeFile).toLower()
+                       == imageLower) {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snap, &entry));
+    }
+    CloseHandle(snap);
+    return found;
+}
+
 bool MainWindow::startDetachedInNewConsole(const QString& program,
                                            const QStringList& args,
                                            const QString& workDir,
@@ -4031,13 +4099,22 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
         // no line reassembly — so an unfinished prompt such as "D:\>" shows
         // up exactly the way a real console prints it, including the one
         // after the program exits.
-        if (terminalRunner_ != nullptr
-            && terminalRunner_->state() != QProcess::NotRunning) {
+        const bool shellUp = terminalRunner_ != nullptr
+            && terminalRunner_->state() != QProcess::NotRunning;
+        // Only a live *program* blocks a run: the shell (cmd /k, pwsh …)
+        // intentionally outlives the program, and typing the program path
+        // again into the same session is the natural rerun.
+        if (shellUp && terminalProgramRunning_) {
             outputPanel_->appendTerminalOutput(
-                tr("A terminal session is already running.\n"));
+                tr("A program is already running in the terminal.\n"));
             return;
         }
-        outputPanel_->openTerminalChannel(terminalLabel);
+        if (!shellUp) {
+            outputPanel_->openTerminalChannel(terminalLabel);
+        } else {
+            // Reusing the session: keep the previous output visible.
+            outputPanel_->openTerminalChannel(terminalLabel, false);
+        }
         QProcess* runner = ensureTerminalRunner();
         // A PowerShell-style template ends in -Command/-c, which needs a
         // value; launch without it and use the call operator when typing.
@@ -4058,17 +4135,24 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
         outputPanel_->appendTerminalOutput(
             tr("--- Running in %1: %2 ---\n")
                 .arg(terminalLabel, QFileInfo(exePath).absoluteFilePath()));
-        // One-shot: once the shell is up, type the program path into it.
-        QObject::connect(runner, &QProcess::started, this,
-                         [this, runner, firstInput] {
-                             if (runner->state() == QProcess::Running) {
-                                 runner->write(firstInput.toLocal8Bit()
-                                               + QByteArray("\r\n"));
-                             }
-                         },
-                         static_cast<Qt::ConnectionType>(Qt::AutoConnection
-                                                         | Qt::SingleShotConnection));
-        runner->start(program, args);
+        startTerminalProgramWatch(exePath);
+        if (shellUp) {
+            // Session reuse: `started` already fired once, so type the
+            // program path directly instead of waiting for the signal.
+            runner->write(firstInput.toLocal8Bit() + QByteArray("\r\n"));
+        } else {
+            // One-shot: once the shell is up, type the program path into it.
+            QObject::connect(runner, &QProcess::started, this,
+                             [this, runner, firstInput] {
+                                 if (runner->state() == QProcess::Running) {
+                                     runner->write(firstInput.toLocal8Bit()
+                                                   + QByteArray("\r\n"));
+                                 }
+                             },
+                             static_cast<Qt::ConnectionType>(Qt::AutoConnection
+                                                             | Qt::SingleShotConnection));
+            runner->start(program, args);
+        }
         updateRunActionStates();
         return;
     }
@@ -4101,15 +4185,21 @@ void MainWindow::updateRunActionStates()
 {
     const bool building = compiler_ != nullptr
                           && compiler_->state() != QProcess::NotRunning;
-    const bool running = (runner_ != nullptr
-                          && runner_->state() != QProcess::NotRunning)
-                         || (terminalRunner_ != nullptr
-                             && terminalRunner_->state()
-                                    != QProcess::NotRunning);
+    const bool runnerAlive = runner_ != nullptr
+                             && runner_->state() != QProcess::NotRunning;
+    const bool terminalAlive = terminalRunner_ != nullptr
+                               && terminalRunner_->state()
+                                      != QProcess::NotRunning;
+    // Terminal modes: the shell (cmd /k, pwsh …) intentionally outlives the
+    // program it ran, so what blocks a rerun is the program's own lifetime
+    // — watched by the Toolhelp32 poll — not the shell's.
+    const bool runningForRerun =
+        runnerAlive || (terminalAlive && terminalProgramRunning_);
+    const bool running = runnerAlive || terminalAlive;
     const bool debugging = debugger_ != nullptr && debugger_->isRunning();
     if (actCompile_)    actCompile_->setEnabled(!building);
-    if (actCompileRun_) actCompileRun_->setEnabled(!building && !running);
-    if (actRun_)        actRun_->setEnabled(!building && !running);
+    if (actCompileRun_) actCompileRun_->setEnabled(!building && !runningForRerun);
+    if (actRun_)        actRun_->setEnabled(!building && !runningForRerun);
     if (actStopRun_)    actStopRun_->setEnabled(running);
     if (actDebugStart_) actDebugStart_->setEnabled(!debugging && !running);
     if (actDebugStop_)  actDebugStop_->setEnabled(debugging);

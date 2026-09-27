@@ -235,7 +235,7 @@ void OutputPanel::appendPluginOutput(const QString& text)
     pluginLog_->appendPlainText(text);
 }
 
-int OutputPanel::openTerminalChannel(const QString& title)
+int OutputPanel::openTerminalChannel(const QString& title, bool resetBuffer)
 {
     if (terminalLog_ == nullptr) {
         // First terminal session: build the page (log + input row) behind a
@@ -251,8 +251,12 @@ int OutputPanel::openTerminalChannel(const QString& title)
         terminalChannel_ = stack_->addWidget(page);
         channelCombo_->addItem(title);
     } else {
-        // A later session reuses the channel: fresh buffer, fresh title.
-        terminalLog_->clear();
+        // A later session reuses the channel: fresh title, and a fresh
+        // buffer unless the caller is reusing a still-live session whose
+        // previous output must stay visible.
+        if (resetBuffer) {
+            terminalLog_->clear();
+        }
         if (channelCombo_->itemText(terminalChannel_) != title) {
             channelCombo_->setItemText(terminalChannel_, title);
         }
