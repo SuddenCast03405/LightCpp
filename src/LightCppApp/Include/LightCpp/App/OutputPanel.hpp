@@ -26,7 +26,7 @@ struct ProblemEntry {
     QString code;
 };
 
-    /// Output area.  Seven switchable channels behind one drop-down:
+    /// Output area.  Eight switchable channels behind one drop-down:
     ///
     ///   Clangd Log      — the language server's own log (stderr + window/logMessage)
     ///   Build Log       — compiler output and IDE file operations
@@ -34,8 +34,11 @@ struct ProblemEntry {
     ///                     run banner and its exit status. A one-line input field
     ///                     below the log feeds the program's stdin while it runs.
     ///   Git             — status, diffs and commit output
-    ///   Problems        — errors/warnings pushed by clangd, as a clickable list
-    ///                     that jumps to the offending source location
+    ///   Problems (LSP Server) — errors/warnings pushed by clangd, as a
+    ///                     clickable list that jumps to the offending source location
+    ///   Problems (Compiler) — errors/warnings parsed out of the compiler's
+    ///                     log (single-file compile and project build alike),
+    ///                     clickable the same way
     ///   Debugger        — the debug session: debugger console, breakpoints and
     ///                     the program's output while it runs under the debugger,
     ///                     plus an input row feeding the debugger's console
@@ -49,13 +52,14 @@ class OutputPanel : public QWidget {
 public:
     /// Channel indices, matching the drop-down order.
     enum Channel {
-        ChannelServer = 0,   // clangd log
-        ChannelBuild = 1,    // compiler / IDE log
-        ChannelProgram = 2,  // the program's own stdout/stderr
-        ChannelGit = 3,      // git status / diff / commit
-        ChannelProblems = 4, // diagnostics list
-        ChannelDebug = 5,    // debug session console
-        ChannelPlugins = 6,  // plugin load/unload + plugin command output
+        ChannelServer = 0,          // clangd log
+        ChannelBuild = 1,           // compiler / IDE log
+        ChannelProgram = 2,         // the program's own stdout/stderr
+        ChannelGit = 3,             // git status / diff / commit
+        ChannelProblems = 4,        // LSP diagnostics list
+        ChannelProblemsCompiler = 5, // compiler diagnostics list
+        ChannelDebug = 6,           // debug session console
+        ChannelPlugins = 7,         // plugin load/unload + plugin command output
     };
 
     explicit OutputPanel(QWidget* parent = nullptr);
@@ -73,8 +77,24 @@ public:
     /// Append a line to the plugins channel (load messages and plugin
     /// command output routed through IdeServices::log).
     void appendPluginOutput(const QString& text);
+    /// Open (or reuse) the embedded-terminal channel, titled after the
+    /// selected terminal (e.g. "Windows Command Prompt") — the Windows
+    /// Terminal style drop-down entry for one shell session. The log is
+    /// cleared, the channel brought to front and the input row enabled.
+    /// Returns the channel index.
+    int openTerminalChannel(const QString& title);
+    /// Append raw terminal output (already byte-decoded) at the cursor,
+    /// without appendPlainText's per-line paragraph logic: an unfinished
+    /// line — a prompt such as "D:\>" that never ends with a newline —
+    /// stays open and the following bytes continue on the same line, like
+    /// a real terminal.
+    void appendTerminalOutput(const QString& text);
+    /// Enable/disable the terminal input row (live while the shell runs).
+    void setTerminalInputEnabled(bool enabled);
     /// Replace the Problems list. An empty list shows "no problems".
     void setProblems(const QList<ProblemEntry>& problems);
+    /// Replace the Problems (Compiler) list (parsed compiler output).
+    void setCompilerProblems(const QList<ProblemEntry>& problems);
 
     /// Bring `channel` to the front.
     void showChannel(Channel channel);
@@ -108,12 +128,21 @@ signals:
     void programInputSubmitted(const QString& text);
     /// The user submitted a console command for the live debug session.
     void debuggerInputSubmitted(const QString& text);
+    /// The user submitted a line for the embedded terminal (a shell command
+    /// or input to the program the shell is currently running).
+    void terminalInputSubmitted(const QString& text);
 
 private:
-    /// Refresh the drop-down labels (the Problems entry carries counts).
-    void updateChannelLabels();
-    /// Rebuild the Problems tree from a flat list.
-    void rebuildProblemsTree(const QList<ProblemEntry>& problems);
+    /// Rebuild a Problems tree from a flat list. Shared by the LSP and the
+    /// compiler channel — the trees behave identically, only the source of
+    /// the entries differs.
+    void rebuildProblemsTree(QTreeWidget* tree,
+                             const QList<ProblemEntry>& problems);
+    /// Fill `tree` from `problems` and stamp the error/warning counts into
+    /// the channel drop-down label of the matching Problems channel.
+    void updateProblemsChannel(QTreeWidget* tree, int comboIndex,
+                               const QString& baseLabel,
+                               const QList<ProblemEntry>& problems);
     /// Build a "log view + one-line input row" page: what the Program and
     /// Debugger channels share. The input starts disabled; `submit` routes
     /// the typed line (the field is cleared before `submit` runs). When
@@ -140,4 +169,12 @@ private:
     QPlainTextEdit* debugLog_;
     QPlainTextEdit* pluginLog_;
     QTreeWidget* problems_;
+    /// The embedded terminal session (created on demand by
+    /// openTerminalChannel): one log + input row appended after the fixed
+    /// channels, titled after the selected terminal.
+    QPlainTextEdit* terminalLog_ = nullptr;
+    QLineEdit* terminalInput_ = nullptr;
+    QWidget* terminalInputRow_ = nullptr;
+    int terminalChannel_ = -1;  // stack/combo index once opened
+    QTreeWidget* compilerProblems_;
 };

@@ -15,6 +15,7 @@
 #include "LightCpp/App/SettingsDialog.hpp"
 #include "LightCpp/App/ToolchainPaths.hpp"
 #include "LightCpp/Plugin/ProjectBackend.hpp"
+#include "LightCpp/Project/CompilerDiagnostics.hpp"
 
 #include "LightCpp/Text/Converter.hpp"
 #include "LightCpp/Text/Encoding.hpp"
@@ -35,6 +36,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QColor>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDesktopServices>
@@ -49,6 +51,7 @@
 #include <QUrl>
 #include <QInputDialog>
 #include <QLabel>
+#include <QListWidget>
 #include <QMenuBar>
 #include <QMetaType>
 #include <QMessageBox>
@@ -169,18 +172,29 @@ MainWindow::MainWindow(QWidget* parent)
     // The explorer and the output panel used to be QDockWidgets, which could
     // be dragged out into separate floating windows. They are plain widgets
     // now, arranged so the shell is a single fixed layout:
-    //   +---------------------------+
-    //   | Explorer | Editors        |   <- horizontal splitter
-    //   +---------------------------+
+    //   +--------------+------------+
+    //   | Side | Expl. | Editors    |   <- horizontal splitter; the side
+    //   | tabs |       |            |      bar is a vertical tab widget
+    //   +--------------+------------+      (Explorer/Git/Plugins)
     //   | Output                    |   <- vertical splitter
     //   +---------------------------+
     tabWidget_->setTabsClosable(true);
     tabWidget_->setMovable(true);
     tabWidget_->setDocumentMode(true);
 
+    // The left-most activity bar, VSCode style: vertical tabs on the west
+    // edge, one page each for the Explorer, Git and plugin management.
+    sideTabs_ = new QTabWidget(this);
+    sideTabs_->setObjectName(QStringLiteral("sideTabs"));
+    sideTabs_->setTabPosition(QTabWidget::West);
+    sideTabs_->setDocumentMode(true);
+    sideTabs_->addTab(fileExplorer_, tr("Explorer"));
+    sideTabs_->addTab(createGitPlaceholder(), tr("Git"));
+    sideTabs_->addTab(createPluginPanel(), tr("Plugins"));
+
     auto* mainSplitter = new QSplitter(Qt::Horizontal, this);
     mainSplitter->setChildrenCollapsible(false);  // panels can't be dragged shut
-    mainSplitter->addWidget(fileExplorer_);
+    mainSplitter->addWidget(sideTabs_);
     mainSplitter->addWidget(tabWidget_);
     mainSplitter->setStretchFactor(0, 0);
     mainSplitter->setStretchFactor(1, 1);
@@ -195,6 +209,7 @@ MainWindow::MainWindow(QWidget* parent)
     outerSplitter->setSizes({600, 190});
 
     fileExplorer_->setMinimumWidth(160);
+    sideTabs_->setMinimumWidth(160);
     outputPanel_->setMinimumHeight(80);
 
     setCentralWidget(outerSplitter);
@@ -244,7 +259,17 @@ MainWindow::MainWindow(QWidget* parent)
             if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
                 if (QFileInfo(ed->lintPath()).absoluteFilePath()
                         == QFileInfo(filePath).absoluteFilePath()) {
+                    // Record the fresh LSP list first (the store stays
+                    // LSP-only), then re-apply the merge so compiler markers
+                    // survive a clangd push instead of being wiped by it.
+                    const QString key = ed->lintPath();
+                    if (diags.isEmpty()) {
+                        diagnosticsByFile_.remove(key);
+                    } else {
+                        diagnosticsByFile_.insert(key, diags);
+                    }
                     ed->setDiagnostics(diags);
+                    applyCompilerDiagnosticsToEditors();
                     break;
                 }
             }
@@ -374,6 +399,19 @@ MainWindow::MainWindow(QWidget* parent)
         // what a real terminal would have handed them.
         runner_->write(text.toLocal8Bit() + '\n');
     });
+    // A line typed into the embedded terminal channel goes to the shell's
+    // stdin as if typed at the keyboard (the shell itself echoes commands,
+    // so the transcript needs no manual echo).
+    connect(outputPanel_, &OutputPanel::terminalInputSubmitted,
+            this, [this](const QString& text) {
+        if (terminalRunner_ == nullptr
+            || terminalRunner_->state() == QProcess::NotRunning) {
+            outputPanel_->appendTerminalOutput(
+                tr("(no terminal session is running — input was discarded)\n"));
+            return;
+        }
+        terminalRunner_->write(text.toLocal8Bit() + QByteArray("\r\n"));
+    });
     // A line typed into the Debugger channel goes straight to the debugger
     // process (GDB/MI, LLDB or cdb dialect — whatever the session speaks).
     connect(outputPanel_, &OutputPanel::debuggerInputSubmitted,
@@ -444,6 +482,11 @@ MainWindow::MainWindow(QWidget* parent)
     // Tools menu entry stays checkable so it can still be switched off.
     actSyntaxCheck_->setChecked(clangdEnabledByDefault_);
 
+    // Load C++ plugins and Lua scripts once, before the window shows: they
+    // may customize menus (the zh-cn language pack does) and they fill the
+    // plugin management panel.
+    loadPlugins();
+
     // The start-up compiler check runs once the event loop is up: asking
     // from inside the constructor would open a dialog before the window is
     // visible.
@@ -508,6 +551,14 @@ void MainWindow::loadPlugins()
          pluginManager_->loadSharedPlugins(pluginDir, this)) {
         outputPanel_->appendPluginOutput(tr("Plugin error: %1").arg(error));
     }
+    // Lua scripts live one level deeper: plugins/lua/*.lua, each in its own
+    // sandbox, registered with the same manager as the C++ plugins.
+    for (const QString& error :
+         LightCpp::Lua::LuaPluginHost::loadPluginsFromDirectory(
+             pluginDir + QStringLiteral("/lua"), this,
+             pluginManager_)) {
+        outputPanel_->appendPluginOutput(tr("Plugin error: %1").arg(error));
+    }
     for (const auto& loaded : pluginManager_->loaded()) {
         outputPanel_->appendPluginOutput(
             tr("Plugin loaded: %1 %2 (%3)")
@@ -516,6 +567,86 @@ void MainWindow::loadPlugins()
     }
     if (pluginManager_->loaded().isEmpty()) {
         outputPanel_->appendPluginOutput(tr("No plugins found."));
+    }
+    refreshPluginPanel();
+}
+
+QWidget* MainWindow::createGitPlaceholder()
+{
+    auto* panel = new QWidget(this);
+    panel->setObjectName(QStringLiteral("sideGitPanel"));
+    auto* layout = new QVBoxLayout(panel);
+    layout->setContentsMargins(8, 8, 8, 8);
+    auto* note = new QLabel(tr("The Git panel is not built yet — the Git "
+                               "menu and status bar keep working."), panel);
+    note->setObjectName(QStringLiteral("sideGitNote"));
+    note->setWordWrap(true);
+    note->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
+    note->setStyleSheet(QStringLiteral("color: gray; margin-top: 24px;"));
+    layout->addWidget(note);
+    layout->addStretch(1);
+    return panel;
+}
+
+QWidget* MainWindow::createPluginPanel()
+{
+    auto* panel = new QWidget(this);
+    panel->setObjectName(QStringLiteral("pluginPanel"));
+    auto* layout = new QVBoxLayout(panel);
+    layout->setContentsMargins(0, 0, 0, 0);
+    pluginList_ = new QListWidget(panel);
+    pluginList_->setObjectName(QStringLiteral("pluginList"));
+    pluginList_->setSelectionMode(QAbstractItemView::NoSelection);
+    pluginList_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    pluginList_->setSpacing(2);
+    layout->addWidget(pluginList_);
+    return panel;
+}
+
+void MainWindow::refreshPluginPanel()
+{
+    if (pluginList_ == nullptr) {
+        return;
+    }
+    pluginList_->clear();
+    using Kind = LightCpp::Plugin::PluginManager::Loaded::Kind;
+    for (const auto& loaded : pluginManager_->loaded()) {
+        auto* item = new QListWidgetItem(pluginList_);
+        auto* row = new QWidget;
+        auto* layout = new QVBoxLayout(row);
+        layout->setContentsMargins(10, 8, 10, 8);
+        layout->setSpacing(5);
+        auto* nameLabel = new QLabel(loaded.name, row);
+        nameLabel->setStyleSheet(QStringLiteral("font-weight: bold;"));
+        layout->addWidget(nameLabel);
+
+        // The tag chips: publisher (when declared), version, and the kind
+        // the plugin's code came from.
+        auto* tags = new QHBoxLayout;
+        tags->setSpacing(4);
+        const auto addChip = [&tags, row](const QString& text,
+                                          const QColor& background) {
+            auto* chip = new QLabel(text, row);
+            chip->setStyleSheet(
+                QStringLiteral("background: %1; color: white;"
+                               "border-radius: 7px; padding: 1px 8px;"
+                               "font-size: 11px;")
+                    .arg(background.name()));
+            tags->addWidget(chip);
+        };
+        if (!loaded.publisher.isEmpty()) {
+            addChip(loaded.publisher, QColor(107, 114, 128));   // gray
+        }
+        addChip(loaded.version, QColor(37, 99, 235));           // blue
+        addChip(loaded.kind == Kind::Lua ? QStringLiteral("Lua")
+                                         : QStringLiteral("C++"),
+                loaded.kind == Kind::Lua ? QColor(22, 163, 74)    // green
+                                         : QColor(217, 119, 6)); // amber
+        tags->addStretch(1);
+        layout->addLayout(tags);
+
+        pluginList_->setItemWidget(item, row);
+        item->setSizeHint(row->sizeHint());
     }
 }
 
@@ -775,8 +906,10 @@ void MainWindow::createActions()
     actToggleExplorer_->setCheckable(true);
     actToggleExplorer_->setChecked(true);
     actToggleExplorer_->setShortcut(QKeySequence(QStringLiteral("Ctrl+B")));
+    // The Explorer now lives inside the vertical side tabs, so the toggle
+    // shows and hides the whole activity bar.
     connect(actToggleExplorer_, &QAction::toggled,
-            fileExplorer_, &QWidget::setVisible);
+            sideTabs_, &QWidget::setVisible);
 
     actToggleOutput_ = new QAction(tr("&Output Panel"), this);
     actToggleOutput_->setCheckable(true);
@@ -1108,7 +1241,10 @@ void MainWindow::createActions()
 
 void MainWindow::createMenuBar()
 {
+    // Every menu carries a stable objectName: plugins address menus by id
+    // (ide.ui.setMenuTitle("menuFile", ...)), so the ids are contract.
     auto* fileMenu = menuBar()->addMenu(tr("&File"));
+    fileMenu->setObjectName(QStringLiteral("menuFile"));
     fileMenu->addAction(actNew_);
     fileMenu->addAction(actOpen_);
     fileMenu->addAction(actOpenFolder_);
@@ -1119,6 +1255,7 @@ void MainWindow::createMenuBar()
     fileMenu->addAction(actExit_);
 
     auto* editMenu = menuBar()->addMenu(tr("&Edit"));
+    editMenu->setObjectName(QStringLiteral("menuEdit"));
     editMenu->addAction(actFormat_);
     editMenu->addAction(actFormatFolder_);
     editMenu->addSeparator();
@@ -1133,6 +1270,7 @@ void MainWindow::createMenuBar()
     editMenu->addAction(actSettings_);
 
     auto* projectMenu = menuBar()->addMenu(tr("&Project"));
+    projectMenu->setObjectName(QStringLiteral("menuProject"));
     projectMenu->addAction(actOpenProject_);
     projectMenu->addSeparator();
     projectMenu->addAction(actConfigureProject_);
@@ -1155,6 +1293,7 @@ void MainWindow::createMenuBar()
     toolsMenu->addAction(actStopRun_);
 
     auto* debugMenu = menuBar()->addMenu(tr("&Debug"));
+    debugMenu->setObjectName(QStringLiteral("menuDebug"));
     debugMenu->addAction(actToggleBreakpoint_);
     debugMenu->addSeparator();
     debugMenu->addAction(actDebugStart_);
@@ -1166,10 +1305,12 @@ void MainWindow::createMenuBar()
     debugMenu->addAction(actDebugStepOut_);
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
+    viewMenu->setObjectName(QStringLiteral("menuView"));
     viewMenu->addAction(actToggleExplorer_);
     viewMenu->addAction(actToggleOutput_);
 
     auto* gitMenu = menuBar()->addMenu(tr("&Git"));
+    gitMenu->setObjectName(QStringLiteral("menuGit"));
     gitMenu->addAction(actGitRefresh_);
     gitMenu->addSeparator();
     gitMenu->addAction(actGitStageAll_);
@@ -1183,6 +1324,7 @@ void MainWindow::createMenuBar()
     gitMenu->addAction(actGitInit_);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
+    helpMenu->setObjectName(QStringLiteral("menuHelp"));
     helpMenu->addAction(actAbout_);
 }
 
@@ -1696,9 +1838,16 @@ CodeEditor* MainWindow::createEditorTab(const QString& title)
     // Diagnostics flow: clangd -> editor (squiggles) -> problem list. The
     // editor normalises positions before reporting, so the list and the
     // underlines always agree.
+    // The merging pass (applyCompilerDiagnosticsToEditors) pushes LSP+compiler
+    // diagnostics INTO the editor; the echo this signal produces must not be
+    // stored back into diagnosticsByFile_ — that map stays LSP-only, or the
+    // compiler entries would leak into the LSP problem list.
     connect(editor, &CodeEditor::diagnosticsChanged,
             this, [this](const QString& path,
                           const QList<LightCpp::App::LspDiagnostic>& diagnostics) {
+        if (applyingCompilerDiagnostics_) {
+            return;
+        }
         if (path.isEmpty()) {
             return;
         }
@@ -1939,6 +2088,123 @@ void MainWindow::rebuildProblems()
         return a.column < b.column;
     });
     outputPanel_->setProblems(problems);
+}
+
+// ---------------------------------------------------------------------------
+// Compiler problems (parsed from the compiler / build-system log)
+// ---------------------------------------------------------------------------
+void MainWindow::clearCompilerProblems()
+{
+    compilerProblems_.clear();
+    outputPanel_->setCompilerProblems({});
+    // Strip the compiler markers off the editors; the LSP squiggles come
+    // straight back from diagnosticsByFile_ (that map stays LSP-only).
+    applyCompilerDiagnosticsToEditors();
+}
+
+void MainWindow::consumeCompilerLines(const QString& text, QString& tail)
+{
+    if (text.isEmpty()) {
+        return;
+    }
+    const QStringList lines = (tail + text).split(QLatin1Char('\n'));
+    // The last element is the unfinished remainder ("" after a trailing
+    // newline) — kept for the next chunk.
+    for (int i = 0; i < lines.size() - 1; ++i) {
+        processCompilerLogLine(lines.at(i));
+    }
+    tail = lines.last();
+}
+
+void MainWindow::processCompilerLogLine(const QString& line)
+{
+    QString text = line;
+    while (text.endsWith(QLatin1Char('\r'))) {
+        text.chop(1);
+    }
+    if (text.isEmpty()) {
+        return;
+    }
+    const std::optional<LightCpp::Project::CompilerDiagnostic> parsed =
+        LightCpp::Project::parseCompilerDiagnostic(text.toStdString());
+    if (!parsed.has_value()) {
+        return;
+    }
+
+    ProblemEntry entry;
+    entry.severity = parsed->severity == 2 ? 2 : 1;
+    entry.message = QString::fromStdString(parsed->message);
+    entry.line = parsed->line;
+    entry.column = parsed->column;
+    if (!parsed->file.empty()) {
+        // The compiler prints absolute paths for single-file compiles, but
+        // build systems often print paths relative to the step's working
+        // directory — resolve those so entries (and editor markers) always
+        // point at a real file.
+        entry.filePath = QDir(currentBuildWorkingDir_).absoluteFilePath(
+            QString::fromStdString(parsed->file));
+    }
+    // Entries without a location (driver errors) keep an empty filePath and
+    // are listed under the "Build" group without navigation.
+
+    compilerProblems_.append(entry);
+    outputPanel_->setCompilerProblems(compilerProblems_);
+    // Live markers: the squiggle appears while the compiler is still running.
+    applyCompilerDiagnosticsToEditors();
+}
+
+void MainWindow::applyCompilerDiagnosticsToEditors()
+{
+    applyingCompilerDiagnostics_ = true;
+    for (int i = 0; i < tabWidget_->count(); ++i) {
+        auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i));
+        if (ed == nullptr) {
+            continue;
+        }
+        const QString editorPath =
+            QFileInfo(ed->lintPath()).absoluteFilePath();
+
+        // Base layer: the LSP diagnostics for this editor, from the
+        // LSP-only store (matched by absolute path, as everywhere else).
+        QList<LightCpp::App::LspDiagnostic> merged;
+        for (auto it = diagnosticsByFile_.constBegin();
+             it != diagnosticsByFile_.constEnd(); ++it) {
+            if (QFileInfo(it.key()).absoluteFilePath() == editorPath) {
+                merged = it.value();
+                break;
+            }
+        }
+        QSet<int> lspLines;
+        for (const LightCpp::App::LspDiagnostic& d : merged) {
+            lspLines.insert(d.startLine);
+        }
+        // Compiler layer: added only where the LSP has nothing to say on
+        // the same line — the LSP's view wins when both report a position.
+        for (const ProblemEntry& p : compilerProblems_) {
+            if (p.filePath.isEmpty()) {
+                continue;  // driver errors have no editor position
+            }
+            if (QFileInfo(p.filePath).absoluteFilePath() != editorPath) {
+                continue;
+            }
+            if (lspLines.contains(p.line)) {
+                continue;
+            }
+            LightCpp::App::LspDiagnostic d;
+            d.startLine = p.line;
+            d.startColumn = p.column;
+            d.endLine = p.line;
+            d.endColumn = p.column;
+            d.severity = p.severity;
+            d.message = p.message;
+            d.code = QStringLiteral("compiler");
+            merged.append(d);
+        }
+        // The echo this triggers is suppressed by the guard flag so the
+        // merged list never leaks back into diagnosticsByFile_.
+        ed->setDiagnostics(merged);
+    }
+    applyingCompilerDiagnostics_ = false;
 }
 
 void MainWindow::onProblemActivated(const QString& filePath, int line, int column)
@@ -2627,6 +2893,12 @@ void MainWindow::startProjectBuildSteps()
         return;
     }
 
+    // A fresh project build starts with a fresh problem list, like a
+    // single-file compile: the stale entries of the previous run must not
+    // resurface mixed into the new ones.
+    clearCompilerProblems();
+    projectLineTail_.clear();
+
     if (projectProcess_ == nullptr) {
         projectProcess_ = new QProcess(this);
         // One stream: CMake writes warnings to stderr and progress to stdout,
@@ -2640,6 +2912,9 @@ void MainWindow::startProjectBuildSteps()
                 projectProcess_->readAllStandardOutput());
             if (!text.isEmpty()) {
                 outputPanel_->appendBuildOutput(text);
+                // Same line-splitting as the single-file compiler: a chunk
+                // may end mid-line, so the remainder is kept for next time.
+                consumeCompilerLines(text, projectLineTail_);
             }
         });
         connect(projectProcess_,
@@ -2649,6 +2924,11 @@ void MainWindow::startProjectBuildSteps()
             const QString tail = projectBuildDecoder_.flush();
             if (!tail.isEmpty()) {
                 outputPanel_->appendBuildOutput(tail);
+            }
+            consumeCompilerLines(tail, projectLineTail_);
+            if (!projectLineTail_.isEmpty()) {
+                processCompilerLogLine(projectLineTail_);
+                projectLineTail_.clear();
             }
             if (status != QProcess::NormalExit || code != 0) {
                 finishProjectBuild(false, code);
@@ -2679,6 +2959,9 @@ void MainWindow::runNextProjectStep()
     const ProjectStep step = projectSteps_.takeFirst();
 
     QDir().mkpath(step.workingDirectory);
+    // Relative diagnostic paths the step prints ("src/main.cpp:3:5: ...")
+    // are resolved against the step's own working directory.
+    currentBuildWorkingDir_ = step.workingDirectory;
     outputPanel_->showChannel(OutputPanel::ChannelBuild);
     outputPanel_->appendBuildOutput(
         tr("--- %1 ---").arg(step.label.isEmpty() ? step.program : step.label));
@@ -2715,6 +2998,10 @@ void MainWindow::finishProjectBuild(bool succeeded, int exitCode)
     } else {
         outputPanel_->appendBuildOutput(
             tr("--- Project build failed (exit %1) ---").arg(exitCode));
+        // Failed builds jump the panel to the parsed problem list.
+        if (!compilerProblems_.isEmpty()) {
+            outputPanel_->showChannel(OutputPanel::ChannelProblemsCompiler);
+        }
     }
     updateProjectActions();
 }
@@ -3221,10 +3508,29 @@ void MainWindow::onCompileCurrentFile()
         // MinGW's UTF-8 default. Compile the narrow string literals for
         // that charset; captured Program Output keeps the compiler default
         // (its decoder probes each line instead).
+        //
+        // clang (clang++/clang) only implements -fexec-charset for UTF-8 and
+        // rejects any other value outright ("invalid value 'GBK'"), so the
+        // flag is a GCC-only knob: skip it for the clang family and record
+        // the charset the binary actually got. Claiming the required charset
+        // in lastBuildExecCharset_ (instead of the real UTF-8) is deliberate:
+        // a rebuild could not honour it either, and recording a mismatch
+        // would make every console-backed run ask for a futile rebuild.
+        const bool clangFamily = QFileInfo(compilerExe).fileName()
+                                     .contains(QStringLiteral("clang"),
+                                               Qt::CaseInsensitive);
         const QString execCharset = requiredExecCharset();
         lastBuildExecCharset_ = execCharset;
         if (!execCharset.isEmpty()) {
-            args << (QStringLiteral("-fexec-charset=") + execCharset);
+            if (clangFamily) {
+                outputPanel_->appendBuildOutput(
+                    tr("Note: clang has no -fexec-charset support for %1; "
+                       "string literals stay UTF-8 (console output of "
+                       "non-ASCII text may be garbled).")
+                        .arg(execCharset));
+            } else {
+                args << (QStringLiteral("-fexec-charset=") + execCharset);
+            }
         }
         args << srcPath << QStringLiteral("-o") << outExe;
         if (!linkFlags.isEmpty()) {
@@ -3243,6 +3549,9 @@ void MainWindow::onCompileCurrentFile()
             const QString text = buildDecoder_.decode(b);
             if (!text.isEmpty()) {
                 outputPanel_->appendBuildOutput(text);
+                // A chunk can carry several log lines (and half of the next
+                // one) — the splitter keeps the remainder for the next call.
+                consumeCompilerLines(text, compilerLineTail_);
             }
         });
         connect(compiler_,
@@ -3253,9 +3562,18 @@ void MainWindow::onCompileCurrentFile()
             if (!tail.isEmpty()) {
                 outputPanel_->appendBuildOutput(tail);
             }
+            consumeCompilerLines(tail, compilerLineTail_);
+            if (!compilerLineTail_.isEmpty()) {
+                processCompilerLogLine(compilerLineTail_);
+                compilerLineTail_.clear();
+            }
             outputPanel_->appendBuildOutput(
                 rc == 0 ? tr("--- Build succeeded (exit 0) ---")
                         : tr("--- Build failed (exit %1) ---").arg(rc));
+            // Failed compiles jump the panel to the parsed problem list.
+            if (rc != 0 && !compilerProblems_.isEmpty()) {
+                outputPanel_->showChannel(OutputPanel::ChannelProblemsCompiler);
+            }
             updateRunActionStates();
             // "Compile & Run" only continues on a successful build.
             const bool runNow = runAfterBuild_;
@@ -3297,6 +3615,13 @@ void MainWindow::onCompileCurrentFile()
                    + env.value(QStringLiteral("PATH")));
     compiler_->setProcessEnvironment(env);
     compiler_->setWorkingDirectory(QFileInfo(srcPath).absolutePath());
+    // Compiler log lines may carry paths relative to this directory.
+    currentBuildWorkingDir_ = QFileInfo(srcPath).absolutePath();
+
+    // A fresh build starts from an empty problem list; the editors' compiler
+    // markers go with it (LSP squiggles are restored from diagnosticsByFile_).
+    clearCompilerProblems();
+    compilerLineTail_.clear();
 
     outputPanel_->showChannel(OutputPanel::ChannelBuild);
     // Name the toolset as well as the compiler: with more than one MSVC
@@ -3401,12 +3726,24 @@ void MainWindow::onRunCurrentFile()
 
 void MainWindow::onStopProgram()
 {
-    if (runner_ == nullptr || runner_->state() == QProcess::NotRunning) {
+    const bool programRunning = runner_ != nullptr
+        && runner_->state() != QProcess::NotRunning;
+    const bool terminalRunning = terminalRunner_ != nullptr
+        && terminalRunner_->state() != QProcess::NotRunning;
+    if (!programRunning && !terminalRunning) {
         return;
     }
-    outputPanel_->showChannel(OutputPanel::ChannelProgram);
-    outputPanel_->appendProgramOutput(tr("--- Stopping program ---"));
-    runner_->kill();
+    if (programRunning) {
+        outputPanel_->showChannel(OutputPanel::ChannelProgram);
+        outputPanel_->appendProgramOutput(tr("--- Stopping program ---"));
+        runner_->kill();
+    }
+    if (terminalRunning) {
+        outputPanel_->showChannel(
+            static_cast<OutputPanel::Channel>(terminalChannel_));
+        outputPanel_->appendTerminalOutput(tr("--- Stopping terminal ---\n"));
+        terminalRunner_->kill();
+    }
 }
 
 QProcess* MainWindow::ensureProgramRunner()
@@ -3458,6 +3795,50 @@ QProcess* MainWindow::ensureProgramRunner()
         });
     }
     return runner_;
+}
+
+QProcess* MainWindow::ensureTerminalRunner()
+{
+    if (terminalRunner_ == nullptr) {
+        terminalRunner_ = new QProcess(this);
+        terminalRunner_->setProcessChannelMode(QProcess::MergedChannels);
+        connect(terminalRunner_, &QProcess::readyReadStandardOutput, this,
+                [this] {
+            if (terminalRunner_ == nullptr) return;
+            // Raw: no decode probes, no line reassembly. The bytes are only
+            // converted from the console's code page (what cmd writes, and
+            // what programs built for console modes emit) and appended as
+            // they arrived — a trailing "D:\>" prompt without a newline
+            // stays visible, exactly like in a real console.
+            outputPanel_->appendTerminalOutput(
+                QString::fromLocal8Bit(
+                    terminalRunner_->readAllStandardOutput()));
+        });
+        connect(terminalRunner_, &QProcess::started, this, [this] {
+            outputPanel_->setTerminalInputEnabled(true);
+        });
+        connect(terminalRunner_, &QProcess::errorOccurred, this,
+                [this](QProcess::ProcessError e) {
+            if (terminalRunner_ == nullptr) return;
+            if (e == QProcess::FailedToStart) {
+                outputPanel_->appendTerminalOutput(
+                    tr("Failed to start the terminal.\n"));
+                outputPanel_->setTerminalInputEnabled(false);
+            }
+            updateRunActionStates();
+        });
+        connect(terminalRunner_,
+                QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                this, [this](int code, QProcess::ExitStatus status) {
+            outputPanel_->appendTerminalOutput(
+                status == QProcess::NormalExit
+                    ? tr("--- Terminal exited with code %1 ---\n").arg(code)
+                    : tr("--- Terminal was killed ---\n"));
+            outputPanel_->setTerminalInputEnabled(false);
+            updateRunActionStates();
+        });
+    }
+    return terminalRunner_;
 }
 
 void MainWindow::startProgram(const QString& exePath, const QString& workDir)
@@ -3639,17 +4020,20 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
     const QString terminalLabel =
         runTerminalName_.isEmpty() ? program : runTerminalName_;
     if (runTerminalEmbedded_) {
-        // Embedded (VSCode style): the shell itself runs in the captured
-        // runner — banner, prompts and the program's output all land in the
-        // Program Output channel. The program's absolute path is "typed" as
-        // the shell's first input line, and the input field stays live, so
-        // everything typed afterwards goes to the shell (or to the program
-        // it is currently running) as plain stdin.
-        QProcess* runner = ensureProgramRunner();
-        if (runner->state() != QProcess::NotRunning) {
-            outputPanel_->appendProgramOutput(tr("A program is already running."));
+        // Embedded, Windows Terminal style: every session opens its own
+        // channel in the output drop-down, named after the selected
+        // terminal. The shell's bytes land there raw — no decoding probes,
+        // no line reassembly — so an unfinished prompt such as "D:\>" shows
+        // up exactly the way a real console prints it, including the one
+        // after the program exits.
+        if (terminalRunner_ != nullptr
+            && terminalRunner_->state() != QProcess::NotRunning) {
+            outputPanel_->appendTerminalOutput(
+                tr("A terminal session is already running.\n"));
             return;
         }
+        outputPanel_->openTerminalChannel(terminalLabel);
+        QProcess* runner = ensureTerminalRunner();
         // A PowerShell-style template ends in -Command/-c, which needs a
         // value; launch without it and use the call operator when typing.
         bool needsCallOperator = false;
@@ -3666,8 +4050,8 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
             : exePath;
         runner->setProcessEnvironment(env);
         runner->setWorkingDirectory(workDir);
-        outputPanel_->appendProgramOutput(
-            tr("--- Running in %1 (embedded): %2 ---")
+        outputPanel_->appendTerminalOutput(
+            tr("--- Running in %1: %2 ---\n")
                 .arg(terminalLabel, QFileInfo(exePath).absoluteFilePath()));
         // One-shot: once the shell is up, type the program path into it.
         QObject::connect(runner, &QProcess::started, this,
@@ -3712,8 +4096,11 @@ void MainWindow::updateRunActionStates()
 {
     const bool building = compiler_ != nullptr
                           && compiler_->state() != QProcess::NotRunning;
-    const bool running = runner_ != nullptr
-                         && runner_->state() != QProcess::NotRunning;
+    const bool running = (runner_ != nullptr
+                          && runner_->state() != QProcess::NotRunning)
+                         || (terminalRunner_ != nullptr
+                             && terminalRunner_->state()
+                                    != QProcess::NotRunning);
     const bool debugging = debugger_ != nullptr && debugger_->isRunning();
     if (actCompile_)    actCompile_->setEnabled(!building);
     if (actCompileRun_) actCompileRun_->setEnabled(!building && !running);
@@ -4181,14 +4568,12 @@ void MainWindow::applyPreferences()
             }
         }
     }
-    // The captured program mode and embedded terminals share the IDE-side
-    // stdin field: an embedded shell is driven by "typing" into it, so the
-    // Send row stays. Console Pauser and non-embedded terminals (their own
-    // console window) have no IDE-side stdin and hide the row.
+    // Only the captured Program Output mode uses the Program channel's
+    // stdin field. Embedded terminals got their own channel with its own
+    // input row (titled after the selected terminal); Console Pauser and
+    // non-embedded terminals (their own console window) capture nothing.
     outputPanel_->setProgramInputVisible(
-        programOutputMode_ == QLatin1String("program")
-        || (programOutputMode_ != QLatin1String("consolePauser")
-            && runTerminalEmbedded_));
+        programOutputMode_ == QLatin1String("program"));
 
     // --- language service: completion backend -----------------------------
     completionBackend_ = prefs.completion.backend.isEmpty()

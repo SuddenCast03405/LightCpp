@@ -9,6 +9,7 @@
 add_library(LightCppProject STATIC
     Source/BuildConfiguration.cpp
     Source/CMakeProject.cpp
+    Source/CompilerDiagnostics.cpp
     Source/DevCppProject.cpp
     Source/FolderContents.cpp
     Source/GitStatus.cpp

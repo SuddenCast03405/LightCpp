@@ -58,7 +58,7 @@ QColor severityColor(int severity)
     }
 }
 
-QString problemsLabel(int errors, int warnings)
+QString problemsLabel(const QString& base, int errors, int warnings)
 {
     QStringList parts;
     if (errors > 0) {
@@ -68,9 +68,10 @@ QString problemsLabel(int errors, int warnings)
         parts << OutputPanel::tr("%n warning(s)", nullptr, warnings);
     }
     if (parts.isEmpty()) {
-        return OutputPanel::tr("Problems");
+        return base;
     }
-    return OutputPanel::tr("Problems (%1)").arg(parts.join(QStringLiteral(", ")));
+    return QStringLiteral("%1 (%2)")
+        .arg(base, parts.join(QStringLiteral(", ")));
 }
 
 }  // namespace
@@ -88,6 +89,7 @@ OutputPanel::OutputPanel(QWidget* parent)
     , debugLog_(makeLogView(this))
     , pluginLog_(makeLogView(this))
     , problems_(new QTreeWidget(this))
+    , compilerProblems_(new QTreeWidget(this))
 {
     // --- header row: title, channel drop-down, clear ----------------------
     QFont headerFont = header_->font();
@@ -102,7 +104,8 @@ OutputPanel::OutputPanel(QWidget* parent)
     channelCombo_->addItem(tr("Build Log"));        // ChannelBuild
     channelCombo_->addItem(tr("Program Output"));   // ChannelProgram
     channelCombo_->addItem(tr("Git"));              // ChannelGit
-    channelCombo_->addItem(tr("Problems"));         // ChannelProblems
+    channelCombo_->addItem(tr("Problems (LSP Server)"));       // ChannelProblems
+    channelCombo_->addItem(tr("Problems (Compiler)"));         // ChannelProblemsCompiler
     channelCombo_->addItem(tr("Debugger"));         // ChannelDebug
     channelCombo_->addItem(tr("Plugins"));          // ChannelPlugins
     channelCombo_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
@@ -148,6 +151,7 @@ OutputPanel::OutputPanel(QWidget* parent)
 
     stack_->addWidget(gitLog_);         // ChannelGit
     stack_->addWidget(problems_);       // ChannelProblems
+    stack_->addWidget(compilerProblems_);  // ChannelProblemsCompiler
     auto* debugPage = makeInputLogPage(
         debugLog_, &debuggerInput_,
         tr("Type a debugger command here, press Enter to send (enabled while "
@@ -158,28 +162,31 @@ OutputPanel::OutputPanel(QWidget* parent)
     pluginLog_->setPlaceholderText(tr("No plugin output yet."));
     stack_->addWidget(pluginLog_);      // ChannelPlugins
 
-    problems_->setColumnCount(2);
-    problems_->setHeaderLabels({tr("Problem"), tr("Location")});
-    problems_->setRootIsDecorated(true);
-    problems_->setUniformRowHeights(true);
-    problems_->setAllColumnsShowFocus(true);
-    problems_->setSelectionMode(QAbstractItemView::SingleSelection);
-    problems_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    problems_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    // Single click jumps, like the problems list in other IDEs.
-    connect(problems_, &QTreeWidget::itemClicked, this,
-            [this](QTreeWidgetItem* item, int) {
-        if (item == nullptr) {
-            return;
-        }
-        const QString path = item->data(0, kRolePath).toString();
-        if (path.isEmpty()) {
-            return;  // placeholder row ("No problems detected.")
-        }
-        emit problemActivated(path,
-                              item->data(0, kRoleLine).toInt(),
-                              item->data(0, kRoleColumn).toInt());
-    });
+    // Both Problems channels share the same tree shape and click behaviour:
+    // single click jumps, like the problem lists in other IDEs.
+    for (QTreeWidget* tree : {problems_, compilerProblems_}) {
+        tree->setColumnCount(2);
+        tree->setHeaderLabels({tr("Problem"), tr("Location")});
+        tree->setRootIsDecorated(true);
+        tree->setUniformRowHeights(true);
+        tree->setAllColumnsShowFocus(true);
+        tree->setSelectionMode(QAbstractItemView::SingleSelection);
+        tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+        tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        connect(tree, &QTreeWidget::itemClicked, this,
+                [this](QTreeWidgetItem* item, int) {
+            if (item == nullptr) {
+                return;
+            }
+            const QString path = item->data(0, kRolePath).toString();
+            if (path.isEmpty()) {
+                return;  // placeholder row ("No problems detected.")
+            }
+            emit problemActivated(path,
+                                  item->data(0, kRoleLine).toInt(),
+                                  item->data(0, kRoleColumn).toInt());
+        });
+    }
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -189,7 +196,8 @@ OutputPanel::OutputPanel(QWidget* parent)
 
     setObjectName(QStringLiteral("OutputPanel"));
 
-    setProblems({});                    // show the empty state
+    setProblems({});                    // show the empty states
+    setCompilerProblems({});
     showChannel(ChannelBuild);          // and start on the build log
 }
 
@@ -224,6 +232,54 @@ void OutputPanel::appendDebugOutput(const QString& text)
 void OutputPanel::appendPluginOutput(const QString& text)
 {
     pluginLog_->appendPlainText(text);
+}
+
+int OutputPanel::openTerminalChannel(const QString& title)
+{
+    if (terminalLog_ == nullptr) {
+        // First terminal session: build the page (log + input row) behind a
+        // new drop-down entry at the end of the fixed channels.
+        terminalLog_ = makeLogView(this);
+        terminalLog_->setPlaceholderText(tr("No terminal session yet."));
+        auto* page = makeInputLogPage(
+            terminalLog_, &terminalInput_,
+            tr("Type a shell command here, press Enter to send (enabled while "
+               "the terminal runs)"),
+            [this](const QString& text) { emit terminalInputSubmitted(text); },
+            &terminalInputRow_);
+        terminalChannel_ = stack_->addWidget(page);
+        channelCombo_->addItem(title);
+    } else {
+        // A later session reuses the channel: fresh buffer, fresh title.
+        terminalLog_->clear();
+        if (channelCombo_->itemText(terminalChannel_) != title) {
+            channelCombo_->setItemText(terminalChannel_, title);
+        }
+    }
+    if (terminalInput_ != nullptr) {
+        terminalInput_->setEnabled(true);
+    }
+    showChannel(static_cast<Channel>(terminalChannel_));
+    return terminalChannel_;
+}
+
+void OutputPanel::appendTerminalOutput(const QString& text)
+{
+    if (terminalLog_ == nullptr) {
+        return;
+    }
+    // Raw appending: insertPlainText at the end keeps an unfinished last
+    // line open (a prompt without a newline), so what follows continues on
+    // the same line — exactly how a console renders its prompt.
+    terminalLog_->moveCursor(QTextCursor::End);
+    terminalLog_->insertPlainText(text);
+}
+
+void OutputPanel::setTerminalInputEnabled(bool enabled)
+{
+    if (terminalInput_ != nullptr) {
+        terminalInput_->setEnabled(enabled);
+    }
 }
 
 void OutputPanel::setProgramInputEnabled(bool enabled)
@@ -275,7 +331,11 @@ void OutputPanel::setOutputFont(const QFont& font)
     gitLog_->setFont(font);
     debugLog_->setFont(font);
     pluginLog_->setFont(font);
+    if (terminalLog_ != nullptr) {
+        terminalLog_->setFont(font);
+    }
     problems_->setFont(font);
+    compilerProblems_->setFont(font);
 }
 
 void OutputPanel::clearOutput()
@@ -287,7 +347,15 @@ void OutputPanel::clearOutput()
     case ChannelGit:     gitLog_->clear(); break;
     case ChannelDebug:   debugLog_->clear(); break;
     case ChannelPlugins: pluginLog_->clear(); break;
-    default:             setProblems({}); break;
+    case ChannelProblems:        setProblems({}); break;
+    case ChannelProblemsCompiler: setCompilerProblems({}); break;
+    default:
+        if (stack_->currentIndex() == terminalChannel_) {
+            terminalLog_->clear();
+        } else {
+            setProblems({});
+        }
+        break;
     }
 }
 
@@ -296,7 +364,21 @@ void OutputPanel::clearOutput()
 // ---------------------------------------------------------------------------
 void OutputPanel::setProblems(const QList<ProblemEntry>& problems)
 {
-    rebuildProblemsTree(problems);
+    updateProblemsChannel(problems_, ChannelProblems,
+                          tr("Problems (LSP Server)"), problems);
+}
+
+void OutputPanel::setCompilerProblems(const QList<ProblemEntry>& problems)
+{
+    updateProblemsChannel(compilerProblems_, ChannelProblemsCompiler,
+                          tr("Problems (Compiler)"), problems);
+}
+
+void OutputPanel::updateProblemsChannel(QTreeWidget* tree, int comboIndex,
+                                        const QString& baseLabel,
+                                        const QList<ProblemEntry>& problems)
+{
+    rebuildProblemsTree(tree, problems);
 
     int errors = 0;
     int warnings = 0;
@@ -306,35 +388,41 @@ void OutputPanel::setProblems(const QList<ProblemEntry>& problems)
     }
     // The counts live in the drop-down label so problems stay visible even
     // while another channel is on screen.
-    const QString label = problemsLabel(errors, warnings);
-    if (channelCombo_->itemText(ChannelProblems) != label) {
+    const QString label = problemsLabel(baseLabel, errors, warnings);
+    if (channelCombo_->itemText(comboIndex) != label) {
         QSignalBlocker blocker(channelCombo_);
-        channelCombo_->setItemText(ChannelProblems, label);
+        channelCombo_->setItemText(comboIndex, label);
     }
 }
 
-void OutputPanel::rebuildProblemsTree(const QList<ProblemEntry>& problems)
+void OutputPanel::rebuildProblemsTree(QTreeWidget* tree,
+                                      const QList<ProblemEntry>& problems)
 {
-    problems_->setUpdatesEnabled(false);
-    problems_->clear();
+    tree->setUpdatesEnabled(false);
+    tree->clear();
 
     if (problems.isEmpty()) {
-        auto* none = new QTreeWidgetItem(problems_);
+        auto* none = new QTreeWidgetItem(tree);
         none->setText(0, tr("No problems detected."));
         none->setFirstColumnSpanned(true);
         none->setFlags(Qt::NoItemFlags);  // not selectable, not clickable
-        problems_->setUpdatesEnabled(true);
+        tree->setUpdatesEnabled(true);
         return;
     }
 
     // Group by file; the incoming list is sorted by path/line, so both the
-    // group order and the rows within a group stay stable.
+    // group order and the rows within a group stay stable. An empty path is
+    // a compiler-driver error with no source location — grouped under
+    // "Build", and its rows do not navigate (the click handler ignores an
+    // empty kRolePath).
     QHash<QString, QTreeWidgetItem*> groups;
     for (const ProblemEntry& p : problems) {
         QTreeWidgetItem*& group = groups[p.filePath];
         if (group == nullptr) {
-            group = new QTreeWidgetItem(problems_);
-            group->setText(0, QFileInfo(p.filePath).fileName());
+            group = new QTreeWidgetItem(tree);
+            group->setText(0, p.filePath.isEmpty()
+                                  ? tr("Build")
+                                  : QFileInfo(p.filePath).fileName());
             group->setToolTip(0, p.filePath);
             QFont bold = group->font(0);
             bold.setBold(true);
@@ -363,8 +451,8 @@ void OutputPanel::rebuildProblemsTree(const QList<ProblemEntry>& problems)
         item->setData(0, kRoleColumn, p.column);
     }
 
-    problems_->expandAll();
-    problems_->setUpdatesEnabled(true);
+    tree->expandAll();
+    tree->setUpdatesEnabled(true);
 }
 
 QWidget* OutputPanel::makeInputLogPage(QPlainTextEdit* log, QLineEdit** inputOut,

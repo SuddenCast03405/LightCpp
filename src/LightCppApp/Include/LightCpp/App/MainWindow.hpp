@@ -14,6 +14,7 @@
 #include "LightCpp/App/ConsoleDecoder.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
+#include "LightCpp/App/OutputPanel.hpp"
 #include "LightCpp/Plugin/Plugin.hpp"
 #include "LightCpp/Plugin/PluginManager.hpp"
 #include "LightCpp/Plugin/PluginTypes.hpp"
@@ -30,6 +31,7 @@ class CodeEditor;
 class FileExplorer;
 class OutputPanel;
 class QLabel;
+class QListWidget;
 class QTabWidget;
 class QComboBox;
 class QAction;
@@ -271,6 +273,24 @@ private:
     void jumpToLocation(const QString& filePath, int line, int column);
     /// Rebuild the Output panel's Problems list from diagnosticsByFile_.
     void rebuildProblems();
+    // --- compiler problems (parsed from the compiler / build log) ---------
+    /// Drop every compiler diagnostic and strip its editor markers
+    /// (LSP squiggles are restored from diagnosticsByFile_). Called when a
+    /// new build starts.
+    void clearCompilerProblems();
+    /// Split decoded compiler output into whole log lines and parse each;
+    /// `tail` holds the unfinished last line between chunks. Shared by the
+    /// single-file compiler and the project-build process.
+    void consumeCompilerLines(const QString& text, QString& tail);
+    /// Parse one compiler log line into the Problems (Compiler) list and
+    /// refresh the editors' merged markers. Non-diagnostic lines are ignored.
+    void processCompilerLogLine(const QString& line);
+    /// Push LSP+compiler diagnostics into every open editor: the LSP list is
+    /// the base layer, compiler entries are added only on lines the LSP does
+    /// not already cover. Runs under applyingCompilerDiagnostics_ so the
+    /// editors' diagnosticsChanged echo does not write back into the
+    /// LSP-only store.
+    void applyCompilerDiagnosticsToEditors();
     /// true when the file extension is handled by the language server.
     [[nodiscard]] static bool isCppLikeFile(const QString& path);
     /// LSP languageId for a path ("cpp", "c", ...).
@@ -358,6 +378,10 @@ private:
     /// output goes through the run decoder) exactly once. Used both by the
     /// captured Program Output mode and by embedded terminal modes.
     QProcess* ensureProgramRunner();
+    /// The embedded terminal session's shell process (cmd / PowerShell …),
+    /// lazily created and separate from runner_: its raw bytes land in the
+    /// dedicated terminal channel, not in Program Output.
+    QProcess* ensureTerminalRunner();
     /// Launch `exePath` through ConsolePauser.exe in its own console window
     /// (preferences run.output = "consolePauser"). Nothing is captured; the
     /// console owns the program's input and output.
@@ -438,6 +462,11 @@ private:
     // --- widgets ---
     std::unique_ptr<LightCpp::Settings::SettingsStore> settings_;
     QTabWidget* tabWidget_;
+    /// The vertical activity bar on the far left, VSCode style: the
+    /// Explorer (the former sidebar), a Git placeholder and the plugin
+    /// management panel.
+    QTabWidget* sideTabs_ = nullptr;
+    QListWidget* pluginList_ = nullptr;
     FileExplorer* fileExplorer_;
     OutputPanel* outputPanel_;
     QComboBox* encodingCombo_;
@@ -553,10 +582,28 @@ private:
     /// Latest diagnostics per document, keyed by the editor's lint path
     /// (a virtual temp path for unsaved buffers). Feeds the Problems list.
     QHash<QString, QList<LightCpp::App::LspDiagnostic>> diagnosticsByFile_;
+    /// Compiler diagnostics parsed out of the last build's log — the
+    /// Problems (Compiler) channel and the editors' second diagnostic layer.
+    QList<ProblemEntry> compilerProblems_;
+    /// Unfinished trailing log lines between output chunks (one per
+    /// compiler process; a chunk can end mid-line).
+    QString compilerLineTail_;
+    QString projectLineTail_;
+    /// Working directory of the build in flight — compiler log lines with
+    /// relative paths are resolved against it.
+    QString currentBuildWorkingDir_;
+    /// Set while merged diagnostics are pushed INTO the editors, so the
+    /// diagnosticsChanged echo is not stored back into diagnosticsByFile_.
+    bool applyingCompilerDiagnostics_ = false;
 
     // --- single-file compiler / runner ---
     QProcess* compiler_ = nullptr;   // lazily created; reused across builds
     QProcess* runner_ = nullptr;     // lazily created; reused across runs
+    /// The embedded terminal session's shell, separate from runner_: its
+    /// raw output goes to the dedicated terminal channel.
+    QProcess* terminalRunner_ = nullptr;
+    /// The terminal channel's stack/combo index once it has been opened.
+    int terminalChannel_ = -1;
     /// The debug session (gdb / lldb / cdb). Created in the constructor.
     LightCpp::App::DebuggerController* debugger_ = nullptr;
     /// Breakpoints as "normalizedPath:line" keys — survives tab switches and
@@ -644,4 +691,13 @@ private:
     /// Discover and load plugins (shared libraries + Lua scripts) and log
     /// what came up. Called once, from the constructor.
     void loadPlugins();
+
+    // --- side bar (the vertical Explorer / Git / Plugins activity bar) ------
+    /// Git tab placeholder — the panel itself is not built yet.
+    QWidget* createGitPlaceholder();
+    /// The Plugins tab: a list of every loaded plugin, one row per plugin
+    /// with publisher / version / kind (C++ / Lua) tag chips.
+    QWidget* createPluginPanel();
+    /// Rebuild the plugin list from pluginManager_->loaded().
+    void refreshPluginPanel();
 };
