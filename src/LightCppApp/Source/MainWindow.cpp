@@ -52,10 +52,14 @@
 #include <QUrl>
 #include <QInputDialog>
 #include <QLabel>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QListWidget>
 #include <QMenuBar>
 #include <QMetaType>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QPair>
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -539,6 +543,224 @@ MainWindow::~MainWindow()
 // ---------------------------------------------------------------------------
 // Plugins (LightCpp::Plugin::IdeServices)
 // ---------------------------------------------------------------------------
+LightCpp::Settings::Preferences MainWindow::pluginPrefsSnapshot() const
+{
+    return settings_ != nullptr ? settings_->preferences()
+                                : LightCpp::Settings::Preferences{};
+}
+
+bool MainWindow::persistPluginLists(const QStringList& disabled,
+                                    const QStringList& pendingDeletes)
+{
+    const QString path =
+        QDir(LightCpp::Settings::SettingsStore::baseConfigDirectory())
+            .filePath(QStringLiteral("preferences.json"));
+    // Surgical update: read the document, replace only the "plugins" key of
+    // the preferences document, leave everything else exactly as it is.
+    // The file may be a single document or an array of documents.
+    QByteArray raw;
+    QFile file(path);
+    if (file.open(QIODevice::ReadOnly)) {
+        raw = file.readAll();
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(raw);
+    const auto apply = [](const QJsonObject& obj, const QStringList& dis,
+                          const QStringList& pend) {
+        QJsonArray disabledArr;
+        for (const QString& p : dis) {
+            disabledArr.append(p);
+        }
+        QJsonArray pendingArr;
+        for (const QString& p : pend) {
+            pendingArr.append(p);
+        }
+        QJsonObject plugins;
+        plugins.insert(QStringLiteral("disabled"), disabledArr);
+        plugins.insert(QStringLiteral("pendingDeletes"), pendingArr);
+        QJsonObject out = obj;
+        out.insert(QStringLiteral("plugins"), plugins);
+        return out;
+    };
+    if (doc.isArray()) {
+        QJsonArray arr = doc.array();
+        for (int i = 0; i < arr.size(); ++i) {
+            const QJsonObject obj = arr.at(i).toObject();
+            if (obj.value(QStringLiteral("type")).toString()
+                == QLatin1String("preferences")) {
+                arr[i] = apply(obj, disabled, pendingDeletes);
+            }
+        }
+        return LightCpp::Settings::SettingsStore::writeDocument(
+            path, QJsonDocument(arr));
+    }
+    if (doc.isObject()) {
+        return LightCpp::Settings::SettingsStore::writeDocument(
+            path, QJsonDocument(apply(doc.object(), disabled, pendingDeletes)));
+    }
+    // No usable document yet: create a minimal preferences document.
+    QJsonObject obj;
+    obj.insert(QStringLiteral("type"), QStringLiteral("preferences"));
+    return LightCpp::Settings::SettingsStore::writeDocument(
+        path, QJsonDocument(apply(obj, disabled, pendingDeletes)));
+}
+
+QList<MainWindow::PluginCandidate> MainWindow::pluginCandidates() const
+{
+    using LoadedKind = LightCpp::Plugin::PluginManager::Loaded::Kind;
+    QList<PluginCandidate> candidates;
+    const QString pluginDir =
+        QCoreApplication::applicationDirPath() + QStringLiteral("/plugins");
+    const auto loadedList =
+        pluginManager_ != nullptr ? pluginManager_->loaded()
+                                  : QList<LightCpp::Plugin::PluginManager::Loaded>{};
+    const auto isLoaded = [&loadedList](const QString& absolute,
+                                        LoadedKind kind) {
+        for (const auto& entry : loadedList) {
+            if (entry.kind == kind
+                && QDir::fromNativeSeparators(entry.path)
+                       == QDir::fromNativeSeparators(absolute)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const LightCpp::Settings::Preferences prefs = pluginPrefsSnapshot();
+
+    QDir dir(pluginDir);
+    for (const QString& file : dir.entryList({QStringLiteral("*.dll")},
+                                             QDir::Files,
+                                             QDir::Name | QDir::IgnoreCase)) {
+        PluginCandidate c;
+        c.relPath = file;
+        c.absolutePath = dir.filePath(file);
+        c.fileName = file;
+        c.lua = false;
+        c.loaded = isLoaded(c.absolutePath, LoadedKind::Cpp);
+        c.disabled = prefs.disabledPlugins.contains(c.relPath,
+                                                    Qt::CaseInsensitive);
+        candidates.append(c);
+    }
+    QDir luaDir(dir.filePath(QStringLiteral("lua")));
+    for (const QString& file : luaDir.entryList({QStringLiteral("*.lua")},
+                                                QDir::Files,
+                                                QDir::Name | QDir::IgnoreCase)) {
+        PluginCandidate c;
+        c.relPath = QStringLiteral("lua/") + file;
+        c.absolutePath = luaDir.filePath(file);
+        c.fileName = file;
+        c.lua = true;
+        c.loaded = isLoaded(c.absolutePath, LoadedKind::Lua);
+        c.disabled = prefs.disabledPlugins.contains(c.relPath,
+                                                    Qt::CaseInsensitive);
+        candidates.append(c);
+    }
+    return candidates;
+}
+
+void MainWindow::onPluginDisable(const QString& relPath)
+{
+    const LightCpp::Settings::Preferences prefs = pluginPrefsSnapshot();
+    if (prefs.disabledPlugins.contains(relPath, Qt::CaseInsensitive)) {
+        return;
+    }
+    QStringList disabled = prefs.disabledPlugins;
+    disabled.append(relPath);
+
+    const QString absolute = QDir(QCoreApplication::applicationDirPath()
+                                  + QStringLiteral("/plugins"))
+                                 .filePath(relPath);
+    // Lua plugins can leave right now; shared-library plugins keep running
+    // until the restart (their dll stays mapped into this process).
+    if (pluginManager_ != nullptr
+        && pluginManager_->unloadRegistered(
+            QDir::fromNativeSeparators(absolute))) {
+        outputPanel_->appendPluginOutput(
+            tr("Plugin disabled (unloaded): %1").arg(relPath));
+    } else {
+        outputPanel_->appendPluginOutput(
+            tr("Plugin disabled — takes effect after a restart: %1")
+                .arg(relPath));
+    }
+    persistPluginLists(disabled, prefs.pendingPluginDeletes);
+    refreshPluginPanel();
+}
+
+void MainWindow::onPluginEnable(const QString& relPath)
+{
+    const LightCpp::Settings::Preferences prefs = pluginPrefsSnapshot();
+    QStringList disabled;
+    for (const QString& p : prefs.disabledPlugins) {
+        if (p.compare(relPath, Qt::CaseInsensitive) != 0) {
+            disabled.append(p);
+        }
+    }
+    if (disabled.size() == prefs.disabledPlugins.size()) {
+        return;  // not on the disable list
+    }
+    persistPluginLists(disabled, prefs.pendingPluginDeletes);
+
+    // A Lua plugin comes back right away: load and register it now.
+    if (relPath.startsWith(QLatin1String("lua/"), Qt::CaseInsensitive)
+        && pluginManager_ != nullptr) {
+        const QString absolute =
+            QDir(QCoreApplication::applicationDirPath()
+                 + QStringLiteral("/plugins"))
+                .filePath(relPath);
+        auto loaded = LightCpp::Lua::LuaPluginHost::loadPlugin(
+            absolute, this);
+        if (loaded.error.isEmpty()) {
+            pluginManager_->registerPlugin(std::move(loaded.plugin), this,
+                                           QDir::fromNativeSeparators(absolute));
+            outputPanel_->appendPluginOutput(
+                tr("Plugin enabled (loaded): %1").arg(relPath));
+        } else {
+            outputPanel_->appendPluginOutput(
+                tr("Plugin %1 failed to load: %2").arg(relPath, loaded.error));
+        }
+    } else {
+        outputPanel_->appendPluginOutput(
+            tr("Plugin enabled — takes effect after a restart: %1")
+                .arg(relPath));
+    }
+    refreshPluginPanel();
+}
+
+void MainWindow::onPluginUninstall(const QString& relPath)
+{
+    const LightCpp::Settings::Preferences prefs = pluginPrefsSnapshot();
+    const QString absolute = QDir(QCoreApplication::applicationDirPath()
+                                  + QStringLiteral("/plugins"))
+                                 .filePath(relPath);
+    const bool wasLoaded =
+        pluginManager_ != nullptr
+        && pluginManager_->unloadRegistered(
+            QDir::fromNativeSeparators(absolute));
+
+    // Loaded C++ dlls are locked by the process and cannot be deleted (or
+    // renamed) while the IDE runs — schedule the deletion for the next
+    // start. Everything else (Lua scripts, never-loaded dlls) deletes now.
+    QStringList pending = prefs.pendingPluginDeletes;
+    if (!QFile::remove(absolute)) {
+        if (!pending.contains(relPath, Qt::CaseInsensitive)) {
+            pending.append(relPath);
+        }
+        persistPluginLists(prefs.disabledPlugins, pending);
+        outputPanel_->appendPluginOutput(
+            tr("Plugin file is locked — it will be deleted on the next "
+               "start: %1")
+                .arg(relPath));
+    } else {
+        persistPluginLists(prefs.disabledPlugins, pending);
+        outputPanel_->appendPluginOutput(
+            tr("Plugin uninstalled: %1").arg(relPath));
+    }
+    if (wasLoaded) {
+        outputPanel_->appendPluginOutput(
+            tr("Plugin unloaded: %1").arg(relPath));
+    }
+    refreshPluginPanel();
+}
+
 void MainWindow::loadPlugins()
 {
     pluginManager_ = new LightCpp::Plugin::PluginManager(this);
@@ -548,16 +770,51 @@ void MainWindow::loadPlugins()
         tr("Plugin directory: %1")
             .arg(QDir::toNativeSeparators(pluginDir)));
 
+    const LightCpp::Settings::Preferences prefs = pluginPrefsSnapshot();
+
+    // Finish uninstalling what had to be deferred last run: the locked dll
+    // of a plugin that was uninstalled while the IDE was still using it.
+    // Now, before anything is loaded, the file is free to delete.
+    QStringList pending = prefs.pendingPluginDeletes;
+    for (const QString& rel : std::as_const(pending)) {
+        const QString absolute = QDir(pluginDir).filePath(rel);
+        if (QFile::remove(absolute)) {
+            pending.removeAll(rel);
+            outputPanel_->appendPluginOutput(
+                tr("Deleted on start-up as requested earlier: %1")
+                    .arg(rel));
+        } else {
+            outputPanel_->appendPluginOutput(
+                tr("Still cannot delete (will retry next start): %1")
+                    .arg(rel));
+        }
+    }
+    if (pending.size() != prefs.pendingPluginDeletes.size()) {
+        persistPluginLists(prefs.disabledPlugins, pending);
+    }
+
+    // Split the disable list by kind: shared plugins match by bare file
+    // name, Lua scripts by their file name inside the lua/ subdirectory.
+    QStringList disabledCpp;
+    QStringList disabledLua;
+    for (const QString& rel : prefs.disabledPlugins) {
+        if (rel.startsWith(QLatin1String("lua/"), Qt::CaseInsensitive)) {
+            disabledLua.append(rel.mid(4));
+        } else {
+            disabledCpp.append(rel);
+        }
+    }
+
     for (const QString& error :
-         pluginManager_->loadSharedPlugins(pluginDir, this)) {
+         pluginManager_->loadSharedPlugins(pluginDir, this, disabledCpp)) {
         outputPanel_->appendPluginOutput(tr("Plugin error: %1").arg(error));
     }
     // Lua scripts live one level deeper: plugins/lua/*.lua, each in its own
     // sandbox, registered with the same manager as the C++ plugins.
     for (const QString& error :
          LightCpp::Lua::LuaPluginHost::loadPluginsFromDirectory(
-             pluginDir + QStringLiteral("/lua"), this,
-             pluginManager_)) {
+             pluginDir + QStringLiteral("/lua"), this, pluginManager_, {},
+             disabledLua)) {
         outputPanel_->appendPluginOutput(tr("Plugin error: %1").arg(error));
     }
     for (const auto& loaded : pluginManager_->loaded()) {
@@ -610,19 +867,43 @@ void MainWindow::refreshPluginPanel()
         return;
     }
     pluginList_->clear();
-    using Kind = LightCpp::Plugin::PluginManager::Loaded::Kind;
-    for (const auto& loaded : pluginManager_->loaded()) {
+    const QList<PluginCandidate> candidates = pluginCandidates();
+    // Metadata (name / version / publisher) comes from the loaded set;
+    // unloaded candidates show their file name instead.
+    const auto loadedFor = [this](const PluginCandidate& c)
+        -> std::optional<LightCpp::Plugin::PluginManager::Loaded> {
+        if (pluginManager_ == nullptr) {
+            return std::nullopt;
+        }
+        for (const auto& entry : pluginManager_->loaded()) {
+            if (QDir::fromNativeSeparators(entry.path)
+                == QDir::fromNativeSeparators(c.absolutePath)) {
+                return entry;
+            }
+        }
+        return std::nullopt;
+    };
+    for (const PluginCandidate& c : candidates) {
         auto* item = new QListWidgetItem(pluginList_);
+        item->setData(Qt::UserRole, c.relPath);
         auto* row = new QWidget;
         auto* layout = new QVBoxLayout(row);
         layout->setContentsMargins(10, 8, 10, 8);
         layout->setSpacing(5);
-        auto* nameLabel = new QLabel(loaded.name, row);
+        const std::optional<LightCpp::Plugin::PluginManager::Loaded> entry =
+            loadedFor(c);
+        auto* nameLabel =
+            new QLabel(entry.has_value() ? entry->name : c.fileName, row);
         nameLabel->setStyleSheet(QStringLiteral("font-weight: bold;"));
+        if (c.disabled) {
+            QFont italic = nameLabel->font();
+            italic.setItalic(true);
+            nameLabel->setFont(italic);
+        }
         layout->addWidget(nameLabel);
 
-        // The tag chips: publisher (when declared), version, and the kind
-        // the plugin's code came from.
+        // The tag chips: publisher (when declared), version, the kind the
+        // plugin's code came from, and the state for unloaded entries.
         auto* tags = new QHBoxLayout;
         tags->setSpacing(4);
         const auto addChip = [&tags, row](const QString& text,
@@ -635,16 +916,46 @@ void MainWindow::refreshPluginPanel()
                     .arg(background.name()));
             tags->addWidget(chip);
         };
-        if (!loaded.publisher.isEmpty()) {
-            addChip(loaded.publisher, QColor(107, 114, 128));   // gray
+        if (entry.has_value() && !entry->publisher.isEmpty()) {
+            addChip(entry->publisher, QColor(107, 114, 128));   // gray
         }
-        addChip(loaded.version, QColor(37, 99, 235));           // blue
-        addChip(loaded.kind == Kind::Lua ? QStringLiteral("Lua")
-                                         : QStringLiteral("C++"),
-                loaded.kind == Kind::Lua ? QColor(22, 163, 74)    // green
-                                         : QColor(217, 119, 6)); // amber
+        if (entry.has_value()) {
+            addChip(entry->version, QColor(37, 99, 235));       // blue
+        }
+        addChip(c.lua ? QStringLiteral("Lua") : QStringLiteral("C++"),
+                c.lua ? QColor(22, 163, 74)    // green
+                      : QColor(217, 119, 6));  // amber
+        if (c.disabled) {
+            addChip(tr("Disabled"), QColor(100, 100, 100));
+        } else if (!entry.has_value()) {
+            addChip(tr("Not loaded"), QColor(140, 140, 140));
+        }
         tags->addStretch(1);
         layout->addLayout(tags);
+
+        // Actions. Disable is only offered for running plugins; Enable only
+        // for disabled ones; Uninstall always.
+        auto* actions = new QHBoxLayout;
+        actions->setSpacing(6);
+        actions->addStretch(1);
+        QPushButton* toggle = nullptr;
+        if (c.disabled) {
+            toggle = new QPushButton(tr("Enable"), row);
+            connect(toggle, &QPushButton::clicked, this,
+                    [this, relPath = c.relPath] { onPluginEnable(relPath); });
+        } else if (entry.has_value()) {
+            toggle = new QPushButton(tr("Disable"), row);
+            connect(toggle, &QPushButton::clicked, this,
+                    [this, relPath = c.relPath] { onPluginDisable(relPath); });
+        }
+        if (toggle != nullptr) {
+            actions->addWidget(toggle);
+        }
+        auto* uninstall = new QPushButton(tr("Uninstall"), row);
+        connect(uninstall, &QPushButton::clicked, this,
+                [this, relPath = c.relPath] { onPluginUninstall(relPath); });
+        actions->addWidget(uninstall);
+        layout->addLayout(actions);
 
         pluginList_->setItemWidget(item, row);
         item->setSizeHint(row->sizeHint());

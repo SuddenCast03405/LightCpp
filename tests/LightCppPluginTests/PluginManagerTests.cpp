@@ -157,3 +157,71 @@ TEST(PluginManager, DevCppPluginLoadsOpensAndAnswersBuildSteps)
     // Configure is a no-op for .dev — the file itself is the configuration.
     EXPECT_TRUE(backend->configureSteps(request).isEmpty());
 }
+
+// ---------------------------------------------------------------------------
+// Registered-plugin hot unload
+// ---------------------------------------------------------------------------
+
+namespace {
+
+class TrackedPlugin final : public LightCpp::Plugin::Plugin {
+public:
+    TrackedPlugin(QString name, int* shutdownCalls)
+        : name_(std::move(name)), shutdownCalls_(shutdownCalls)
+    {
+    }
+    [[nodiscard]] QString name() const override { return name_; }
+    [[nodiscard]] QString version() const override { return "1.0"; }
+    bool initialize(LightCpp::Plugin::IdeServices*) override { return true; }
+    void shutdown() override { ++*shutdownCalls_; }
+
+private:
+    QString name_;
+    int* shutdownCalls_;
+};
+
+}  // namespace
+
+TEST(PluginManager, RegisteredPluginHotUnloadsBySource)
+{
+    SilentServices services;
+    LightCpp::Plugin::PluginManager manager;
+
+    int shutdownCalls = 0;
+    auto first = std::make_unique<TrackedPlugin>(QStringLiteral("alpha"),
+                                                 &shutdownCalls);
+    auto second = std::make_unique<TrackedPlugin>(QStringLiteral("beta"),
+                                                  &shutdownCalls);
+    manager.registerPlugin(std::move(first), &services, "C:/plugins/lua/a.lua");
+    manager.registerPlugin(std::move(second), &services, "C:/plugins/lua/b.lua");
+    ASSERT_EQ(manager.loaded().size(), 2);
+
+    // Wrong source: nothing unloads, nothing shuts down.
+    EXPECT_FALSE(manager.unloadRegistered("C:/plugins/lua/missing.lua"));
+    EXPECT_EQ(manager.loaded().size(), 2);
+    EXPECT_EQ(shutdownCalls, 0);
+
+    // The matching source unloads exactly that plugin: shutdown() ran, the
+    // registry and the loaded list both dropped it, the sibling stayed.
+    EXPECT_TRUE(manager.unloadRegistered("C:/plugins/lua/b.lua"));
+    EXPECT_EQ(shutdownCalls, 1);
+    ASSERT_EQ(manager.loaded().size(), 1);
+    EXPECT_EQ(manager.loaded().first().name, QStringLiteral("alpha"));
+
+    // Unloading again finds nothing.
+    EXPECT_FALSE(manager.unloadRegistered("C:/plugins/lua/b.lua"));
+}
+
+TEST(PluginManager, DisabledSharedPluginsAreSkipped)
+{
+    // A disable list entry that matches a dll file name keeps the loader
+    // from even trying that dll — the point of the disable feature.
+    SilentServices services;
+    LightCpp::Plugin::PluginManager manager;
+    const QStringList errors = manager.loadSharedPlugins(
+        QStringLiteral(LIGHTCPP_BUILT_PLUGIN_DIR), &services,
+        {QStringLiteral("libdevcppplugin.dll")});
+    EXPECT_TRUE(errors.isEmpty());
+    EXPECT_TRUE(manager.loaded().isEmpty());
+    EXPECT_TRUE(manager.backends().isEmpty());
+}

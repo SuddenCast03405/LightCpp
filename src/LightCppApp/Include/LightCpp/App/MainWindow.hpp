@@ -712,6 +712,35 @@ private:
     /// what came up. Called once, from the constructor.
     void loadPlugins();
 
+    /// One plugin file in the plugins directory — loaded, disabled or
+    /// simply unloadable. The plugin panel shows all three.
+    struct PluginCandidate {
+        QString relPath;      // relative to the plugins directory
+        QString absolutePath;
+        QString fileName;
+        bool lua = false;
+        bool loaded = false;
+        bool disabled = false;
+    };
+    /// Scan the plugins directory for C++ dlls and Lua scripts and mark
+    /// each one's state against the loaded set and the disable list.
+    [[nodiscard]] QList<PluginCandidate> pluginCandidates() const;
+    /// Write the disabled / pending-delete plugin lists into the base
+    /// layer's preferences.json ("plugins" key), leaving every other
+    /// document field untouched.
+    bool persistPluginLists(const QStringList& disabled,
+                            const QStringList& pendingDeletes);
+    /// Disable / enable / uninstall one plugin by plugins-directory-relative
+    /// path. Lua plugins apply immediately (hot unload / load); C++ plugins
+    /// mark the change and need a restart, uninstalling a loaded dll
+    /// defers the file deletion to the next start (the file is locked).
+    void onPluginDisable(const QString& relPath);
+    void onPluginEnable(const QString& relPath);
+    void onPluginUninstall(const QString& relPath);
+    /// The plugins-directory-relative paths of the disabled plugins plus
+    /// the files still waiting to be deleted, as read by settings_.
+    [[nodiscard]] LightCpp::Settings::Preferences pluginPrefsSnapshot() const;
+
     // --- side bar (the vertical Explorer / Git / Plugins activity bar) ------
     /// Git tab placeholder — the panel itself is not built yet.
     QWidget* createGitPlaceholder();

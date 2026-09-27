@@ -349,6 +349,19 @@ QJsonObject toJson(const Preferences& prefs)
     run.insert(QStringLiteral("terminals"), terminals);
     object.insert(QStringLiteral("run"), run);
 
+    QJsonArray disabled;
+    for (const QString& path : prefs.disabledPlugins) {
+        disabled.append(path);
+    }
+    QJsonArray pendingDeletes;
+    for (const QString& path : prefs.pendingPluginDeletes) {
+        pendingDeletes.append(path);
+    }
+    QJsonObject plugins;
+    plugins.insert(QStringLiteral("disabled"), disabled);
+    plugins.insert(QStringLiteral("pendingDeletes"), pendingDeletes);
+    object.insert(QStringLiteral("plugins"), plugins);
+
     return object;
 }
 
@@ -546,6 +559,13 @@ void fromJson(const QJsonObject& object, Preferences& out)
                 }
             }
         }
+    }
+
+    const QJsonValue pluginsValue = object.value(QLatin1String("plugins"));
+    if (pluginsValue.isObject()) {
+        const QJsonObject plugins = pluginsValue.toObject();
+        readStringList(plugins, "disabled", out.disabledPlugins);
+        readStringList(plugins, "pendingDeletes", out.pendingPluginDeletes);
     }
 }
 

@@ -20,8 +20,9 @@ PluginManager::~PluginManager()
     // anyway — there is no hot reload to make room for.
 }
 
-QStringList PluginManager::loadSharedPlugins(const QString& directory,
-                                             IdeServices* services)
+QStringList PluginManager::loadSharedPlugins(
+    const QString& directory, IdeServices* services,
+    const QStringList& disabledRelativePaths)
 {
     errors_.clear();
     services_ = services;
@@ -35,6 +36,12 @@ QStringList PluginManager::loadSharedPlugins(const QString& directory,
     }
 
     for (const QString& file : files) {
+        // The disable list holds paths relative to the plugins directory;
+        // shared plugins sit directly in it, so the relative path is the
+        // file name.
+        if (disabledRelativePaths.contains(file, Qt::CaseInsensitive)) {
+            continue;
+        }
         const QString path = dir.filePath(file);
         auto loader = std::make_unique<QPluginLoader>(path);
 
@@ -112,7 +119,7 @@ void PluginManager::registerPlugin(std::unique_ptr<Plugin> plugin,
     // Note: dynamically registered plugins (the Lua host's script adapters)
     // never carry a ProjectBackend — project backends only come from shared
     // libraries, where qobject_cast across the plugin boundary works.
-    registeredEntries_.push_back(std::move(plugin));
+    registeredEntries_.push_back(RegisteredEntry{std::move(plugin), source});
     loaded_.append(record);
 }
 
@@ -125,7 +132,7 @@ void PluginManager::shutdownPlugins()
     // Reverse order: a later plugin may have built on an earlier one.
     for (auto it = registeredEntries_.rbegin();
          it != registeredEntries_.rend(); ++it) {
-        (*it)->shutdown();
+        it->plugin->shutdown();
     }
     for (auto it = sharedEntries_.rbegin(); it != sharedEntries_.rend(); ++it) {
         it->plugin->shutdown();
@@ -133,6 +140,34 @@ void PluginManager::shutdownPlugins()
     registeredEntries_.clear();
     backends_.clear();
     loaded_.clear();
+}
+
+bool PluginManager::unloadRegistered(const QString& source)
+{
+    if (shutDown_) {
+        return false;
+    }
+    // Registered plugins (the Lua host's script adapters) can be torn down
+    // safely: shutdown() runs plugin.onShutdown() and closes the state.
+    // Shared-library plugins are not touchable this way — the disablement
+    // of those needs a restart.
+    for (auto it = registeredEntries_.rbegin();
+         it != registeredEntries_.rend(); ++it) {
+        if (it->source != source) {
+            continue;
+        }
+        it->plugin->shutdown();
+        for (auto lit = loaded_.begin(); lit != loaded_.end(); ++lit) {
+            if (lit->kind == Loaded::Kind::Lua && lit->path == source) {
+                loaded_.erase(lit);
+                break;
+            }
+        }
+        // rbegin() iterator -> forward erase position.
+        registeredEntries_.erase(std::next(it).base());
+        return true;
+    }
+    return false;
 }
 
 ProjectBackend* PluginManager::backendFor(const QString& filePath) const

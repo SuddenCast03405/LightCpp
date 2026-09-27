@@ -81,12 +81,14 @@ public:
                                  const SandboxLimits& limits = {});
 
     /// Load every *.lua in `directory` (sorted by file name) and register
-    /// the successful ones with `manager`. Returns one error string per
-    /// failed script.
+    /// the successful ones with `manager`. Scripts whose bare file name is
+    /// listed in `disabledFileNames` are skipped. Returns one error string
+    /// per failed script.
     static QStringList loadPluginsFromDirectory(
         const QString& directory, ::LightCpp::Plugin::IdeServices* services,
         ::LightCpp::Plugin::PluginManager* manager,
-        const SandboxLimits& limits = {});
+        const SandboxLimits& limits = {},
+        const QStringList& disabledFileNames = {});
 };
 
 }  // namespace LightCpp::Lua

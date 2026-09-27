@@ -387,6 +387,45 @@ TEST(SettingsJson, RunTerminalsParseAndRoundTrip)
     EXPECT_FALSE(roundTripped.terminals[0].embedded);
 }
 
+TEST(SettingsJson, PluginDisableListsParseAndRoundTrip)
+{
+    // Absent -> empty lists (nothing disabled, nothing pending).
+    Preferences fresh;
+    fromJson(QJsonObject{{"type", "preferences"}}, fresh);
+    EXPECT_TRUE(fresh.disabledPlugins.isEmpty());
+    EXPECT_TRUE(fresh.pendingPluginDeletes.isEmpty());
+
+    // Present -> parsed, and survives a write/read round trip.
+    Preferences prefs;
+    fromJson(QJsonObject{
+                 {"type", "preferences"},
+                 {"plugins", QJsonObject{
+                                 {"disabled", QJsonArray{"hello.dll",
+                                                         "lua/timer.lua"}},
+                                 {"pendingDeletes", QJsonArray{"old.dll"}}}}},
+             prefs);
+    ASSERT_EQ(prefs.disabledPlugins.size(), 2);
+    EXPECT_EQ(prefs.disabledPlugins[0], "hello.dll");
+    EXPECT_EQ(prefs.disabledPlugins[1], "lua/timer.lua");
+    ASSERT_EQ(prefs.pendingPluginDeletes.size(), 1);
+    EXPECT_EQ(prefs.pendingPluginDeletes[0], "old.dll");
+
+    const Preferences roundTripped = [&] {
+        Preferences p;
+        fromJson(toJson(prefs), p);
+        return p;
+    }();
+    EXPECT_EQ(roundTripped.disabledPlugins, prefs.disabledPlugins);
+    EXPECT_EQ(roundTripped.pendingPluginDeletes, prefs.pendingPluginDeletes);
+
+    // Wrong type -> untouched defaults.
+    Preferences guarded;
+    fromJson(QJsonObject{{"type", "preferences"},
+                          {"plugins", QJsonObject{{"disabled", 42}}}},
+             guarded);
+    EXPECT_TRUE(guarded.disabledPlugins.isEmpty());
+}
+
 // ---------------------------------------------------------------------------
 // Store: layers, merging, resolution
 // ---------------------------------------------------------------------------

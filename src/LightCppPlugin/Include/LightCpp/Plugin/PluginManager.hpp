@@ -41,11 +41,15 @@ public:
         bool hasBackend = false;  // also implements ProjectBackend
     };
 
-    /// Scan `directory` for *.dll files and load each one. A dll that does
-    /// not carry the LightCpp plugin metadata is skipped with an error
-    /// string, never fatal. `services` is handed to every plugin's
-    /// initialize(); it must outlive the manager.
-    QStringList loadSharedPlugins(const QString& directory, IdeServices* services);
+    /// Scan `directory` for *.dll files and load each one, skipping the
+    /// file names listed in `disabledRelativePaths` (paths relative to the
+    /// plugins directory — for shared plugins that is the bare file name).
+    /// A dll that does not carry the LightCpp plugin metadata is skipped
+    /// with an error string, never fatal. `services` is handed to every
+    /// plugin's initialize(); it must outlive the manager.
+    QStringList loadSharedPlugins(
+        const QString& directory, IdeServices* services,
+        const QStringList& disabledRelativePaths = {});
 
     /// Register an already-constructed plugin that was not loaded from a
     /// shared library (the Lua host's script adapters). The manager takes
@@ -56,6 +60,12 @@ public:
     /// Call shutdown() on every loaded plugin, in reverse load order. Safe
     /// to call twice.
     void shutdownPlugins();
+
+    /// Hot-unload one registered (non-shared, i.e. Lua) plugin by its
+    /// source path: shutdown(), destroy, drop from the registry. Returns
+    /// false when no registered plugin matches — shared-library plugins
+    /// cannot be hot-unloaded, their disablement needs a restart.
+    bool unloadRegistered(const QString& source);
 
     // --- project backends ---------------------------------------------------
     /// The first backend that claims `filePath`, or nullptr.
@@ -85,7 +95,13 @@ private:
     // unique_ptr loader / owned plugin) and QList's growth path
     // instantiates the copy constructor regardless of use.
     std::vector<SharedEntry> sharedEntries_;
-    std::vector<std::unique_ptr<Plugin>> registeredEntries_;  // owned
+    /// An owned, non-shared plugin (the Lua host's script adapters) plus
+    /// the source it was registered from — the key hot-unload works by.
+    struct RegisteredEntry {
+        std::unique_ptr<Plugin> plugin;
+        QString source;
+    };
+    std::vector<RegisteredEntry> registeredEntries_;
 };
 
 }  // namespace LightCpp::Plugin

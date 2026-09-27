@@ -235,6 +235,16 @@ struct Preferences {
     /// fixed options outside it; every entry here can be edited, added or
     /// removed. Seeded with the two Windows terminals on first run.
     QList<RunTerminal> terminals = defaultRunTerminals();
+
+    /// Plugins the user disabled, as paths relative to the plugins
+    /// directory ("hello.dll", "lua/timer.lua"). Skipped at load time; a
+    /// Lua plugin disabled while running is hot-unloaded immediately, a
+    /// C++ one needs a restart.
+    QStringList disabledPlugins;
+    /// Plugins whose files the user asked to uninstall while they were
+    /// still loaded (the locked dll): deleted on the next start, before
+    /// loading. Lua scripts are deleted right away and never listed here.
+    QStringList pendingPluginDeletes;
 };
 
 // ---------------------------------------------------------------------------

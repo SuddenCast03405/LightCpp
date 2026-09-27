@@ -617,7 +617,8 @@ LuaPluginHost::LoadResult LuaPluginHost::loadPlugin(
 
 QStringList LuaPluginHost::loadPluginsFromDirectory(
     const QString& directory, ::LightCpp::Plugin::IdeServices* services,
-    ::LightCpp::Plugin::PluginManager* manager, const SandboxLimits& limits)
+    ::LightCpp::Plugin::PluginManager* manager, const SandboxLimits& limits,
+    const QStringList& disabledFileNames)
 {
     QStringList errors;
     const QDir pluginDir(directory);
@@ -625,6 +626,12 @@ QStringList LuaPluginHost::loadPluginsFromDirectory(
         pluginDir.entryList({QStringLiteral("*.lua")}, QDir::Files,
                             QDir::Name | QDir::IgnoreCase);
     for (const QString& file : scripts) {
+        // `disabledFileNames` are the bare file names of the disabled
+        // scripts (the caller derives them from the plugins-directory-
+        // relative disable list).
+        if (disabledFileNames.contains(file, Qt::CaseInsensitive)) {
+            continue;
+        }
         const QString path = pluginDir.filePath(file);
         LoadResult loaded = loadPlugin(path, services, limits);
         if (!loaded.error.isEmpty()) {
