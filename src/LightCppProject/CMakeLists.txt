@@ -27,4 +27,7 @@ target_compile_features(LightCppProject PUBLIC cxx_std_20)
 target_link_libraries(LightCppProject
     PUBLIC Qt6::Core
     PRIVATE LightCppWarnings
+    # .dev descriptors (and the makefiles generated from them) go through the
+    # encoding detector/codec: Dev-C++ writes them in the machine's ANSI page.
+    PRIVATE LightCppText LightCppCore
 )

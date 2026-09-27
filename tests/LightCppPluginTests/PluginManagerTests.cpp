@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 
 #include <QFile>
+#include <QFileInfo>
 #include <QPluginLoader>
 #include <QTemporaryDir>
 
@@ -133,7 +134,8 @@ TEST(PluginManager, DevCppPluginLoadsOpensAndAnswersBuildSteps)
     EXPECT_EQ(summary.outputPath,
               projectDir.filePath(QStringLiteral("hello.exe")));
 
-    // Build steps: one g++ invocation over the unit list.
+    // Build steps: the plugin regenerates the Dev-C++ style makefile, then
+    // hands the build to make — not a direct compiler invocation.
     LightCpp::Plugin::BuildRequest request;
     request.configuration = QStringLiteral("Debug");
     request.compiler = QStringLiteral("E:/toolchain/g++.exe");
@@ -141,11 +143,16 @@ TEST(PluginManager, DevCppPluginLoadsOpensAndAnswersBuildSteps)
     const QList<LightCpp::Plugin::BuildStep> steps =
         backend->buildSteps(request);
     ASSERT_EQ(steps.size(), 1);
-    EXPECT_EQ(steps.first().program, QStringLiteral("E:/toolchain/g++.exe"));
-    EXPECT_TRUE(steps.first().arguments.contains(QStringLiteral("-o")));
-    EXPECT_TRUE(steps.first().arguments.contains(
-        summary.outputPath));
+    EXPECT_EQ(steps.first().program,
+              QStringLiteral("E:/toolchain/mingw32-make.exe"));
+    EXPECT_TRUE(steps.first().arguments.contains(QStringLiteral("-f")));
+    EXPECT_TRUE(steps.first().arguments.join(QLatin1Char(' '))
+                    .contains(QStringLiteral("Makefile.win")));
+    EXPECT_TRUE(steps.first().arguments.contains(QStringLiteral("all")));
     EXPECT_EQ(steps.first().workingDirectory, projectDir.path());
+    // The makefile itself now exists, written where Dev-C++ writes it.
+    EXPECT_TRUE(QFileInfo::exists(
+        projectDir.filePath(QStringLiteral("Makefile.win"))));
 
     // Configure is a no-op for .dev — the file itself is the configuration.
     EXPECT_TRUE(backend->configureSteps(request).isEmpty());

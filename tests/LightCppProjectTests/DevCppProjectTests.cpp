@@ -11,17 +11,24 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QTemporaryDir>
+
+#include "LightCpp/Text/Encoding.hpp"
 
 namespace {
 
 using LightCpp::Project::BuildConfiguration;
+using LightCpp::Project::DevCppMakefilePlan;
 using LightCpp::Project::DevCppProject;
+using LightCpp::Project::DevCppToolchain;
+using LightCpp::Project::devCppMakefilePlan;
 using LightCpp::Project::gnuBuildArguments;
 using LightCpp::Project::makeArguments;
 using LightCpp::Project::parseDevProject;
 using LightCpp::Project::splitDevList;
 using LightCpp::Project::splitFlagString;
 using LightCpp::Project::windresArguments;
+using LightCpp::Project::writeDevCppMakefile;
 
 const QString kDevPath = QStringLiteral("E:/proj/hello.dev");
 
@@ -475,4 +482,393 @@ TEST(DevCppProject, SplitDevListDropsEmptyEntriesAndQuotes)
               QStringList({QStringLiteral("C:/with space/inc"),
                            QStringLiteral("C:/plain")}));
     EXPECT_TRUE(splitDevList(QString()).isEmpty());
+}
+
+// ---------------------------------------------------------------------------
+// Makefile generation — the build path the original IDE takes
+// ---------------------------------------------------------------------------
+namespace {
+
+/// A toolchain the tests can predict: gxx is absolute, so gcc/windres derive
+/// from the same directory.
+DevCppToolchain testToolchain()
+{
+    DevCppToolchain tools;
+    tools.gxx = QStringLiteral("E:/tools/g++.exe");
+    return tools;
+}
+
+QStringList makefileLines(const QByteArray& content)
+{
+    return QString::fromUtf8(content).split(QLatin1Char('\n'));
+}
+
+QStringList makefileLines(const DevCppMakefilePlan& plan)
+{
+    return makefileLines(plan.content);
+}
+
+/// Same, for plans whose non-ASCII parts are in the machine's ANSI code
+/// page (the makefile is written the way mingw32-make reads it).
+QStringList localMakefileLines(const QByteArray& content)
+{
+    return QString::fromLocal8Bit(content).split(QLatin1Char('\n'));
+}
+
+/// Looks up the "NAME      = value" line of a generated makefile (the name
+/// is padded to Dev-C++'s column, so the '=' never sits right after it).
+QString variableValue(const QStringList& lines, const QString& name)
+{
+    const QString prefix = name + QChar(u' ');
+    for (const QString& line : lines) {
+        if (!line.startsWith(prefix)) {
+            continue;
+        }
+        const qsizetype equals = line.indexOf(u'=');
+        if (equals < 0) {
+            continue;
+        }
+        QString tail = line.mid(equals + 1);
+        if (tail.startsWith(u' ')) {
+            tail.remove(0, 1);
+        }
+        return tail;
+    }
+    return {};
+}
+
+}  // namespace
+
+TEST(DevCppProject, MakefileNamesTheToolsAndVariablesTheClassicWay)
+{
+    const auto project = parse(kDevCpp5Project);
+    ASSERT_TRUE(project.has_value());
+    const DevCppMakefilePlan plan =
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain());
+
+    // Same file, same place as Dev-C++ itself.
+    EXPECT_EQ(plan.path, QStringLiteral("E:/proj/Makefile.win"));
+
+    const QStringList lines = makefileLines(plan);
+    EXPECT_EQ(variableValue(lines, QStringLiteral("CPP")),
+              QStringLiteral("E:/tools/g++.exe"));
+    // Derived from the C++ compiler's directory.
+    EXPECT_EQ(variableValue(lines, QStringLiteral("CC")),
+              QStringLiteral("E:/tools/gcc.exe"));
+    EXPECT_EQ(variableValue(lines, QStringLiteral("WINDRES")),
+              QStringLiteral("E:/tools/windres.exe"));
+    // Objects collect under ObjectOutput=; the README unit is not compiled
+    // or linked, so it does not appear at all.
+    EXPECT_EQ(variableValue(lines, QStringLiteral("OBJ")),
+              QStringLiteral("obj/main.o obj/util.o"));
+    EXPECT_EQ(variableValue(lines, QStringLiteral("LINKOBJ")),
+              QStringLiteral("obj/main.o obj/util.o"));
+    EXPECT_EQ(variableValue(lines, QStringLiteral("BIN")),
+              QStringLiteral("bin/hello.exe"));
+    // Library directories, then the classified Linker= entries.
+    EXPECT_EQ(variableValue(lines, QStringLiteral("LIBS")),
+              QStringLiteral("-LD:/libs/lib -static D:/libs/lib/libfoo.a -lm"));
+    EXPECT_EQ(variableValue(lines, QStringLiteral("INCS")),
+              QStringLiteral("-ID:/libs/include -IE:/other/inc"));
+    EXPECT_EQ(variableValue(lines, QStringLiteral("CXXFLAGS")),
+              QStringLiteral("$(CXXINCS) -Wall -Wextra -g -std=c++11 -Wall"));
+    EXPECT_EQ(variableValue(lines, QStringLiteral("CFLAGS")),
+              QStringLiteral("$(INCS) -Wall -Wextra -g -std=c++11 -Wall"));
+    EXPECT_EQ(variableValue(lines, QStringLiteral("RM")),
+              QStringLiteral("rm.exe -f"));
+}
+
+TEST(DevCppProject, MakefileCarriesThePerUnitRules)
+{
+    const auto project = parse(kDevCpp5Project);
+    ASSERT_TRUE(project.has_value());
+    const DevCppMakefilePlan plan =
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain());
+    const QStringList lines = makefileLines(plan);
+
+    // The standard target chain, in Dev-C++'s own order.
+    const int phony = lines.indexOf(QStringLiteral(
+        ".PHONY: all all-before all-after clean clean-custom"));
+    ASSERT_GE(phony, 0);
+    EXPECT_EQ(lines.at(phony + 2), QStringLiteral("all: all-before $(BIN) all-after"));
+    EXPECT_TRUE(lines.contains(QStringLiteral("clean: clean-custom")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("\t${RM} $(OBJ) $(BIN)")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("$(BIN): $(OBJ)")));
+    EXPECT_TRUE(lines.contains(
+        QStringLiteral("\t$(CPP) $(LINKOBJ) -o $(BIN) $(LIBS)")));
+
+    // One rule per compilable unit: object target, source dependency, then
+    // the compile line through $(CPP) with the project's flags.
+    EXPECT_TRUE(lines.contains(QStringLiteral("obj/main.o: main.cpp")));
+    EXPECT_TRUE(lines.contains(
+        QStringLiteral("\t$(CPP) -c main.cpp -o obj/main.o $(CXXFLAGS)")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("obj/util.o: src/util.cpp")));
+    EXPECT_TRUE(lines.contains(
+        QStringLiteral("\t$(CPP) -c src/util.cpp -o obj/util.o $(CXXFLAGS)")));
+}
+
+TEST(DevCppProject, MakefileForACProjectLinksThroughCC)
+{
+    const auto project = parse(
+        "[Project]\n"
+        "Name=cprog\n"
+        "IsCpp=0\n"
+        "Compiler=-std=c99\n"
+        "UnitCount=1\n"
+        "[Unit1]\n"
+        "FileName=main.c\n");
+    ASSERT_TRUE(project.has_value());
+    const DevCppMakefilePlan plan =
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain());
+    const QStringList lines = makefileLines(plan);
+
+    // Objects sit next to their sources when ObjectOutput= is empty.
+    EXPECT_EQ(variableValue(lines, QStringLiteral("OBJ")),
+              QStringLiteral("main.o"));
+    EXPECT_TRUE(lines.contains(QStringLiteral("\t$(CC) $(LINKOBJ) -o $(BIN) $(LIBS)")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("main.o: main.c")));
+    EXPECT_TRUE(lines.contains(
+        QStringLiteral("\t$(CC) -c main.c -o main.o $(CFLAGS)")));
+}
+
+TEST(DevCppProject, MakefileForStaticAndDynamicLibrariesMatchesDevCpp)
+{
+    const auto staticLib = parse(
+        "[Project]\n"
+        "Name=mylib\n"
+        "Type=2\n"
+        "UnitCount=1\n"
+        "[Unit1]\n"
+        "FileName=lib.cpp\n");
+    ASSERT_TRUE(staticLib.has_value());
+    const QStringList staticLines =
+        makefileLines(devCppMakefilePlan(*staticLib, BuildConfiguration::Debug,
+                                         testToolchain()));
+    EXPECT_TRUE(staticLines.contains(QStringLiteral("$(BIN): $(OBJ)")));
+    EXPECT_TRUE(staticLines.contains(QStringLiteral("\tar r $(BIN) $(LINKOBJ)")));
+    EXPECT_TRUE(staticLines.contains(QStringLiteral("\tranlib $(BIN)")));
+
+    const auto dynLib = parse(
+        "[Project]\n"
+        "Name=plugin\n"
+        "Type=3\n"
+        "UnitCount=1\n"
+        "[Unit1]\n"
+        "FileName=plugin.cpp\n");
+    ASSERT_TRUE(dynLib.has_value());
+    const DevCppMakefilePlan plan =
+        devCppMakefilePlan(*dynLib, BuildConfiguration::Debug, testToolchain());
+    const QStringList dynamicLines = makefileLines(plan);
+    // The import library and .def land next to the DLL, like the original.
+    EXPECT_EQ(variableValue(dynamicLines, QStringLiteral("DEF")),
+              QStringLiteral("libplugin.def"));
+    EXPECT_EQ(variableValue(dynamicLines, QStringLiteral("STATIC")),
+              QStringLiteral("libplugin.a"));
+    EXPECT_TRUE(dynamicLines.contains(QStringLiteral(
+        "\t$(CPP) -shared $(LINKOBJ) -o $(BIN) $(LIBS) "
+        "-Wl,--output-def,$(DEF),--out-implib,$(STATIC),--add-stdcall-alias")));
+}
+
+TEST(DevCppProject, MakefileCompilesTheProjectIconThroughWindres)
+{
+    const auto project = parse(
+        "[Project]\n"
+        "Name=hello\n"
+        "Icon=app.ico\n"
+        "UnitCount=1\n"
+        "[Unit1]\n"
+        "FileName=main.cpp\n");
+    ASSERT_TRUE(project.has_value());
+    const DevCppMakefilePlan plan =
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain());
+
+    // The generated script rides along with the plan; writeDevCppMakefile
+    // parks it at iconResourcePath() before make runs.
+    EXPECT_FALSE(plan.resourceScript.isEmpty());
+    EXPECT_TRUE(plan.resourceScript.contains("1 ICON"));
+
+    const QStringList lines = makefileLines(plan);
+    // The RES object lives in temp; quoted exactly when the path needs it.
+    const QString objectPath = project->iconObjectPath();
+    const QString expectedRes = objectPath.contains(u' ')
+                                    ? QStringLiteral("\"%1\"").arg(objectPath)
+                                    : objectPath;
+    EXPECT_EQ(variableValue(lines, QStringLiteral("RES")), expectedRes);
+    const QString rule = QStringLiteral("%1: %2")
+                             .arg(project->iconObjectPath(),
+                                  project->iconResourcePath());
+    const QString text = lines.join(QLatin1Char('\n'));
+    EXPECT_TRUE(text.contains(rule));
+    EXPECT_TRUE(text.contains(
+        QStringLiteral("$(WINDRES) -i %1 --input-format=rc -o %2 -O coff")
+            .arg(project->iconResourcePath(), project->iconObjectPath())));
+}
+
+TEST(DevCppProject, PrivateResourceReplacesTheGeneratedIconScript)
+{
+    const auto project = parse(
+        "[Project]\n"
+        "Name=hello\n"
+        "PrivateResource=helloPrivate.rc\n"
+        "Icon=app.ico\n"
+        "UnitCount=1\n"
+        "[Unit1]\n"
+        "FileName=main.cpp\n");
+    ASSERT_TRUE(project.has_value());
+    const DevCppMakefilePlan plan =
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain());
+    // A project-carried .rc is what windres gets; nothing is generated.
+    EXPECT_TRUE(plan.resourceScript.isEmpty());
+    EXPECT_TRUE(makefileLines(plan)
+                    .contains(QStringLiteral("helloPrivate.res: helloPrivate.rc")));
+}
+
+TEST(DevCppProject, MakefileHonoursAPerUnitOverrideBuildCmd)
+{
+    const auto project = parse(
+        "[Project]\n"
+        "Name=special\n"
+        "UnitCount=1\n"
+        "[Unit1]\n"
+        "FileName=weird.cpp\n"
+        "OverrideBuildCmd=1\n"
+        "BuildCmd=$(CPP) -c <CRTAB> weird.cpp -o weird.o\n");
+    ASSERT_TRUE(project.has_value());
+    ASSERT_EQ(project->units.size(), 1);
+    EXPECT_TRUE(project->units.at(0).overrideBuildCmd);
+    const QStringList lines =
+        makefileLines(devCppMakefilePlan(*project, BuildConfiguration::Debug,
+                                         testToolchain()));
+    // <CRTAB> became a real continuation: a tab on the next line.
+    const QString text = lines.join(QLatin1Char('\n'));
+    EXPECT_TRUE(text.contains(QStringLiteral("\t$(CPP) -c \n\t weird.cpp -o weird.o")));
+}
+
+TEST(DevCppProject, WriteDevCppMakefilePutsTheFileWhereDevCppDoes)
+{
+    const auto project = parse(kDevCpp5Project);
+    ASSERT_TRUE(project.has_value());
+    // Redirect the project into a temp directory so nothing leaks into the
+    // repository.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    DevCppProject local = *project;
+    local.filePath = dir.filePath(QStringLiteral("hello.dev"));
+    local.projectDir = QDir(dir.path()).filePath(QStringLiteral("hello"));
+
+    const DevCppMakefilePlan plan =
+        devCppMakefilePlan(local, BuildConfiguration::Debug, testToolchain());
+    ASSERT_TRUE(writeDevCppMakefile(plan, local));
+
+    QFileInfo written(QDir(local.projectDir).filePath(QStringLiteral("Makefile.win")));
+    ASSERT_TRUE(written.exists());
+    QFile readBack(written.absoluteFilePath());
+    ASSERT_TRUE(readBack.open(QIODevice::ReadOnly));
+    EXPECT_EQ(readBack.readAll(), plan.content);
+
+    // The ObjectOutput= directory is created up front: make will not.
+    EXPECT_TRUE(QDir(QDir(local.projectDir).filePath(QStringLiteral("obj"))).exists());
+}
+
+TEST(DevCppProject, GbkEncodedDevFileDecodesItsName)
+{
+    // Only meaningful where the local ANSI page really is GBK — the fixture
+    // is the bytes Dev-C++ writes on a zh-CN machine.
+    if (LightCpp::Text::localAnsiEncoding()
+        != LightCpp::Text::TextEncoding::Gbk) {
+        GTEST_SKIP() << "local ANSI code page is not GBK";
+    }
+    // "Name=项目1" and "OverrideOutputName=项目1.exe", written as GBK bytes.
+    QByteArray content = "[Project]\nName=";
+    content += QByteArrayLiteral("\xCF\xEE\xC4\xBF" "1");
+    content += "\nOverrideOutput=1\nOverrideOutputName=";
+    content += QByteArrayLiteral("\xCF\xEE\xC4\xBF" "1.exe");
+    content += "\nUnitCount=1\n[Unit1]\nFileName=main.cpp\n";
+
+    const auto project = parseDevProject(kDevPath, content);
+    ASSERT_TRUE(project.has_value());
+    // FromUtf8 would have produced U+FFFD mush here — the exact bug that
+    // made ld report "cannot open output file".
+    EXPECT_EQ(project->name, QStringLiteral("\x9879\x76EE" "1"));
+    EXPECT_EQ(project->overrideOutputName,
+              QStringLiteral("\x9879\x76EE" "1.exe"));
+    EXPECT_EQ(project->outputPath(),
+              QStringLiteral("E:/proj/") + QStringLiteral("\x9879\x76EE" "1.exe"));
+}
+
+TEST(DevCppProject, MakefileRoutesANonAsciiProgramThroughAnIntermediate)
+{
+    // Only meaningful where the local ANSI page really is GBK (the encoding
+    // the makefile is written in).
+    if (LightCpp::Text::localAnsiEncoding()
+        != LightCpp::Text::TextEncoding::Gbk) {
+        GTEST_SKIP() << "local ANSI code page is not GBK";
+    }
+    // Name=项目1: recent MSYS2 linkers decode the makefile's ANSI bytes as
+    // UTF-8, so the rule must produce an ASCII stand-in and move it.
+    QByteArray dev = "[Project]\nName=";
+    dev += QByteArrayLiteral("\xCF\xEE\xC4\xBF" "1");
+    dev += "\nUnitCount=1\n[Unit1]\nFileName=main.cpp\n";
+    const auto project = parseDevProject(kDevPath, dev);
+    ASSERT_TRUE(project.has_value());
+    const DevCppMakefilePlan plan =
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain());
+    const QStringList lines = localMakefileLines(plan.content);
+
+    // The target keeps its real name — make's timestamp logic watches it ...
+    EXPECT_EQ(variableValue(lines, QStringLiteral("BIN")),
+              QStringLiteral("\x9879\x76EE" "1.exe"));
+    // ... while the linker writes the ASCII stand-in that cmd moves into
+    // place (cmd is Unicode, so the ANSI command line round-trips).
+    EXPECT_TRUE(lines.contains(QStringLiteral(
+        "\t$(CPP) $(LINKOBJ) -o _lightcpp_link.exe $(LIBS)")));
+    EXPECT_TRUE(lines.contains(QStringLiteral(
+        "\tcmd /c move /y _lightcpp_link.exe \"\x9879\x76EE" "1.exe\"")));
+    EXPECT_FALSE(lines.contains(
+        QStringLiteral("\t$(CPP) $(LINKOBJ) -o $(BIN) $(LIBS)")));
+}
+
+TEST(DevCppProject, MakefileRoutesNonAsciiLibrariesThroughAnIntermediate)
+{
+    if (LightCpp::Text::localAnsiEncoding()
+        != LightCpp::Text::TextEncoding::Gbk) {
+        GTEST_SKIP() << "local ANSI code page is not GBK";
+    }
+    // ar mangles a non-ASCII archive name the same way ld does.
+    QByteArray staticDev = "[Project]\nName=";
+    staticDev += QByteArrayLiteral("\xCF\xEE\xC4\xBF" "1");
+    staticDev += "\nType=2\nUnitCount=1\n[Unit1]\nFileName=lib.cpp\n";
+    const auto staticLib = parseDevProject(kDevPath, staticDev);
+    ASSERT_TRUE(staticLib.has_value());
+    const QStringList staticLines = localMakefileLines(
+        devCppMakefilePlan(*staticLib, BuildConfiguration::Debug,
+                           testToolchain()).content);
+    EXPECT_TRUE(staticLines.contains(
+        QStringLiteral("\tar r _lightcpp_link.a $(LINKOBJ)")));
+    EXPECT_TRUE(staticLines.contains(
+        QStringLiteral("\tranlib _lightcpp_link.a")));
+    EXPECT_TRUE(staticLines.contains(QStringLiteral(
+        "\tcmd /c move /y _lightcpp_link.a \"\x9879\x76EE" "1.a\"")));
+
+    // A DLL moves its import library and .def out of the stand-ins too.
+    QByteArray dynamicDev = "[Project]\nName=";
+    dynamicDev += QByteArrayLiteral("\xCF\xEE\xC4\xBF" "1");
+    dynamicDev += "\nType=3\nUnitCount=1\n[Unit1]\nFileName=plugin.cpp\n";
+    const auto dynLib = parseDevProject(kDevPath, dynamicDev);
+    ASSERT_TRUE(dynLib.has_value());
+    const QStringList dynamicLines = localMakefileLines(
+        devCppMakefilePlan(*dynLib, BuildConfiguration::Debug,
+                           testToolchain()).content);
+    EXPECT_EQ(variableValue(dynamicLines, QStringLiteral("DEF")),
+              QStringLiteral("lib\x9879\x76EE" "1.def"));
+    EXPECT_TRUE(dynamicLines.contains(QStringLiteral(
+        "\t$(CPP) -shared $(LINKOBJ) -o _lightcpp_link.exe $(LIBS) "
+        "-Wl,--output-def,_lightcpp_link.def,--out-implib,_lightcpp_link.a"
+        ",--add-stdcall-alias")));
+    EXPECT_TRUE(dynamicLines.contains(QStringLiteral(
+        "\tcmd /c move /y _lightcpp_link.exe \"\x9879\x76EE" "1.dll\"")));
+    EXPECT_TRUE(dynamicLines.contains(QStringLiteral(
+        "\tcmd /c move /y _lightcpp_link.def \"lib\x9879\x76EE" "1.def\"")));
+    EXPECT_TRUE(dynamicLines.contains(QStringLiteral(
+        "\tcmd /c move /y _lightcpp_link.a \"lib\x9879\x76EE" "1.a\"")));
 }

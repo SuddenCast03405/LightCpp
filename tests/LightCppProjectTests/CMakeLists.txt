@@ -11,6 +11,9 @@ add_executable(LightCppProjectTests
 
 target_link_libraries(LightCppProjectTests PRIVATE
     LightCppProject
+    # DevCppProjectTests reads LightCpp/Text/Encoding.hpp directly (the GBK
+    # fixture only makes sense where the local ANSI page is GBK).
+    LightCppText
     GTest::gtest_main
     LightCppWarnings
 )

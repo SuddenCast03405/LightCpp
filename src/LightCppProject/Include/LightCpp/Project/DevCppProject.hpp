@@ -22,7 +22,8 @@
 ///     of `[Project]` (which is what *templates* use). Both are read.
 ///
 /// Dev-C++ is a MinGW IDE, so a project from it is always built with the GNU
-/// toolchain — see gnuBuildArguments().
+/// toolchain — through a generated makefile, the way the original IDE does it
+/// (see devCppMakefilePlan()).
 namespace LightCpp::Project {
 
 /// Recognised `Type=` values that do not produce a program.
@@ -31,11 +32,18 @@ constexpr int kDevCppDynamicLibrary = 3;
 
 /// One translation unit. `compile` / `link` mirror `Compile=` / `Link=`, which
 /// Dev-C++ lets you clear to keep a file in the project tree without building
-/// it (data files, headers).
+/// it (data files, headers). `compileCpp` mirrors the per-unit `CompileCpp=`
+/// override (absent → the project's IsCpp); it picks $(CPP)/$(CXXFLAGS) versus
+/// $(CC)/$(CFLAGS) in the generated makefile, exactly like the original IDE.
+/// `overrideBuildCmd`/`buildCmd` mirror `OverrideBuildCmd=`/`BuildCmd=`: when
+/// set, the makefile rule runs that command instead of the default one.
 struct DevCppUnit {
     QString fileName;
     bool compile = true;
     bool link = true;
+    bool compileCpp = true;
+    bool overrideBuildCmd = false;
+    QString buildCmd;
 };
 
 struct DevCppProject {
@@ -58,6 +66,15 @@ struct DevCppProject {
 
     bool useCustomMakefile = false;
     QString customMakefile;
+
+    /// [Project] PrivateResource — an .rc script living inside the project
+    /// that windres compiles and the build links in. Dev-C++ itself writes
+    /// one (`<name>Private.rc`) whenever a project icon is set, so it wins
+    /// over the Icon= field when both are present.
+    QString privateResource;
+    /// [Project] MakeIncludes — extra makefiles `include`d by the generated
+    /// one (the hook Dev-C++ offers for all-before/all-after rules).
+    QStringList makeIncludes;
 
     QString iconPath;            // [Project] Icon, resolved; empty when unset
     QStringList runArguments;    // [Project] CommandLine — passed when running
@@ -92,7 +109,8 @@ struct DevCppProject {
     /// The program or library this project produces.
     [[nodiscard]] QString outputPath() const;
 
-    /// The makefile to hand to mingw32-make, or empty when none is configured.
+    /// The makefile configured via UseCustomMakefile=1, or empty when the
+    /// build should use the generated one (see devCppMakefilePlan()).
     [[nodiscard]] QString makefilePath() const;
 
     /// Where the compiled icon object is parked (kept out of the source tree).
@@ -117,10 +135,12 @@ struct DevCppProject {
 
 /// Compiles and links every unit in one compiler invocation.
 ///
-/// One invocation rather than a generated makefile: g++ accepts the whole unit
-/// list, and the objects it creates in between are its own temporaries, so a
-/// build leaves no `.o` litter in the user's project. `iconObject` is appended
-/// to the inputs when it is not empty.
+/// Kept for the "syntax-check shaped" callers and the tests: the project
+/// *build* now goes through a generated makefile (see devCppMakefilePlan()),
+/// which is what the original IDE does — one g++ line over the whole unit
+/// list cannot express per-unit flags, object output directories, or the
+/// incremental behaviour make gives for free. `iconObject` is appended to the
+/// inputs when it is not empty.
 [[nodiscard]] QStringList gnuBuildArguments(const DevCppProject& project,
                                             BuildConfiguration config,
                                             const QString& compiler,
@@ -133,6 +153,47 @@ struct DevCppProject {
 
 /// `mingw32-make` command line for UseCustomMakefile=1.
 [[nodiscard]] QStringList makeArguments(const DevCppProject& project);
+
+/// The GNU tools the generated makefile names. The IDE fills these from the
+/// active kit; empty entries degrade to bare names ("g++", "windres.exe").
+struct DevCppToolchain {
+    QString gxx;      // C++ compiler (CPP=)
+    QString gcc;      // C compiler (CC=); empty → derived from `gxx`
+    QString windres;  // resource compiler; empty → derived from `gxx`
+};
+
+/// What building a .dev project through make needs on disk.
+struct DevCppMakefilePlan {
+    /// <projectDir>/Makefile.win — the same name and place Dev-C++ uses.
+    QString path;
+    /// The makefile bytes to write. Dev-C++'s makefile is read by
+    /// mingw32-make byte-for-byte, so non-ASCII paths are encoded in the
+    /// machine's ANSI code page (GBK on zh-CN), exactly like the original.
+    /// A non-ASCII *output* name additionally routes the link/archive rule
+    /// through an ASCII intermediate plus `cmd /c move`: recent MSYS2
+    /// binutils decode ANSI bytes as UTF-8 and would land the file as
+    /// U+FFFD mush.
+    QByteArray content;
+    /// When the project carries an Icon= and no PrivateResource=, the .rc
+    /// script windres compiles is generated in temp — this is its content,
+    /// and the caller must write it to iconResourcePath() before make runs.
+    QByteArray resourceScript;
+};
+
+/// Builds the Dev-C++ style makefile for `project` — the same variable
+/// layout (CPP/CC/WINDRES/RES/OBJ/LINKOBJ/LIBS/INCS/BIN/CXXFLAGS/CFLAGS),
+/// the same relative paths anchored at the project directory, and the same
+/// per-unit rules the original IDE's Compiler.pas writes, so the file it
+/// produces is interchangeable with a Dev-C++ one.
+[[nodiscard]] DevCppMakefilePlan devCppMakefilePlan(
+    const DevCppProject& project, BuildConfiguration config,
+    const DevCppToolchain& tools);
+
+/// Writes the makefile (and the generated icon script, when present) to
+/// disk. Returns false with `error` filled when a write fails.
+[[nodiscard]] bool writeDevCppMakefile(const DevCppMakefilePlan& plan,
+                                       const DevCppProject& project,
+                                       QString* error = nullptr);
 
 /// Splits a `_@@_`-separated list, dropping empty entries.
 [[nodiscard]] QStringList splitDevList(const QString& value);

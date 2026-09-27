@@ -8,6 +8,9 @@
 
 #include <utility>
 
+#include "LightCpp/Text/Converter.hpp"
+#include "LightCpp/Text/Encoding.hpp"
+
 namespace LightCpp::Project {
 namespace {
 
@@ -338,6 +341,451 @@ QStringList makeArguments(const DevCppProject& project)
 }
 
 // ---------------------------------------------------------------------------
+// Makefile generation (Dev-C++ compatible)
+// ---------------------------------------------------------------------------
+namespace {
+
+bool isHeaderSuffix(const QString& suffix)
+{
+    static const QStringList suffixes = {
+        QStringLiteral("h"),  QStringLiteral("hpp"), QStringLiteral("hh"),
+        QStringLiteral("hxx"), QStringLiteral("h++"),
+    };
+    return suffixes.contains(suffix);
+}
+
+/// ChangeFileExt: replace the last extension, wherever it sits.
+QString withExtension(const QString& fileName, const QString& extension)
+{
+    const qsizetype slash = std::max(fileName.lastIndexOf(u'/'),
+                                     fileName.lastIndexOf(u'\\'));
+    const qsizetype dot = fileName.lastIndexOf(u'.');
+    return dot > slash + 1 ? fileName.left(dot) + extension
+                           : fileName + extension;
+}
+
+/// GenMakePath1: forward slashes, quoted when it contains a space.
+QString makeQuotedPath(QString path)
+{
+    path = QDir::fromNativeSeparators(path);
+    if (path.contains(u' ')) {
+        return QChar(u'"') + path + QChar(u'"');
+    }
+    return path;
+}
+
+/// GenMakePath2: forward slashes, spaces escaped for use as a make target.
+QString makeEscapedPath(QString path)
+{
+    return QDir::fromNativeSeparators(path).replace(QChar(u' '),
+                                                    QStringLiteral("\\ "));
+}
+
+QString pathRelativeTo(const QString& base, const QString& path)
+{
+    return QDir(base).relativeFilePath(QDir::cleanPath(path));
+}
+
+/// The object file a unit compiles to, relative to the project directory —
+/// either next to the source or collected under ObjectOutput=, like the
+/// original IDE's WriteMakeDefines does.
+QString objectFileFor(const DevCppProject& project, const DevCppUnit& unit)
+{
+    const QString source = pathRelativeTo(
+        project.projectDir, absoluteFrom(project.projectDir, unit.fileName));
+    if (project.objectOutput.trimmed().isEmpty()) {
+        return withExtension(source, QStringLiteral(".o"));
+    }
+    const QString base = QFileInfo(source).fileName();
+    return QDir::fromNativeSeparators(
+        pathRelativeTo(project.projectDir,
+                       absoluteFrom(project.projectDir, project.objectOutput)))
+        + u'/' + withExtension(base, QStringLiteral(".o"));
+}
+
+/// One line of makefile text: a name padded to the classic column, then the
+/// value. Dev-C++ lines the '=' up, and the output stays diff-friendly
+/// against files the original IDE wrote.
+QString makeVariable(const QString& name, const QString& value)
+{
+    return name.leftJustified(9) + QChar(u'=') + QChar(u' ') + value;
+}
+
+/// Recent MSYS2 toolchains ship g++/cc1plus with a UTF-8 active-code-page
+/// manifest while ld/ar/collect2 have none — the linker chain decodes the
+/// ANSI bytes of a Chinese output name as UTF-8 and the file lands on disk
+/// as U+FFFD mush (probed: only g++/cc1plus carry activeCodePage). make
+/// handing the bytes around does not fix that, so a non-ASCII target is
+/// produced under an ASCII name first and moved by `cmd /c move` — cmd is a
+/// Unicode program reached through the ANSI command line, where the GBK
+/// bytes do round-trip.
+bool isAsciiOnly(const QString& text)
+{
+    for (const QChar c : text) {
+        if (c.unicode() >= 0x80) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// The ASCII stand-in a non-ASCII target is produced as. Fixed name so the
+/// makefile stays reproducible; make overwrites it on every run.
+QString intermediateTarget(const QString& suffix)
+{
+    return QStringLiteral("_lightcpp_link.") + suffix;
+}
+
+/// The target of a `cmd /c move` line: native slashes and always quoted, so
+/// neither make's recipe handling nor cmd's switch parsing mangles it.
+QString cmdQuotedPath(QString path)
+{
+    return QChar(u'"') + QDir::toNativeSeparators(path) + QChar(u'"');
+}
+
+/// The shared body of CXXFLAGS/CFLAGS: the warning level the IDE builds with,
+/// the configuration's optimisation, the project's defines and switches.
+QString flagTextFor(const DevCppProject& project, BuildConfiguration config)
+{
+    QStringList parts{QStringLiteral("-Wall"), QStringLiteral("-Wextra")};
+    parts << flagsFor(config, CompilerFamily::Gnu);
+    for (const QString& define : project.defines) {
+        parts << (define.startsWith(u'-') ? define
+                                          : QStringLiteral("-D") + define);
+    }
+    parts << project.compilerFlags;
+    return parts.join(QChar(u' '));
+}
+
+}  // namespace
+
+DevCppMakefilePlan devCppMakefilePlan(const DevCppProject& project,
+                                      BuildConfiguration config,
+                                      const DevCppToolchain& tools)
+{
+    DevCppMakefilePlan plan;
+    plan.path = QDir(project.projectDir).filePath(QStringLiteral("Makefile.win"));
+
+    // The tools named in the makefile. Dev-C++ writes absolute paths from its
+    // compiler set; we use the kit's, falling back to bare names so a
+    // hand-edited makefile still runs wherever PATH provides the tools.
+    const QString gxx = tools.gxx.isEmpty()
+                            ? QStringLiteral("g++")
+                            : QDir::fromNativeSeparators(tools.gxx);
+    const QString gcc = tools.gcc.isEmpty()
+                            ? (tools.gxx.isEmpty()
+                                   ? QStringLiteral("gcc")
+                                   : QFileInfo(gxx).dir().filePath(
+                                         QStringLiteral("gcc.exe")))
+                            : QDir::fromNativeSeparators(tools.gcc);
+    const QString windres = tools.windres.isEmpty()
+                                ? (tools.gxx.isEmpty()
+                                       ? QStringLiteral("windres.exe")
+                                       : QFileInfo(gxx).dir().filePath(
+                                             QStringLiteral("windres.exe")))
+                                : QDir::fromNativeSeparators(tools.windres);
+
+    // --- objects ---------------------------------------------------------
+    QStringList objects;
+    QStringList linkObjects;
+    for (const DevCppUnit& unit : project.units) {
+        if (!unit.compile && !unit.link) {
+            continue;  // not part of the build at all
+        }
+        const QString suffix = QFileInfo(unit.fileName).suffix().toLower();
+        if (isHeaderSuffix(suffix) || suffix == QLatin1String("rc")) {
+            continue;  // headers and resource scripts are not object sources
+        }
+        const QString obj = makeQuotedPath(objectFileFor(project, unit));
+        objects.append(obj);
+        if (unit.link) {
+            linkObjects.append(obj);
+        }
+    }
+
+    // --- resource --------------------------------------------------------
+    // A PrivateResource= (an .rc inside the project, which Dev-C++ itself
+    // writes for the project icon) wins; otherwise the Icon= becomes a
+    // generated script in temp. Both compile to a .res the build links in.
+    QString resSource;
+    QString resObject;
+    bool generatedResource = false;
+    if (!project.privateResource.trimmed().isEmpty()) {
+        resSource = pathRelativeTo(
+            project.projectDir,
+            absoluteFrom(project.projectDir, project.privateResource));
+        resObject = project.objectOutput.trimmed().isEmpty()
+                        ? withExtension(resSource, QStringLiteral(".res"))
+                        : QDir::fromNativeSeparators(pathRelativeTo(
+                              project.projectDir,
+                              absoluteFrom(project.projectDir,
+                                           withExtension(
+                                               project.objectOutput
+                                                   + u'/'
+                                                   + QFileInfo(resSource)
+                                                         .fileName(),
+                                               QStringLiteral(".res")))));
+    } else if (!project.iconPath.isEmpty()) {
+        resSource = project.iconResourcePath();
+        resObject = project.iconObjectPath();
+        generatedResource = true;
+    }
+
+    // --- variables -------------------------------------------------------
+    QStringList lines;
+    lines << QStringLiteral("# Project: %1").arg(project.name);
+    lines << QStringLiteral("# Makefile generated by LightC++ for Dev-C++");
+    lines << QString();
+    lines << makeVariable(QStringLiteral("CPP"), makeQuotedPath(gxx));
+    lines << makeVariable(QStringLiteral("CC"), makeQuotedPath(gcc));
+    lines << makeVariable(QStringLiteral("WINDRES"), makeQuotedPath(windres));
+    if (!resObject.isEmpty()) {
+        lines << makeVariable(QStringLiteral("RES"),
+                              makeQuotedPath(resObject));
+        lines << makeVariable(QStringLiteral("OBJ"),
+                              objects.join(QChar(u' ')) + QStringLiteral(" $(RES)"));
+        lines << makeVariable(QStringLiteral("LINKOBJ"),
+                              linkObjects.join(QChar(u' ')) + QStringLiteral(" $(RES)"));
+    } else {
+        lines << makeVariable(QStringLiteral("OBJ"),
+                              objects.join(QChar(u' ')));
+        lines << makeVariable(QStringLiteral("LINKOBJ"),
+                              linkObjects.join(QChar(u' ')));
+    }
+    QStringList libs;
+    for (const QString& dir : project.libraryDirs) {
+        libs << QStringLiteral("-L") + makeQuotedPath(dir);
+    }
+    // A switch goes through as a switch, a file path by itself, and anything
+    // else reads as a library name — the same rules gnuBuildArguments uses.
+    for (QString entry : linkerArguments(project.linkerFlags)) {
+        entry = QDir::fromNativeSeparators(entry);
+        if (entry.startsWith(u'-')) {
+            libs << entry;
+        } else {
+            libs << makeQuotedPath(entry);
+        }
+    }
+    lines << makeVariable(QStringLiteral("LIBS"), libs.join(QChar(u' ')));
+    QStringList incs;
+    for (const QString& dir : project.includeDirs) {
+        incs << QStringLiteral("-I") + makeQuotedPath(dir);
+    }
+    const QString incText = incs.join(QChar(u' '));
+    lines << makeVariable(QStringLiteral("INCS"), incText);
+    lines << makeVariable(QStringLiteral("CXXINCS"), incText);
+    const QString binPath = pathRelativeTo(project.projectDir,
+                                           project.outputPath());
+    lines << makeVariable(QStringLiteral("BIN"), makeQuotedPath(binPath));
+    // Whether the final target needs the ASCII-intermediate route (see
+    // isAsciiOnly above).
+    const bool routedTarget = !isAsciiOnly(binPath);
+    // A dynamic library additionally produces these two next to it.
+    QString defPath;
+    QString staticPath;
+    const QString flags = flagTextFor(project, config);
+    lines << makeVariable(QStringLiteral("CXXFLAGS"),
+                          QStringLiteral("$(CXXINCS) ") + flags);
+    lines << makeVariable(QStringLiteral("CFLAGS"),
+                          QStringLiteral("$(INCS) ") + flags);
+    lines << makeVariable(QStringLiteral("RM"),
+                          QStringLiteral("rm.exe -f"));
+    if (project.type == kDevCppDynamicLibrary) {
+        // A DLL also produces its import library and .def next to the output.
+        const QString binDir = QFileInfo(project.outputPath()).absolutePath();
+        const QString libStem = QDir::fromNativeSeparators(pathRelativeTo(
+            project.projectDir,
+            QDir(binDir).filePath(QStringLiteral("lib")
+                                  + QFileInfo(project.outputPath()).fileName())));
+        defPath = withExtension(libStem, QStringLiteral(".def"));
+        staticPath = withExtension(libStem, QStringLiteral(".a"));
+        lines << makeVariable(QStringLiteral("DEF"), makeQuotedPath(defPath));
+        lines << makeVariable(QStringLiteral("STATIC"),
+                              makeQuotedPath(staticPath));
+    }
+    lines << QString();
+
+    // --- targets ---------------------------------------------------------
+    lines << QStringLiteral(".PHONY: all all-before all-after clean "
+                            "clean-custom");
+    lines << QString();
+    lines << QStringLiteral("all: all-before $(BIN) all-after");
+    lines << QString();
+    for (const QString& include : project.makeIncludes) {
+        lines << QStringLiteral("include ")
+              + makeQuotedPath(QDir::fromNativeSeparators(include));
+    }
+    if (!project.makeIncludes.isEmpty()) {
+        lines << QString();
+    }
+    lines << QStringLiteral("clean: clean-custom");
+    lines << QChar(u'\t') + QStringLiteral("${RM} $(OBJ) $(BIN)");
+    lines << QString();
+    lines << QStringLiteral("$(BIN): $(OBJ)");
+    const QString linker = project.isCpp ? QStringLiteral("$(CPP)")
+                                         : QStringLiteral("$(CC)");
+    switch (project.type) {
+    case kDevCppStaticLibrary:
+        if (routedTarget) {
+            lines << QChar(u'\t')
+                  + QStringLiteral("ar r ")
+                  + intermediateTarget(QStringLiteral("a"))
+                  + QStringLiteral(" $(LINKOBJ)");
+            lines << QChar(u'\t')
+                  + QStringLiteral("ranlib ")
+                  + intermediateTarget(QStringLiteral("a"));
+            lines << QChar(u'\t') + QStringLiteral("cmd /c move /y ")
+                  + intermediateTarget(QStringLiteral("a"))
+                  + QChar(u' ') + cmdQuotedPath(binPath);
+        } else {
+            lines << QChar(u'\t') + QStringLiteral("ar r $(BIN) $(LINKOBJ)");
+            lines << QChar(u'\t') + QStringLiteral("ranlib $(BIN)");
+        }
+        break;
+    case kDevCppDynamicLibrary:
+        if (routedTarget) {
+            lines << QChar(u'\t') + linker
+                  + QStringLiteral(" -shared $(LINKOBJ) -o ")
+                  + intermediateTarget(QStringLiteral("exe"))
+                  + QStringLiteral(" $(LIBS) -Wl,--output-def,")
+                  + intermediateTarget(QStringLiteral("def"))
+                  + QStringLiteral(",--out-implib,")
+                  + intermediateTarget(QStringLiteral("a"))
+                  + QStringLiteral(",--add-stdcall-alias");
+            lines << QChar(u'\t') + QStringLiteral("cmd /c move /y ")
+                  + intermediateTarget(QStringLiteral("exe"))
+                  + QChar(u' ') + cmdQuotedPath(binPath);
+            lines << QChar(u'\t') + QStringLiteral("cmd /c move /y ")
+                  + intermediateTarget(QStringLiteral("def"))
+                  + QChar(u' ') + cmdQuotedPath(defPath);
+            lines << QChar(u'\t') + QStringLiteral("cmd /c move /y ")
+                  + intermediateTarget(QStringLiteral("a"))
+                  + QChar(u' ') + cmdQuotedPath(staticPath);
+        } else {
+            lines << QChar(u'\t') + linker
+                  + QStringLiteral(" -shared $(LINKOBJ) -o $(BIN) $(LIBS) "
+                                   "-Wl,--output-def,$(DEF),--out-implib,$(STATIC)"
+                                   ",--add-stdcall-alias");
+        }
+        break;
+    default:
+        if (routedTarget) {
+            lines << QChar(u'\t') + linker
+                  + QStringLiteral(" $(LINKOBJ) -o ")
+                  + intermediateTarget(QStringLiteral("exe"))
+                  + QStringLiteral(" $(LIBS)");
+            lines << QChar(u'\t') + QStringLiteral("cmd /c move /y ")
+                  + intermediateTarget(QStringLiteral("exe"))
+                  + QChar(u' ') + cmdQuotedPath(binPath);
+        } else {
+            lines << QChar(u'\t') + linker
+                  + QStringLiteral(" $(LINKOBJ) -o $(BIN) $(LIBS)");
+        }
+        break;
+    }
+
+    // --- per-unit rules --------------------------------------------------
+    for (const DevCppUnit& unit : project.units) {
+        if (!unit.compile) {
+            continue;
+        }
+        const QString suffix = QFileInfo(unit.fileName).suffix().toLower();
+        if (suffix == QLatin1String("rc") || isHeaderSuffix(suffix)
+            || !isCompilableSource(unit.fileName)) {
+            continue;
+        }
+        const QString obj = makeEscapedPath(objectFileFor(project, unit));
+        const QString source = makeEscapedPath(pathRelativeTo(
+            project.projectDir,
+            absoluteFrom(project.projectDir, unit.fileName)));
+        lines << QString();
+        lines << obj + QStringLiteral(": ") + source;
+        if (unit.overrideBuildCmd && !unit.buildCmd.trimmed().isEmpty()) {
+            // <CRTAB> is how Dev-C++ spells a continued command line.
+            lines << QChar(u'\t')
+                  + QString(unit.buildCmd).replace(
+                        QStringLiteral("<CRTAB>"),
+                        QStringLiteral("\n\t"));
+            continue;
+        }
+        lines << QChar(u'\t')
+              + (unit.compileCpp ? QStringLiteral("$(CPP)")
+                                 : QStringLiteral("$(CC)"))
+              + QStringLiteral(" -c ") + makeQuotedPath(source)
+              + QStringLiteral(" -o ") + makeQuotedPath(objectFileFor(project, unit))
+              + (unit.compileCpp ? QStringLiteral(" $(CXXFLAGS)")
+                                 : QStringLiteral(" $(CFLAGS)"));
+    }
+
+    // --- resource rule ---------------------------------------------------
+    if (!resObject.isEmpty()) {
+        lines << QString();
+        lines << makeEscapedPath(resObject) + QStringLiteral(": ")
+              + makeEscapedPath(resSource);
+        lines << QChar(u'\t') + QStringLiteral("$(WINDRES) -i ")
+              + makeQuotedPath(resSource)
+              + QStringLiteral(" --input-format=rc -o ")
+              + makeQuotedPath(resObject) + QStringLiteral(" -O coff");
+    }
+
+    const QString text = lines.join(QChar(u'\n')) + QChar(u'\n');
+
+    // mingw32-make reads the file byte-for-byte and hands paths to the
+    // compiler untouched, so the encoding is the machine's ANSI code page —
+    // exactly what Dev-C++ writes. UTF-8 is the fallback when a character
+    // cannot be represented (a non-Windows host, say).
+    const auto encoded = LightCpp::Text::encodeFromQString(
+        text, LightCpp::Text::localAnsiEncoding());
+    plan.content = encoded.hasValue() ? encoded.value() : text.toUtf8();
+    if (generatedResource) {
+        // Same deal for the generated resource script: windres reads raw
+        // bytes, and the icon path inside may contain non-ASCII.
+        const auto script = LightCpp::Text::encodeFromQString(
+            project.iconResourceScript(),
+            LightCpp::Text::localAnsiEncoding());
+        plan.resourceScript = script.hasValue() ? script.value()
+                                                : project.iconResourceScript();
+    }
+    return plan;
+}
+
+bool writeDevCppMakefile(const DevCppMakefilePlan& plan,
+                         const DevCppProject& project, QString* error)
+{
+    const auto fail = [error](const QString& reason) {
+        if (error != nullptr) {
+            *error = reason;
+        }
+        return false;
+    };
+
+    // The ObjectOutput= directory has to exist before make runs — Dev-C++
+    // creates it while writing the makefile, not during the build. Same for
+    // the output directory the link rule moves the target into.
+    if (!project.objectOutput.trimmed().isEmpty()) {
+        QDir(absoluteFrom(project.projectDir, project.objectOutput))
+            .mkpath(QStringLiteral("."));
+    }
+    QDir(project.outputDirectory()).mkpath(QStringLiteral("."));
+    if (!plan.resourceScript.isEmpty()) {
+        QFile script(project.iconResourcePath());
+        QDir().mkpath(QFileInfo(project.iconResourcePath()).absolutePath());
+        if (!script.open(QIODevice::WriteOnly | QIODevice::Truncate)
+            || script.write(plan.resourceScript) != plan.resourceScript.size()) {
+            return fail(QStringLiteral("cannot write the resource script %1")
+                            .arg(project.iconResourcePath()));
+        }
+    }
+    QDir().mkpath(QFileInfo(plan.path).absolutePath());
+    QFile file(plan.path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+        || file.write(plan.content) != plan.content.size()) {
+        return fail(QStringLiteral("cannot write %1").arg(plan.path));
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------
 std::optional<DevCppProject> parseDevProject(const QString& filePath,
@@ -358,8 +806,41 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
         return fail(QStringLiteral("the project file is empty"));
     }
 
-    // A UTF-8 BOM would otherwise glue itself onto the first key.
-    QString text = QString::fromUtf8(content);
+    // Dev-C++ is a pre-Unicode Windows program: it writes .dev files in the
+    // machine's ANSI code page (GBK on zh-CN), so a project called 项目1 has
+    // GBK bytes in Name=/OverrideOutputName=. Decoding those as UTF-8 would
+    // silently replace them with U+FFFD and produce output paths no compiler
+    // can open. Detection (BOM → UTF-8 validation → local ANSI) is exactly
+    // what the editor uses for source files.
+    const LightCpp::Text::EncodingDetection detected =
+        LightCpp::Text::detectEncoding(content);
+    QString text;
+    if (detected.encoding == LightCpp::Text::TextEncoding::Utf8) {
+        text = QString::fromUtf8(content);
+    } else if (detected.encoding == LightCpp::Text::TextEncoding::Utf16Le
+               || detected.encoding == LightCpp::Text::TextEncoding::Utf16Be
+               || detected.encoding == LightCpp::Text::TextEncoding::Utf32Le
+               || detected.encoding == LightCpp::Text::TextEncoding::Utf32Be
+               || detected.encoding == LightCpp::Text::TextEncoding::Gb18030
+               || detected.encoding == LightCpp::Text::TextEncoding::Gbk
+               || detected.encoding == LightCpp::Text::TextEncoding::Big5
+               || detected.encoding == LightCpp::Text::TextEncoding::ShiftJis
+               || detected.encoding == LightCpp::Text::TextEncoding::EucKr
+               || detected.encoding == LightCpp::Text::TextEncoding::Windows1252
+               || detected.encoding == LightCpp::Text::TextEncoding::Latin1) {
+        if (auto decoded = LightCpp::Text::decodeToQString(
+                content, detected.encoding, /*stripBom=*/true)) {
+            text = std::move(*decoded);
+        } else {
+            return fail(QStringLiteral("the project file is not valid in the "
+                                       "detected encoding"));
+        }
+    } else {
+        return fail(QStringLiteral("the project file is not text"));
+    }
+
+    // A UTF-8 BOM would otherwise glue itself onto the first key (the UTF-8
+    // path above keeps it — decodeToQString only strips for the other paths).
     if (text.startsWith(QChar(0xFEFF))) {
         text.remove(0, 1);
     }
@@ -409,6 +890,10 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
         lookup(entries, QStringLiteral("Project"), "UseCustomMakefile") == QStringLiteral("1");
     project.customMakefile =
         lookup(entries, QStringLiteral("Project"), "CustomMakefile");
+    project.privateResource =
+        lookup(entries, QStringLiteral("Project"), "PrivateResource");
+    project.makeIncludes = splitDevList(
+        lookup(entries, QStringLiteral("Project"), "MakeIncludes"));
     project.runArguments = splitFlagString(
         lookup(entries, QStringLiteral("Project"), "CommandLine"));
 
@@ -426,6 +911,9 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
         QString fileName;
         bool compile = true;
         bool link = true;
+        bool compileCpp = true;  // real default filled in by consider()
+        bool overrideBuildCmd = false;
+        QString buildCmd;
     };
     QMap<int, RawUnit> unitsByIndex;
     QSet<QString> seenPaths;
@@ -442,7 +930,9 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
             return;  // the other spelling already covered this unit
         }
         seenPaths.insert(key);
-        unitsByIndex.insert(index, RawUnit{fileName, compile, link});
+        // No per-unit CompileCpp= yet → the project's flavour decides.
+        unitsByIndex.insert(index, RawUnit{fileName, compile, link,
+                                           project.isCpp, false, {}});
     };
 
     QStringList unitSections;
@@ -466,9 +956,24 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
         }
         const QString compile = lookup(entries, section, "Compile");
         const QString link = lookup(entries, section, "Link");
-        consider(section.mid(4).toInt(), fileName,
+        const QString compileCpp = lookup(entries, section, "CompileCpp");
+        const QString overrideBuildCmd =
+            lookup(entries, section, "OverrideBuildCmd");
+        const QString buildCmd = lookup(entries, section, "BuildCmd");
+        const int index = section.mid(4).toInt();
+        consider(index, fileName,
                  compile.isEmpty() || compile != QStringLiteral("0"),
                  link.isEmpty() || link != QStringLiteral("0"));
+        // consider() skips duplicates/empties; the per-unit extras only
+        // matter when the unit itself was taken.
+        const auto it = unitsByIndex.find(index);
+        if (it != unitsByIndex.end()) {
+            if (!compileCpp.isEmpty()) {
+                it->compileCpp = compileCpp != QStringLiteral("0");
+            }
+            it->overrideBuildCmd = overrideBuildCmd == QStringLiteral("1");
+            it->buildCmd = buildCmd;
+        }
     }
     for (const IniEntry& e : entries) {
         if (e.section.compare(QStringLiteral("Project"), Qt::CaseInsensitive) != 0
@@ -480,7 +985,8 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
     }
     for (auto it = unitsByIndex.constBegin(); it != unitsByIndex.constEnd(); ++it) {
         project.units.append({it.value().fileName, it.value().compile,
-                              it.value().link});
+                              it.value().link, it.value().compileCpp,
+                              it.value().overrideBuildCmd, it.value().buildCmd});
     }
 
     if (project.units.isEmpty()) {

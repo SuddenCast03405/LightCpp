@@ -7,6 +7,7 @@
 // here and stays here — the IDE only ever receives a ProjectSummary and the
 // build steps produced on request.
 
+#include <QDir>
 #include <QFileInfo>
 
 #include "LightCpp/Plugin/Plugin.hpp"
@@ -113,17 +114,35 @@ public:
                     .arg(project_.customMakefile)}};
         }
 
-        // One compiler invocation over the whole unit list, like the classic
-        // IDE did — see gnuBuildArguments() for the flag tables.
-        return {LightCpp::Plugin::BuildStep{
-            request.compiler,
-            LightCpp::Project::gnuBuildArguments(project_, config,
-                                                 request.compiler,
-                                                 project_.outputPath()),
-            project_.projectDir,
-            tr("Compiling %1 unit(s) [%2]")
-                .arg(project_.buildUnitPaths().size())
-                .arg(LightCpp::Project::toString(config))}};
+        // The Dev-C++ way: regenerate the project's makefile, then let make
+        // drive the per-unit compiles and the link. Everything make-related
+        // (relative paths, the working directory) matches what the original
+        // IDE produces, so a user can open the same project in both.
+        LightCpp::Project::DevCppToolchain tools;
+        tools.gxx = request.compiler;
+        QString writeError;
+        const LightCpp::Project::DevCppMakefilePlan plan =
+            LightCpp::Project::devCppMakefilePlan(project_, config, tools);
+        if (!LightCpp::Project::writeDevCppMakefile(plan, project_, &writeError)) {
+            if (services_ != nullptr) {
+                services_->log(QStringLiteral("[DevCppProject] %1")
+                                   .arg(writeError));
+            }
+        } else if (services_ != nullptr) {
+            services_->log(QStringLiteral(
+                               "[DevCppProject] Generated makefile: %1")
+                               .arg(plan.path));
+        }
+
+        LightCpp::Plugin::BuildStep step;
+        step.program = request.make;
+        step.arguments =
+            QStringList{QStringLiteral("-f"), plan.path, QStringLiteral("all")}
+            + request.extraMakeArgs;
+        step.workingDirectory = project_.projectDir;
+        step.label = tr("Generating makefile and building [%1]")
+                         .arg(LightCpp::Project::toString(config));
+        return {step};
     }
 
     [[nodiscard]] QList<LightCpp::Plugin::BuildStep>
