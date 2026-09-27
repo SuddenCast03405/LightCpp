@@ -11,6 +11,7 @@ add_library(LightCppProject STATIC
     Source/CMakeProject.cpp
     Source/CompilerDiagnostics.cpp
     Source/DevCppProject.cpp
+    Source/DspProject.cpp
     Source/FolderContents.cpp
     Source/GitStatus.cpp
     Source/MsvcProject.cpp

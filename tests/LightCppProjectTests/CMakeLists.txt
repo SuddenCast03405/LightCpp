@@ -5,6 +5,7 @@ add_executable(LightCppProjectTests
     CMakeProjectTests.cpp
     CompilerDiagnosticsTests.cpp
     DevCppProjectTests.cpp
+    DspProjectTests.cpp
     FolderContentsTests.cpp
     GitStatusTests.cpp
     MsvcProjectTests.cpp

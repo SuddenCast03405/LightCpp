@@ -16,6 +16,7 @@
 #include "LightCpp/Plugin/Plugin.hpp"
 #include "LightCpp/Plugin/PluginTypes.hpp"
 #include "LightCpp/Plugin/ProjectBackend.hpp"
+#include "LightCpp/Project/DspProject.hpp"
 #include "LightCpp/Project/MsvcProject.hpp"
 
 namespace LightCpp::Plugins::Msvc {
@@ -44,7 +45,7 @@ public:
         if (services_ != nullptr) {
             services_->log(
                 QStringLiteral("[MsvcProject] Microsoft C/C++ project support "
-                               "(.vcxproj/.vcproj) registered."));
+                               "(.vcxproj/.vcproj/.dsp/.dsw) registered."));
         }
         return true;
     }
@@ -54,62 +55,29 @@ public:
     // --- LightCpp::Plugin::ProjectBackend ---------------------------------
     [[nodiscard]] bool canOpenProject(const QString& filePath) const override
     {
-        const QString suffix =
-            QFileInfo(filePath).suffix().toLower();
+        const QString suffix = QFileInfo(filePath).suffix().toLower();
         return suffix == QLatin1String("vcxproj")
-               || suffix == QLatin1String("vcproj");
+               || suffix == QLatin1String("vcproj")
+               || suffix == QLatin1String("dsp")
+               || suffix == QLatin1String("dsw");
     }
 
     [[nodiscard]] QString projectFilter() const override
     {
-        return QStringLiteral("MSVC project (*.vcxproj *.vcproj)");
+        return QStringLiteral(
+            "MSVC project (*.vcxproj *.vcproj *.dsp *.dsw)");
     }
 
     bool openProject(const QString& filePath,
                      LightCpp::Plugin::ProjectSummary* summary,
                      QString* error) override
     {
-        QString parseError;
-        std::optional<LightCpp::Project::MsvcProject> project =
-            LightCpp::Project::loadMsvcProject(filePath, &parseError);
-        if (!project.has_value()) {
-            if (error != nullptr) {
-                *error = parseError;
-            }
-            return false;
+        const QString suffix = QFileInfo(filePath).suffix().toLower();
+        if (suffix == QLatin1String("dsp")
+            || suffix == QLatin1String("dsw")) {
+            return openDspOrWorkspace(filePath, summary, error);
         }
-        project_ = std::move(*project);
-        open_ = true;
-
-        // The configuration a plain "build this" uses: Debug, else Release,
-        // else the first — the same default the model answers for output
-        // paths, so the banner and the build agree.
-        const LightCpp::Project::MsvcConfiguration* config =
-            project_.defaultConfiguration();
-
-        if (summary != nullptr) {
-            summary->filePath = project_.filePath;
-            summary->projectDir = project_.projectDir;
-            summary->name = project_.name;
-            summary->targetLabel =
-                config != nullptr
-                    ? LightCpp::Project::msvcTargetLabel(config->kind)
-                    : QStringLiteral("unknown");
-            summary->outputPath =
-                config != nullptr ? project_.outputPathFor(*config) : QString();
-            summary->unitCount = project_.sourceFiles.size()
-                                 + project_.headerFiles.size()
-                                 + project_.resourceFiles.size()
-                                 + project_.otherFiles.size();
-            summary->buildUnitCount = project_.sourceFiles.size()
-                                      + project_.resourceFiles.size();
-            summary->producesExecutable =
-                config == nullptr
-                || config->kind == LightCpp::Project::MsvcTargetKind::Application;
-            summary->runArguments.clear();
-            summary->formatName = QStringLiteral("Visual Studio");
-        }
-        return true;
+        return openVcProject(filePath, summary, error);
     }
 
     [[nodiscard]] QList<LightCpp::Plugin::BuildStep>
@@ -118,25 +86,13 @@ public:
         if (!open_) {
             return {};
         }
-
-        // Map the canonical configuration name onto one of the project's own
-        // configurations (Win32 preferred over x64). A project that spells
-        // its configuration something else entirely ("MyDebug") still gets
-        // built — with its own default, because msbuild only accepts names
-        // the project actually defines.
-        const LightCpp::Project::MsvcConfiguration* config =
-            project_.configurationFor(request.configuration);
-        if (config == nullptr) {
-            config = project_.defaultConfiguration();
+        if (hasDsp_) {
+            return dspBuildSteps(request);
         }
-        if (config == nullptr) {
-            return {};
+        if (msvcOpen_) {
+            return vcBuildSteps(request);
         }
-
-        if (project_.isLegacyVcproj) {
-            return legacyBuildSteps(*config);
-        }
-        return msbuildSteps(*config);
+        return {};
     }
 
     [[nodiscard]] QList<LightCpp::Plugin::BuildStep>
@@ -148,6 +104,189 @@ public:
     }
 
 private:
+    // --- opening -----------------------------------------------------------
+
+    /// .dsp directly, or .dsw by opening the project it lists (the one
+    /// named like the workspace, else the first — a workspace usually sits
+    /// next to the project it was created with).
+    bool openDspOrWorkspace(const QString& filePath,
+                            LightCpp::Plugin::ProjectSummary* summary,
+                            QString* error)
+    {
+        QString dspPath = filePath;
+        QString parseError;
+        if (QFileInfo(filePath).suffix().compare(QLatin1String("dsw"),
+                                                 Qt::CaseInsensitive)
+            == 0) {
+            auto workspace = LightCpp::Project::loadDswWorkspace(filePath, &parseError);
+            if (!workspace.has_value()) {
+                if (error != nullptr) {
+                    *error = parseError;
+                }
+                return false;
+            }
+            workspace_ = std::move(*workspace);
+            hasWorkspace_ = true;
+            const LightCpp::Project::DswProjectEntry* entry =
+                workspace_.defaultProject();
+            if (entry == nullptr) {
+                if (error != nullptr) {
+                    *error = QStringLiteral("the workspace lists no projects");
+                }
+                return false;
+            }
+            dspPath = entry->dspPath;
+        }
+
+        auto project = LightCpp::Project::loadDspProject(dspPath, &parseError);
+        if (!project.has_value()) {
+            if (error != nullptr) {
+                *error = parseError;
+            }
+            return false;
+        }
+        dspProject_ = std::move(*project);
+        msvcOpen_ = false;
+        hasDsp_ = true;
+        open_ = true;
+
+        const LightCpp::Project::DspConfiguration* config =
+            dspProject_.defaultConfiguration();
+        if (summary != nullptr) {
+            summary->filePath = filePath;
+            summary->projectDir = QFileInfo(dspPath).absolutePath();
+            summary->name = dspProject_.name;
+            summary->formatName = QStringLiteral("Visual Studio 6");
+            summary->targetLabel =
+                config != nullptr
+                    ? LightCpp::Project::dspTargetLabel(config->kind)
+                    : QStringLiteral("unknown");
+            summary->outputPath =
+                config != nullptr ? dspProject_.outputPathFor(*config) : QString();
+            summary->unitCount = dspProject_.sourceFiles.size()
+                                 + dspProject_.headerFiles.size()
+                                 + dspProject_.resourceFiles.size()
+                                 + dspProject_.otherFiles.size();
+            summary->buildUnitCount = dspProject_.sourceFiles.size()
+                                      + dspProject_.resourceFiles.size();
+            summary->producesExecutable =
+                config == nullptr
+                || config->kind == LightCpp::Project::DspTargetKind::Application;
+            summary->runArguments.clear();
+        }
+        return true;
+    }
+
+    bool openVcProject(const QString& filePath,
+                       LightCpp::Plugin::ProjectSummary* summary,
+                       QString* error)
+    {
+        QString parseError;
+        std::optional<LightCpp::Project::MsvcProject> project =
+            LightCpp::Project::loadMsvcProject(filePath, &parseError);
+        if (!project.has_value()) {
+            if (error != nullptr) {
+                *error = parseError;
+            }
+            return false;
+        }
+        msvcProject_ = std::move(*project);
+        msvcOpen_ = true;
+        hasDsp_ = false;
+        open_ = true;
+
+        // The configuration a plain "build this" uses: Debug, else Release,
+        // else the first — the same default the model answers for output
+        // paths, so the banner and the build agree.
+        const LightCpp::Project::MsvcConfiguration* config =
+            msvcProject_.defaultConfiguration();
+
+        if (summary != nullptr) {
+            summary->filePath = msvcProject_.filePath;
+            summary->projectDir = msvcProject_.projectDir;
+            summary->name = msvcProject_.name;
+            summary->formatName = QStringLiteral("Visual Studio");
+            summary->targetLabel =
+                config != nullptr
+                    ? LightCpp::Project::msvcTargetLabel(config->kind)
+                    : QStringLiteral("unknown");
+            summary->outputPath =
+                config != nullptr ? msvcProject_.outputPathFor(*config) : QString();
+            summary->unitCount = msvcProject_.sourceFiles.size()
+                                 + msvcProject_.headerFiles.size()
+                                 + msvcProject_.resourceFiles.size()
+                                 + msvcProject_.otherFiles.size();
+            summary->buildUnitCount = msvcProject_.sourceFiles.size()
+                                      + msvcProject_.resourceFiles.size();
+            summary->producesExecutable =
+                config == nullptr
+                || config->kind == LightCpp::Project::MsvcTargetKind::Application;
+            summary->runArguments.clear();
+        }
+        return true;
+    }
+
+    // --- build steps ---------------------------------------------------------
+
+    /// Steps for whatever is open: the MSBuild-format pair or the VS6 pair.
+    QList<LightCpp::Plugin::BuildStep>
+    vcBuildSteps(const LightCpp::Plugin::BuildRequest& request)
+    {
+        // Map the canonical configuration name onto one of the project's own
+        // configurations (Win32 preferred over x64). A project that spells
+        // its configuration something else entirely ("MyDebug") still gets
+        // built — with its own default, because msbuild only accepts names
+        // the project actually defines.
+        const LightCpp::Project::MsvcConfiguration* config =
+            msvcProject_.configurationFor(request.configuration);
+        if (config == nullptr) {
+            config = msvcProject_.defaultConfiguration();
+        }
+        if (config == nullptr) {
+            return {};
+        }
+
+        if (msvcProject_.isLegacyVcproj) {
+            return legacyBuildSteps(*config);
+        }
+        return msbuildSteps(*config);
+    }
+
+    QList<LightCpp::Plugin::BuildStep>
+    dspBuildSteps(const LightCpp::Plugin::BuildRequest& request)
+    {
+        const LightCpp::Project::DspConfiguration* config =
+            dspProject_.configurationFor(request.configuration);
+        if (config == nullptr) {
+            config = dspProject_.defaultConfiguration();
+        }
+        if (config == nullptr) {
+            return {};
+        }
+
+        const QString msdev = locateMsDev();
+        if (msdev.isEmpty()) {
+            if (services_ != nullptr) {
+                services_->log(QStringLiteral(
+                    "[MsvcProject] %1 is a Visual Studio 6 project. No "
+                    "msdev found (Visual Studio 6 is not installed) — "
+                    "install it to build .dsp/.dsw projects here.")
+                        .arg(dspProject_.filePath));
+            }
+            return {};
+        }
+
+        LightCpp::Plugin::BuildStep step;
+        step.program = msdev;
+        step.arguments = QStringList{
+            dspProject_.filePath,
+            QStringLiteral("/make"),
+            config->fullName,
+        };
+        step.workingDirectory = dspProject_.projectDir;
+        step.label = tr("msdev [%1]").arg(config->fullName);
+        return {step};
+    }
     // --- .vcxproj: MSBuild -------------------------------------------------
 
     [[nodiscard]] QList<LightCpp::Plugin::BuildStep>
@@ -167,7 +306,7 @@ private:
         LightCpp::Plugin::BuildStep step;
         step.program = msbuild;
         step.arguments = QStringList{
-            project_.filePath,
+            msvcProject_.filePath,
             QStringLiteral("/p:Configuration=%1").arg(config.name),
             QStringLiteral("/p:Platform=%1").arg(config.platform),
             // Single-project semantics: msbuild leaves SolutionDir
@@ -175,12 +314,12 @@ private:
             // OutDir=$(SolutionDir)$(Configuration) templates. Pinning it
             // to the project directory gives the same output location the
             // user would get from building the project inside an IDE.
-            QStringLiteral("/p:SolutionDir=%1\\").arg(project_.projectDir),
+            QStringLiteral("/p:SolutionDir=%1\\").arg(msvcProject_.projectDir),
             QStringLiteral("/m"),
             QStringLiteral("/nologo"),
             QStringLiteral("/v:m"),
         };
-        step.workingDirectory = project_.projectDir;
+        step.workingDirectory = msvcProject_.projectDir;
         step.label = tr("MSBuild [%1|%2]").arg(config.name, config.platform);
         return {step};
     }
@@ -198,7 +337,7 @@ private:
                     "found (Visual Studio 2005/2008 is not installed) and "
                     "modern MSBuild cannot build this format. Convert the "
                     "project with Visual Studio to build it here.")
-                        .arg(project_.filePath));
+                        .arg(msvcProject_.filePath));
             }
             return {};
         }
@@ -206,10 +345,10 @@ private:
         LightCpp::Plugin::BuildStep step;
         step.program = vcbuild;
         step.arguments = QStringList{
-            project_.filePath,
+            msvcProject_.filePath,
             QStringLiteral("%1|%2").arg(config.name, config.platform),
         };
-        step.workingDirectory = project_.projectDir;
+        step.workingDirectory = msvcProject_.projectDir;
         step.label = tr("vcbuild [%1|%2]").arg(config.name, config.platform);
         return {step};
     }
@@ -285,10 +424,33 @@ private:
         return {};
     }
 
+    /// MSDEV.COM of a Visual Studio 6 install. The .COM host writes build
+    /// output to the console (what the build log needs); the .EXE twin
+    /// would just open the GUI instead of building.
+    [[nodiscard]] QString locateMsDev() const
+    {
+        const QString programFilesX86 =
+            qEnvironmentVariable("ProgramFiles(x86)");
+        if (programFilesX86.isEmpty()) {
+            return {};
+        }
+        const QString path = QDir(programFilesX86).filePath(QStringLiteral(
+            "Microsoft Visual Studio/Common/MSDev98/Bin/MSDEV.COM"));
+        return QFileInfo::exists(path) ? path : QString();
+    }
+
     LightCpp::Plugin::IdeServices* services_ = nullptr;
     /// The most recently opened project, kept for buildSteps(). The IDE
-    /// opens one project at a time and always opens before building.
-    LightCpp::Project::MsvcProject project_;
+    /// opens one project at a time and always opens before building. The
+    /// two shapes are mutually exclusive; hasDsp_ says which is live.
+    LightCpp::Project::MsvcProject msvcProject_;
+    LightCpp::Project::DspProject dspProject_;
+    /// The .dsw the user actually opened, when there was one — its own
+    /// directory is the workspace root the Explorer shows.
+    LightCpp::Project::DswWorkspace workspace_;
+    bool hasWorkspace_ = false;
+    bool hasDsp_ = false;
+    bool msvcOpen_ = false;
     bool open_ = false;
 };
 
