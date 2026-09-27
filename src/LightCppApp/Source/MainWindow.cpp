@@ -1526,10 +1526,12 @@ void MainWindow::createStatusBar()
     statusLanguage_->setText(tr("C++"));
     statusFile_->setText(tr("Untitled"));
 
-    // Branch / drift / dirty marker. Empty until a repository turns up, and
-    // never a place to click: it reports, it does not act.
+    // Branch / drift / dirty marker. Hidden until a repository turns up: a
+    // folder outside git must not show a git slot at all. It reports, it does
+    // not act.
     statusGit_->setObjectName(QStringLiteral("statusGit"));
     statusGit_->setToolTip(tr("Git branch and working tree state"));
+    statusGit_->hide();
 
     // Encoding combo — rightmost in the status bar.
     // Layout: [UTF-8, ANSI (<local name>), <other encodings alphabetical>]
@@ -3078,8 +3080,10 @@ void MainWindow::onGitStatusReady(const LightCpp::Project::GitStatusSummary& sum
 
     setGitActionsEnabled();
     if (!inRepository_) {
-        statusGit_->clear();
-        statusGit_->setToolTip(tr("Not a git repository"));
+        // Outside a repository the slot disappears entirely instead of sitting
+        // there as an empty label.
+        statusGit_->hide();
+        statusGit_->setToolTip(QString());
         if (gitStatusWantsFileList_) {
             outputPanel_->showChannel(OutputPanel::ChannelGit);
             outputPanel_->appendGitOutput(
@@ -3092,6 +3096,7 @@ void MainWindow::onGitStatusReady(const LightCpp::Project::GitStatusSummary& sum
         return;
     }
 
+    statusGit_->show();
     statusGit_->setText(summary.label());
     statusGit_->setToolTip(LightCpp::Project::describeGitStatus(summary));
     showGitStatus(summary, gitStatusWantsFileList_);
