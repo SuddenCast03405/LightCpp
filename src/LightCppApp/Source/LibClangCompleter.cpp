@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSet>
 
 // The real C API declarations (CXString layout, chunk-kind enums, cursor
 // kinds). Included only here; the DLL itself is loaded at run time through
@@ -223,6 +224,12 @@ QList<LspCompletionItem> LibClangCompleter::complete(const Request& request,
     };
 
     items.reserve(int(results->NumResults));
+    // libclang hands over its raw candidate list, which contains literal
+    // duplicates in preprocessor contexts (the same directive once as a
+    // directive and once as a macro-like entry). Real overloads differ in
+    // their prototype chunk, so "label + prototype" dedupes the noise
+    // without collapsing distinct overloads.
+    QSet<QString> seen;
     for (unsigned i = 0; i < results->NumResults; ++i) {
         const CXCompletionResult& result = results->Results[i];
         void* cs = result.CompletionString;
@@ -270,7 +277,11 @@ QList<LspCompletionItem> LibClangCompleter::complete(const Request& request,
             item.documentation = QString::fromUtf8(getCString_(brief));
             disposeString_(&brief);
         }
-        items.append(item);
+        const QString dedupKey = item.label + QLatin1Char('\x1F') + item.detail;
+        if (!seen.contains(dedupKey)) {
+            seen.insert(dedupKey);
+            items.append(item);
+        }
     }
 
     disposeCodeCompleteResults_(results);

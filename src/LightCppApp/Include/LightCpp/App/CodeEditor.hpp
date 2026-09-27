@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QSet>
 #include <QTextCharFormat>
 #include <QTextCursor>
@@ -159,6 +160,10 @@ protected:
     /// Intercepts QEvent::ToolTip to show the diagnostic message for the
     /// text under the mouse (extra-selection tooltips don't work natively).
     bool event(QEvent* event) override;
+    /// Watches the editor's top-level window for Move/Resize while the
+    /// completion popup is visible, so the popup follows the window instead
+    /// of being left behind at its stale screen position.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
     void updateLineNumberAreaWidth(int newBlockCount);
@@ -177,6 +182,8 @@ private:
     void requestCompletionAtCursor(const QString& triggerChar);
     /// Re-filter the visible popup by the identifier before the cursor.
     void refreshPopupFilter();
+    /// Move the visible popup back under the caret (window moved/resized).
+    void repositionPopup();
     /// Replace the identifier (or partial identifier) before the cursor
     /// with `item.insertText` and position the cursor at the end.
     void applyCompletionItem(const LightCpp::App::LspCompletionItem& item);
@@ -261,6 +268,9 @@ private:
     CppSyntaxHighlighter* highlighter_;
     bool syntaxHighlightEnabled_ = true;
     LightCpp::App::CompletionPopup* popup_;
+    /// The top-level window currently watched for Move/Resize events that
+    /// require repositioning the popup (installed by presentPopup()).
+    QPointer<QObject> popupWatchWindow_;
     /// Fires ~200ms after the last identifier keystroke to request
     /// "as-you-type" completion (no trigger char needed).
     QTimer* completionIdleTimer_ = nullptr;

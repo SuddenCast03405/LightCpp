@@ -12,10 +12,12 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QScreen>
 #include <QTextBlock>
 #include <QResizeEvent>
 #include <QTimer>
 #include <QToolTip>
+#include <QWindow>
 #include <QAbstractTextDocumentLayout>
 
 #include <utility>
@@ -425,10 +427,65 @@ void CodeEditor::presentPopup(const QList<LightCpp::App::LspCompletionItem>& ite
         dismissPopup();
         return;
     }
+    // Watch the top-level window so the popup follows it around: the popup
+    // is its own top-level widget, and nothing else repositions it when the
+    // main window is dragged or resized.
+    QObject* topLevel = window();
+    if (topLevel != nullptr && popupWatchWindow_ != topLevel) {
+        if (popupWatchWindow_ != nullptr) {
+            popupWatchWindow_->removeEventFilter(this);
+        }
+        topLevel->installEventFilter(this);
+        popupWatchWindow_ = topLevel;
+    }
     // Position the popup just below the cursor line.
     const QRect cr = cursorRect();
     QPoint pos = viewport()->mapToGlobal(cr.bottomLeft());
     popup_->present(items, pos);
+    // libclang hands over the raw, unfiltered candidate list, and a
+    // language-server answer may have been computed for an earlier prefix
+    // (typing continued while the request was in flight). Filter against
+    // the prefix the caret sits on right now — an empty prefix keeps the
+    // list as-is.
+    refreshPopupFilter();
+}
+
+void CodeEditor::repositionPopup()
+{
+    if (!popup_ || !popup_->isVisible()) {
+        return;
+    }
+    const QRect cr = cursorRect();
+    QPoint pos = viewport()->mapToGlobal(cr.bottomLeft());
+    // Same on-screen clamping present() applies on first show.
+    QScreen* screen = nullptr;
+    if (auto* handle = popup_->windowHandle()) {
+        screen = handle->screen();
+    }
+    if (screen == nullptr) {
+        screen = QApplication::primaryScreen();
+    }
+    if (screen != nullptr) {
+        const QRect g = screen->availableGeometry();
+        const QSize size = popup_->size();
+        if (pos.x() + size.width() > g.right()) {
+            pos.setX(qMax(g.left(), g.right() - size.width()));
+        }
+        if (pos.y() + size.height() > g.bottom()) {
+            pos.setY(qMax(g.top(), pos.y() - size.height() - 20));
+        }
+    }
+    popup_->move(pos);
+}
+
+bool CodeEditor::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == popupWatchWindow_ && popup_ && popup_->isVisible()) {
+        if (event->type() == QEvent::Move || event->type() == QEvent::Resize) {
+            repositionPopup();
+        }
+    }
+    return QPlainTextEdit::eventFilter(watched, event);
 }
 
 void CodeEditor::dismissPopup()
