@@ -26,6 +26,11 @@
 
 #include <algorithm>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
@@ -3007,6 +3012,41 @@ MainWindow::BuildTarget MainWindow::resolveBuildTarget(CodeEditor* editor) const
     return target;
 }
 
+QString MainWindow::systemConsoleCharset()
+{
+    static const QString charset = [] {
+        // What a fresh console window decodes the program's narrow bytes
+        // as: cmd — and so ConsolePauser and the standalone terminals —
+        // starts at the OEM default code page (936, GBK, on zh-CN Windows).
+        UINT codePage = GetOEMCP();
+        if (codePage == 0) {
+            codePage = GetACP();
+        }
+        switch (codePage) {
+        case 65001: return QStringLiteral("UTF-8");
+        case 936:   return QStringLiteral("GBK");
+        case 950:   return QStringLiteral("BIG5");
+        case 932:   return QStringLiteral("SHIFT_JIS");
+        case 949:   return QStringLiteral("UHC");
+        default:    return QStringLiteral("CP%1").arg(codePage);
+        }
+    }();
+    return charset;
+}
+
+QString MainWindow::requiredExecCharset() const
+{
+    // Captured Program Output decodes each line (UTF-8 vs local code page
+    // probe), so any encoding displays — keep the compiler's default. Every
+    // console-backed mode (Console Pauser, the terminals) shows the bytes
+    // in a real console window, which expects the system's default code
+    // page: the narrow string literals must be compiled for it.
+    if (programOutputMode_ == QLatin1String("program")) {
+        return {};
+    }
+    return systemConsoleCharset();
+}
+
 void MainWindow::onCompileCurrentFile()
 {
     CodeEditor* ed = currentEditor();
@@ -3130,6 +3170,12 @@ void MainWindow::onCompileCurrentFile()
              << (QStringLiteral("/Fo") + QDir::toNativeSeparators(objPath))
              << QDir::toNativeSeparators(srcPath);
 
+        // cl.exe already emits narrow literals in the system ANSI code page
+        // — exactly what a console expects — so no flag is needed; record
+        // the charset so the run-mode rebuild check knows this binary
+        // matches every run mode.
+        lastBuildExecCharset_ = systemConsoleCharset();
+
         // Exactly what vcvarsall.bat would otherwise have computed. Set rather
         // than appended so a stale environment inherited from a VS dev prompt
         // cannot point the compiler at a different toolset.
@@ -3169,6 +3215,16 @@ void MainWindow::onCompileCurrentFile()
             args = {QStringLiteral("-Wall"), QStringLiteral("-Wextra")};
             args += LightCpp::Project::flagsFor(buildConfiguration(),
                                                 LightCpp::Project::CompilerFamily::Gnu);
+        }
+        // Console-backed run modes show the program's bytes in a real
+        // console, which speaks the system's default code page — not
+        // MinGW's UTF-8 default. Compile the narrow string literals for
+        // that charset; captured Program Output keeps the compiler default
+        // (its decoder probes each line instead).
+        const QString execCharset = requiredExecCharset();
+        lastBuildExecCharset_ = execCharset;
+        if (!execCharset.isEmpty()) {
+            args << (QStringLiteral("-fexec-charset=") + execCharset);
         }
         args << srcPath << QStringLiteral("-o") << outExe;
         if (!linkFlags.isEmpty()) {
@@ -3326,6 +3382,19 @@ void MainWindow::onRunCurrentFile()
         outputPanel_->appendProgramOutput(
             tr("Running the existing %1 without rebuilding.")
                 .arg(exeInfo.fileName()));
+    }
+    // A binary built while another run mode was selected may speak the
+    // wrong encoding: console-backed modes must show the system code page,
+    // so rebuild instead of printing mojibake into the console.
+    const QString requiredCharset = requiredExecCharset();
+    if (!requiredCharset.isEmpty()
+        && lastBuildExecCharset_ != requiredCharset) {
+        outputPanel_->appendProgramOutput(
+            tr("Run output encoding changed — rebuilding with %1 string "
+               "literals for the console.")
+                .arg(requiredCharset));
+        onCompileAndRun();
+        return;
     }
     startProgram(exePath, QFileInfo(target.srcPath).absolutePath());
 }

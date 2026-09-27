@@ -367,6 +367,16 @@ private:
     /// captured by the Program Output channel; non-embedded ones open their
     /// own console window. Either way the IDE keeps no input field.
     void startInTerminal(const QString& exePath, const QString& workDir);
+    /// The system's default console code page as an iconv name ("GBK" on
+    /// zh-CN Windows). Console-backed run modes compile the program's
+    /// narrow literals for it, since their output lands in a real console
+    /// window that starts at that code page.
+    [[nodiscard]] static QString systemConsoleCharset();
+    /// The execution charset the current run mode's output needs: empty for
+    /// captured Program Output (the panel probes each line, so any encoding
+    /// displays), the system console charset for ConsolePauser and terminal
+    /// modes.
+    [[nodiscard]] QString requiredExecCharset() const;
     /// The ConsolePauser.exe to run a given program with: one next to the
     /// program, else one next to the IDE, else the compiled-in fallback
     /// location. When found elsewhere it is copied next to the program, so
@@ -557,6 +567,11 @@ private:
     bool runAfterBuild_ = false;
     /// Binary produced by the most recent build, i.e. what "Run" launches.
     QString lastBuildExe_;
+    /// Narrow-literal execution charset the last single-file build used
+    /// ("" = the compiler's default). A console-backed run mode needs the
+    /// system code page, so switching run modes invalidates the binary
+    /// until it is rebuilt with the matching -fexec-charset.
+    QString lastBuildExecCharset_;
     /// Console-output decoders (UTF-8 vs local code page probe): single-file
     /// compiler, project build steps, and the embedded program runner.
     LightCpp::App::ConsoleDecoder buildDecoder_;
