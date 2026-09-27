@@ -187,6 +187,7 @@ void LanguageServerClient::start()
     }
 
     initialized_ = false;
+    everInitialized_ = false;
     documentVersions_.clear();
     buffer_.clear();
 
@@ -237,6 +238,18 @@ void LanguageServerClient::start()
         // while stop() is mid-flight, which previously crashed on the
         // process_->deleteLater() line).
         if (auto* p = qobject_cast<QProcess*>(sender())) {
+            // A server that dies before the LSP handshake completes would
+            // otherwise vanish silently: ccls rejects unknown command-line
+            // arguments by printing to stderr and exiting with code 1, and
+            // QProcess only reports FailedToStart when CreateProcess fails.
+            if (!everInitialized_) {
+                emit serverFailed(tr("language server exited during start-up "
+                                     "(exit code %1)")
+                                      .arg(p->exitCode()));
+            } else {
+                emit serverLog(tr("language server exited (exit code %1)")
+                                   .arg(p->exitCode()));
+            }
             p->deleteLater();
         }
         if (process_ == sender()) {
@@ -248,15 +261,15 @@ void LanguageServerClient::start()
     // Light options: no background indexing, no clang-tidy checks — this is
     // a plain syntax-check integration; full compilation-database support
     // can come later. These flags are clangd-specific: ccls understands the
-    // LSP protocol but not clangd's command line, so it gets only the
-    // compile-commands directory it does share.
+    // LSP protocol but not clangd's command line — it rejects even
+    // "--background-index" with "Unknown command line argument" and exits
+    // right away (its options live behind --init=<json>), so it starts
+    // with no flags at all.
     const bool isCcls = QFileInfo(serverPath_).fileName()
                             .contains(QLatin1String("ccls"),
                                       Qt::CaseInsensitive);
     QStringList args;
-    if (isCcls) {
-        args.append(QStringLiteral("--background-index=false"));
-    } else {
+    if (!isCcls) {
         args << QStringLiteral("--background-index=false")
              << QStringLiteral("--clang-tidy=false")
              << QStringLiteral("--pch-storage=memory");
@@ -279,11 +292,20 @@ void LanguageServerClient::start()
     // clangd queries the compiler named inside the database itself.
     const QString projectDbDir = findProjectCompileCommandsDir(rootPath_);
     if (!projectDbDir.isEmpty()) {
-        args.append(QStringLiteral("--compile-commands-dir=") + projectDbDir);
+        // clangd takes a command-line flag; ccls has no such flag and reads
+        // the database directory from its --init JSON instead. Forward
+        // slashes keep the JSON escaping trivial.
+        if (isCcls) {
+            args.append(QStringLiteral(
+                            "--init={\"compilationDatabaseDirectory\":\"")
+                        + projectDbDir + QStringLiteral("\"}"));
+        } else {
+            args.append(QStringLiteral("--compile-commands-dir=") + projectDbDir);
+        }
         emit serverLog(tr("using project compilation database: %1")
                            .arg(QDir::toNativeSeparators(QDir(projectDbDir)
                                .filePath(QStringLiteral("compile_commands.json")))));
-    } else if (!headers_.isEmpty()) {
+    } else if (!isCcls && !headers_.isEmpty()) {
         // No project database: synthesise a one-file database pointing at the
         // selected toolchain's headers and start clangd against it, without
         // writing anything into the user's project.
@@ -669,6 +691,7 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
         if (id == initializeRequestId_ && !initialized_) {
             // initialize response — complete the handshake.
             initialized_ = true;
+            everInitialized_ = true;
             QJsonObject initialized;
             initialized.insert("jsonrpc", "2.0");
             initialized.insert("method", "initialized");

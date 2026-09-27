@@ -200,6 +200,9 @@ private:
     QMap<int, QString> completionRequests_;  // requestId -> fileUri
     QMap<int, QString> definitionRequests_;  // requestId -> fileUri
     bool initialized_ = false;          // handshake done
+    bool everInitialized_ = false;      // handshake completed at least once —
+                                        // separates "exited during start-up"
+                                        // (serverFailed) from a later exit
     int nextRequestId_ = 1;             // JSON-RPC request id counter
     /// Id of the outstanding "initialize" request. It cannot be assumed to be
     /// 1: this client is restarted (stop() + start()) whenever the toolchain
