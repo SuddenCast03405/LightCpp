@@ -86,6 +86,7 @@ OutputPanel::OutputPanel(QWidget* parent)
     , programOutput_(makeLogView(this))
     , gitLog_(makeLogView(this))
     , debugLog_(makeLogView(this))
+    , pluginLog_(makeLogView(this))
     , problems_(new QTreeWidget(this))
 {
     // --- header row: title, channel drop-down, clear ----------------------
@@ -103,6 +104,7 @@ OutputPanel::OutputPanel(QWidget* parent)
     channelCombo_->addItem(tr("Git"));              // ChannelGit
     channelCombo_->addItem(tr("Problems"));         // ChannelProblems
     channelCombo_->addItem(tr("Debugger"));         // ChannelDebug
+    channelCombo_->addItem(tr("Plugins"));          // ChannelPlugins
     channelCombo_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     channelCombo_->setToolTip(tr("Choose what the output area shows"));
     connect(channelCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -152,6 +154,9 @@ OutputPanel::OutputPanel(QWidget* parent)
            "a session runs)"),
         [this](const QString& text) { emit debuggerInputSubmitted(text); });
     stack_->addWidget(debugPage);       // ChannelDebug
+
+    pluginLog_->setPlaceholderText(tr("No plugin output yet."));
+    stack_->addWidget(pluginLog_);      // ChannelPlugins
 
     problems_->setColumnCount(2);
     problems_->setHeaderLabels({tr("Problem"), tr("Location")});
@@ -216,6 +221,11 @@ void OutputPanel::appendDebugOutput(const QString& text)
     debugLog_->appendPlainText(text);
 }
 
+void OutputPanel::appendPluginOutput(const QString& text)
+{
+    pluginLog_->appendPlainText(text);
+}
+
 void OutputPanel::setProgramInputEnabled(bool enabled)
 {
     if (programInput_ != nullptr) {
@@ -264,6 +274,7 @@ void OutputPanel::setOutputFont(const QFont& font)
     programOutput_->setFont(font);
     gitLog_->setFont(font);
     debugLog_->setFont(font);
+    pluginLog_->setFont(font);
     problems_->setFont(font);
 }
 
@@ -275,6 +286,7 @@ void OutputPanel::clearOutput()
     case ChannelProgram: programOutput_->clear(); break;
     case ChannelGit:     gitLog_->clear(); break;
     case ChannelDebug:   debugLog_->clear(); break;
+    case ChannelPlugins: pluginLog_->clear(); break;
     default:             setProblems({}); break;
     }
 }

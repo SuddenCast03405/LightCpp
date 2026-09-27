@@ -14,9 +14,11 @@
 #include "LightCpp/App/ConsoleDecoder.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
+#include "LightCpp/Plugin/Plugin.hpp"
+#include "LightCpp/Plugin/PluginManager.hpp"
+#include "LightCpp/Plugin/PluginTypes.hpp"
 #include "LightCpp/Project/BuildConfiguration.hpp"
 #include "LightCpp/Project/CMakeProject.hpp"
-#include "LightCpp/Project/DevCppProject.hpp"
 #include "LightCpp/Project/GitStatus.hpp"
 #include "LightCpp/Settings/SettingsStore.hpp"
 #include "LightCpp/Text/Encoding.hpp"
@@ -48,11 +50,32 @@ class LibClangCompleter;
 /// The explorer and output panels are plain widgets embedded in nested
 /// QSplitters, so the whole shell behaves as one layout: no panel can be
 /// torn off into a floating window.
-class MainWindow : public QMainWindow {
+///
+/// The window also implements LightCpp::Plugin::IdeServices: it is the
+/// object handed to every plugin at initialize time, so the plugin-visible
+/// IDE surface is exactly what that interface declares.
+class MainWindow : public QMainWindow, public LightCpp::Plugin::IdeServices {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    // --- LightCpp::Plugin::IdeServices (the plugin-facing IDE surface) -----
+    void log(const QString& message) override;
+    [[nodiscard]] QString activeEditorPath() const override;
+    [[nodiscard]] QString editorText() const override;
+    void setEditorText(const QString& text) override;
+    void insertAtCursor(const QString& text) override;
+    void gotoLine(int line) override;
+    [[nodiscard]] QStringList actionIds() const override;
+    [[nodiscard]] QString actionText(const QString& id) const override;
+    void setActionText(const QString& id, const QString& text) override;
+    [[nodiscard]] QStringList menuIds() const override;
+    [[nodiscard]] QString menuTitle(const QString& id) const override;
+    void setMenuTitle(const QString& id, const QString& title) override;
+    void registerCommand(const QString& pluginName, const QString& id,
+                         const QString& label, const QString& shortcut,
+                         std::function<void()> callback) override;
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -277,6 +300,12 @@ private:
     /// Which kind of project is open, if any.
     enum class ProjectKind { None, CMake, DevCpp };
 
+    /// Convert plugin build steps into the internal queue's step type.
+    [[nodiscard]] QList<ProjectStep>
+    toProjectSteps(const QList<LightCpp::Plugin::BuildStep>& steps) const;
+    /// Resolve the tool paths and configuration a project backend needs.
+    [[nodiscard]] LightCpp::Plugin::BuildRequest makeBuildRequest() const;
+
     /// The steps that make up "build the open project" for the selected
     /// configuration, or an empty list with a reason in the Build Log.
     [[nodiscard]] QList<ProjectStep> projectBuildSteps();
@@ -343,6 +372,15 @@ private:
     /// location. When found elsewhere it is copied next to the program, so
     /// the pairing travels with the binary. Empty when none was found.
     [[nodiscard]] QString resolveConsolePauser(const QString& exePath) const;
+    /// Detached start through `cmd /c start`: `start` always allocates a
+    /// brand-new console window, so the child never inherits the console of
+    /// whatever terminal the IDE itself was launched from (an MSYS2
+    /// mintty/bash session included — plain startDetached would print the
+    /// program's output into that terminal).
+    bool startDetachedInNewConsole(const QString& program,
+                                   const QStringList& args,
+                                   const QString& workDir,
+                                   const QProcessEnvironment& env);
     /// Enable/disable the build and run actions for the current states.
     void updateRunActionStates();
     /// Tell the language server whose headers to resolve includes against,
@@ -457,7 +495,12 @@ private:
     // --- open project state ---
     ProjectKind projectKind_ = ProjectKind::None;
     std::optional<LightCpp::Project::CMakeProject> cmakeProject_;
-    std::optional<LightCpp::Project::DevCppProject> devProject_;
+    /// Summary of the plugin-imported (Dev-C++) project. The full model —
+    /// units, flags, makefile choices — stays inside the project backend
+    /// plugin; the IDE only ever sees this summary and the build steps the
+    /// backend answers with.
+    LightCpp::Plugin::ProjectSummary devSummary_;
+    bool hasDevProject_ = false;
     /// The file the user opened; kept for the window title even when the
     /// project model itself only needs the directory.
     QString projectPath_;
@@ -574,4 +617,16 @@ private:
 
     // new-file counter
     int untitledCounter_ = 0;
+
+    // --- plugins ------------------------------------------------------------
+    /// Owns the loaded C++ plugins (QPluginLoader) and the Lua host's
+    /// script adapters. Created in the constructor; loads once, no hot reload.
+    LightCpp::Plugin::PluginManager* pluginManager_ = nullptr;
+    /// The Plugins menu, created lazily by the first registered command.
+    class QMenu* pluginsMenu_ = nullptr;
+    /// Look up an action by its objectName (the id plugins use).
+    [[nodiscard]] QAction* findNamedAction(const QString& id) const;
+    /// Discover and load plugins (shared libraries + Lua scripts) and log
+    /// what came up. Called once, from the constructor.
+    void loadPlugins();
 };

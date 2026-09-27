@@ -46,6 +46,8 @@ set_target_properties(lightcpp PROPERTIES AUTOMOC ON)
 target_include_directories(lightcpp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppCore/Include
+    ${CMAKE_SOURCE_DIR}/src/LightCppLua/Include
+    ${CMAKE_SOURCE_DIR}/src/LightCppPlugin/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppProject/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppSettings/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppText/Include
@@ -53,6 +55,8 @@ target_include_directories(lightcpp PRIVATE
 
 target_link_libraries(lightcpp PRIVATE
     LightCppCore
+    LightCppLua
+    LightCppPlugin
     LightCppProject
     LightCppSettings
     LightCppText
@@ -66,6 +70,19 @@ add_custom_command(TARGET lightcpp POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${LIGHTCPP_DIST_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:lightcpp> ${LIGHTCPP_DIST_DIR}/
 )
+
+# Lua plugins stage into dist/plugins/lua, where the sandboxed host scans.
+# (Same directory scope as the lightcpp target — CMake requires it.)
+file(GLOB LIGHTCPP_LUA_PLUGINS "${CMAKE_SOURCE_DIR}/plugins/lua/*.lua")
+foreach(script ${LIGHTCPP_LUA_PLUGINS})
+    add_custom_command(TARGET lightcpp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                ${LIGHTCPP_DIST_DIR}/plugins/lua
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${script} ${LIGHTCPP_DIST_DIR}/plugins/lua/
+        COMMENT "Staging ${script} into dist/plugins/lua"
+    )
+endforeach()
 
 # WinDeployQt: auto-deploy Qt DLLs next to the exe.
 if(WIN32)

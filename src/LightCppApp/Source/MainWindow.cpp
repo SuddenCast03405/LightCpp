@@ -14,10 +14,13 @@
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/App/SettingsDialog.hpp"
 #include "LightCpp/App/ToolchainPaths.hpp"
+#include "LightCpp/Plugin/ProjectBackend.hpp"
 
 #include "LightCpp/Text/Converter.hpp"
 #include "LightCpp/Text/Encoding.hpp"
 #include "LightCpp/Text/TextFile.hpp"
+
+#include "LightCpp/Lua/LuaPluginHost.hpp"
 
 #include "LightCpp/Project/FolderContents.hpp"
 
@@ -28,6 +31,7 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QFileDialog>
@@ -36,6 +40,7 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QHBoxLayout>
+#include <QMenu>
 #include <QUrl>
 #include <QInputDialog>
 #include <QLabel>
@@ -472,7 +477,226 @@ void MainWindow::checkStartupCompilers()
     }
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    // Plugins may hold state tied to the window (Lua states with callbacks,
+    // cached widget pointers): shut them down while every widget is alive,
+    // not from inside the QObject teardown.
+    if (pluginManager_ != nullptr) {
+        pluginManager_->shutdownPlugins();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plugins (LightCpp::Plugin::IdeServices)
+// ---------------------------------------------------------------------------
+void MainWindow::loadPlugins()
+{
+    pluginManager_ = new LightCpp::Plugin::PluginManager(this);
+    const QString pluginDir =
+        QCoreApplication::applicationDirPath() + QStringLiteral("/plugins");
+    outputPanel_->appendPluginOutput(
+        tr("Plugin directory: %1")
+            .arg(QDir::toNativeSeparators(pluginDir)));
+
+    for (const QString& error :
+         pluginManager_->loadSharedPlugins(pluginDir, this)) {
+        outputPanel_->appendPluginOutput(tr("Plugin error: %1").arg(error));
+    }
+    for (const auto& loaded : pluginManager_->loaded()) {
+        outputPanel_->appendPluginOutput(
+            tr("Plugin loaded: %1 %2 (%3)")
+                .arg(loaded.name, loaded.version,
+                     QDir::toNativeSeparators(loaded.path)));
+    }
+    if (pluginManager_->loaded().isEmpty()) {
+        outputPanel_->appendPluginOutput(tr("No plugins found."));
+    }
+}
+
+QAction* MainWindow::findNamedAction(const QString& id) const
+{
+    for (QAction* action : findChildren<QAction*>()) {
+        if (action->objectName() == id) {
+            return action;
+        }
+    }
+    return nullptr;
+}
+
+void MainWindow::log(const QString& message)
+{
+    outputPanel_->appendPluginOutput(message);
+}
+
+QString MainWindow::activeEditorPath() const
+{
+    const CodeEditor* editor = currentEditor();
+    return editor == nullptr ? QString() : editor->filePath();
+}
+
+QString MainWindow::editorText() const
+{
+    const CodeEditor* editor = currentEditor();
+    return editor == nullptr ? QString() : editor->toPlainText();
+}
+
+void MainWindow::setEditorText(const QString& text)
+{
+    if (CodeEditor* editor = currentEditor()) {
+        editor->setPlainText(text);
+    }
+}
+
+void MainWindow::insertAtCursor(const QString& text)
+{
+    if (CodeEditor* editor = currentEditor()) {
+        editor->textCursor().insertText(text);
+    }
+}
+
+void MainWindow::gotoLine(int line)
+{
+    if (CodeEditor* editor = currentEditor()) {
+        const QTextBlock block = editor->document()->findBlockByNumber(line);
+        if (!block.isValid()) {
+            return;
+        }
+        QTextCursor cursor = editor->textCursor();
+        cursor.setPosition(block.position());
+        editor->setTextCursor(cursor);
+        editor->centerCursor();
+    }
+}
+
+QStringList MainWindow::actionIds() const
+{
+    QStringList ids;
+    for (const QAction* action : findChildren<QAction*>()) {
+        const QString name = action->objectName();
+        if (!name.isEmpty()) {
+            ids.append(name);
+        }
+    }
+    return ids;
+}
+
+QString MainWindow::actionText(const QString& id) const
+{
+    const QAction* action = findNamedAction(id);
+    return action == nullptr ? QString() : action->text();
+}
+
+void MainWindow::setActionText(const QString& id, const QString& text)
+{
+    if (QAction* action = findNamedAction(id)) {
+        action->setText(text);
+        // Toolbar buttons in TextBesideIcon mode show the icon text; keep
+        // both in step so menus and the toolbar change together.
+        action->setIconText(text);
+    } else {
+        log(tr("Plugin: no action named %1").arg(id));
+    }
+}
+
+QStringList MainWindow::menuIds() const
+{
+    QStringList ids;
+    for (const QMenu* menu : findChildren<QMenu*>()) {
+        const QString name = menu->objectName();
+        if (!name.isEmpty()) {
+            ids.append(name);
+        }
+    }
+    return ids;
+}
+
+QString MainWindow::menuTitle(const QString& id) const
+{
+    for (const QMenu* menu : findChildren<QMenu*>()) {
+        if (menu->objectName() == id) {
+            return menu->title();
+        }
+    }
+    return {};
+}
+
+void MainWindow::setMenuTitle(const QString& id, const QString& title)
+{
+    for (QMenu* menu : findChildren<QMenu*>()) {
+        if (menu->objectName() == id) {
+            menu->setTitle(title);
+            return;
+        }
+    }
+    log(tr("Plugin: no menu named %1").arg(id));
+}
+
+void MainWindow::registerCommand(const QString& pluginName, const QString& id,
+                                 const QString& label, const QString& shortcut,
+                                 std::function<void()> callback)
+{
+    if (pluginsMenu_ == nullptr) {
+        pluginsMenu_ = new QMenu(tr("&Plugins"), this);
+        pluginsMenu_->setObjectName(QStringLiteral("menuPlugins"));
+        // Insert before Help, so plugin commands sit with the other tools.
+        const QList<QAction*> menuActions = menuBar()->actions();
+        if (!menuActions.isEmpty()) {
+            menuBar()->insertMenu(menuActions.last(), pluginsMenu_);
+        } else {
+            menuBar()->addMenu(pluginsMenu_);
+        }
+    }
+    auto* action = new QAction(label, pluginsMenu_);
+    action->setObjectName(QStringLiteral("pluginCommand.%1.%2")
+                              .arg(pluginName, id));
+    if (!shortcut.isEmpty()) {
+        action->setShortcut(QKeySequence(shortcut));
+        action->setToolTip(QStringLiteral("%1 (%2)").arg(label, shortcut));
+    }
+    connect(action, &QAction::triggered, this,
+            [callback = std::move(callback)] { callback(); });
+    pluginsMenu_->addAction(action);
+}
+
+QList<MainWindow::ProjectStep> MainWindow::toProjectSteps(
+    const QList<LightCpp::Plugin::BuildStep>& steps) const
+{
+    QList<ProjectStep> converted;
+    converted.reserve(steps.size());
+    for (const LightCpp::Plugin::BuildStep& step : steps) {
+        converted.append(ProjectStep{step.program, step.arguments,
+                                     step.workingDirectory, step.label});
+    }
+    return converted;
+}
+
+LightCpp::Plugin::BuildRequest MainWindow::makeBuildRequest() const
+{
+    LightCpp::Plugin::BuildRequest request;
+    request.configuration = currentBuildConfigurationName();
+
+    // Defaults straight from the MSYS2 toolchain, then the kit's overrides —
+    // the same resolution the built-in paths used before .dev support moved
+    // into a plugin.
+    QString make = QDir(kMingwBin).filePath(QStringLiteral("mingw32-make.exe"));
+    QString gxx = QDir(kMingwBin).filePath(QStringLiteral("g++.exe"));
+    if (const auto kit = activeKit(); kit.has_value()) {
+        const QString kitMake = kit->buildTools.value(QStringLiteral("gnuMake"));
+        if (!kitMake.isEmpty() && QFileInfo::exists(kitMake)) {
+            make = kitMake;
+        }
+        if (!kit->cppCompiler.isEmpty() && !isMsvcKit(*kit)) {
+            gxx = kit->cppCompiler;
+        }
+        request.extraMakeArgs =
+            settings_->effectiveBuildConfig(*kit, currentBuildConfigurationName())
+                .buildToolArgs.value(QStringLiteral("gnuMake"));
+    }
+    request.make = make;
+    request.compiler = gxx;
+    return request;
+}
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
@@ -821,6 +1045,60 @@ void MainWindow::createActions()
     actGitLog_->setEnabled(false);
     actGitDiff_->setEnabled(false);
     actGitDiffStaged_->setEnabled(false);
+
+    // Stable object names: this is the address space plugins use through
+    // IdeServices::setActionText / actionText. The names are the ids the
+    // plugin API documents (e.g. "actionNew", "actionBuildProject").
+    const QHash<QAction*, QString> actionNames = {
+        {actNew_, "actionNew"},
+        {actOpen_, "actionOpen"},
+        {actOpenFolder_, "actionOpenFolder"},
+        {actSave_, "actionSave"},
+        {actSaveAll_, "actionSaveAll"},
+        {actExit_, "actionExit"},
+        {actToggleExplorer_, "actionToggleExplorer"},
+        {actToggleOutput_, "actionToggleOutput"},
+        {actSyntaxCheck_, "actionSyntaxCheck"},
+        {actCompile_, "actionCompile"},
+        {actCompileRun_, "actionCompileRun"},
+        {actRun_, "actionRun"},
+        {actStopRun_, "actionStopRun"},
+        {actToggleBreakpoint_, "actionToggleBreakpoint"},
+        {actDebugStart_, "actionDebugStart"},
+        {actDebugStop_, "actionDebugStop"},
+        {actDebugContinue_, "actionDebugContinue"},
+        {actDebugStepOver_, "actionDebugStepOver"},
+        {actDebugStepInto_, "actionDebugStepInto"},
+        {actDebugStepOut_, "actionDebugStepOut"},
+        {actSettings_, "actionSettings"},
+        {actReloadSettings_, "actionReloadSettings"},
+        {actOpenConfigDir_, "actionOpenConfigDir"},
+        {actAbout_, "actionAbout"},
+        {actFold_, "actionFold"},
+        {actUnfold_, "actionUnfold"},
+        {actFoldAll_, "actionFoldAll"},
+        {actUnfoldAll_, "actionUnfoldAll"},
+        {actFormat_, "actionFormat"},
+        {actFormatFolder_, "actionFormatFolder"},
+        {actFormatProject_, "actionFormatProject"},
+        {actOpenProject_, "actionOpenProject"},
+        {actConfigureProject_, "actionConfigureProject"},
+        {actBuildProject_, "actionBuildProject"},
+        {actRunProject_, "actionRunProject"},
+        {actCloseProject_, "actionCloseProject"},
+        {actGitRefresh_, "actionGitRefresh"},
+        {actGitStageAll_, "actionGitStageAll"},
+        {actGitUnstageAll_, "actionGitUnstageAll"},
+        {actGitCommit_, "actionGitCommit"},
+        {actGitLog_, "actionGitLog"},
+        {actGitDiff_, "actionGitDiff"},
+        {actGitDiffStaged_, "actionGitDiffStaged"},
+        {actGitInit_, "actionGitInit"},
+    };
+    for (auto it = actionNames.constBegin(); it != actionNames.constEnd();
+         ++it) {
+        it.key()->setObjectName(it.value());
+    }
 }
 
 void MainWindow::createMenuBar()
@@ -840,6 +1118,7 @@ void MainWindow::createMenuBar()
     editMenu->addAction(actFormatFolder_);
     editMenu->addSeparator();
     auto* foldingMenu = editMenu->addMenu(tr("&Folding"));
+    foldingMenu->setObjectName(QStringLiteral("menuFolding"));
     foldingMenu->addAction(actFold_);
     foldingMenu->addAction(actUnfold_);
     foldingMenu->addSeparator();
@@ -860,6 +1139,7 @@ void MainWindow::createMenuBar()
     projectMenu->addAction(actCloseProject_);
 
     auto* toolsMenu = menuBar()->addMenu(tr("&Tools"));
+    toolsMenu->setObjectName(QStringLiteral("menuTools"));
     toolsMenu->addAction(actSyntaxCheck_);
     toolsMenu->addAction(actReloadSettings_);
     toolsMenu->addAction(actOpenConfigDir_);
@@ -2084,7 +2364,8 @@ void MainWindow::clearProjectState()
     const QString root = projectRootDirectory();
     projectKind_ = ProjectKind::None;
     cmakeProject_.reset();
-    devProject_.reset();
+    hasDevProject_ = false;
+    devSummary_ = {};
     projectPath_.clear();
     lastProjectExe_.clear();
     setWindowTitle(QStringLiteral("LightC++"));
@@ -2171,7 +2452,8 @@ void MainWindow::openProjectFile(const QString& path, bool showInExplorer)
                                 Qt::CaseInsensitive) == 0) {
         auto project = LightCpp::Project::CMakeProject{info.absolutePath()};
         cmakeProject_ = project;
-        devProject_.reset();
+        hasDevProject_ = false;
+        devSummary_ = {};
         projectKind_ = ProjectKind::CMake;
         projectPath_ = info.absoluteFilePath();
         lastProjectExe_.clear();
@@ -2180,32 +2462,42 @@ void MainWindow::openProjectFile(const QString& path, bool showInExplorer)
         outputPanel_->appendBuildOutput(
             tr("Build trees: %1/<Debug|Release> (selected by the toolbar)")
                 .arg(LightCpp::Project::buildDirectory(project, buildConfiguration())));
-    } else if (info.suffix().compare(QStringLiteral("dev"), Qt::CaseInsensitive) == 0) {
+    } else {
+        // Everything that is not a CMakeLists.txt belongs to a project
+        // backend plugin. The first backend that claims the file owns it —
+        // the IDE core knows no other concrete format itself.
+        LightCpp::Plugin::ProjectBackend* backend =
+            pluginManager_ == nullptr
+                ? nullptr
+                : pluginManager_->backendFor(info.absoluteFilePath());
+        if (backend == nullptr) {
+            outputPanel_->appendBuildOutput(
+                tr("Unrecognised project file: %1\n"
+                   "Open a CMakeLists.txt, or install a plugin that handles "
+                   "this format.")
+                    .arg(info.fileName()));
+            return;
+        }
         QString error;
-        auto project = LightCpp::Project::loadDevProject(info.absoluteFilePath(), &error);
-        if (!project.has_value()) {
+        LightCpp::Plugin::ProjectSummary summary;
+        if (!backend->openProject(info.absoluteFilePath(), &summary, &error)) {
             outputPanel_->appendBuildOutput(
                 tr("Cannot read %1: %2").arg(path, error));
             return;
         }
-        projectPath_ = info.absoluteFilePath();
-        lastProjectExe_ = project->outputPath();
-        devProject_ = project;
+        devSummary_ = summary;
+        hasDevProject_ = true;
         cmakeProject_.reset();
         projectKind_ = ProjectKind::DevCpp;
+        projectPath_ = info.absoluteFilePath();
+        lastProjectExe_ = summary.outputPath;
         outputPanel_->appendBuildOutput(
             tr("Dev-C++ project opened: %1 [%2, %3 unit(s)]")
-                .arg(project->name.isEmpty() ? info.fileName() : project->name,
-                     project->targetLabel())
-                .arg(project->units.size()));
+                .arg(summary.name.isEmpty() ? info.fileName() : summary.name,
+                     summary.targetLabel)
+                .arg(summary.unitCount));
         outputPanel_->appendBuildOutput(
             tr("Output: %1").arg(lastProjectExe_));
-    } else {
-        outputPanel_->appendBuildOutput(
-            tr("Unrecognised project file: %1\n"
-               "Open a CMakeLists.txt or a Dev-C++ .dev file.")
-                .arg(info.fileName()));
-        return;
     }
 
     // The Explorer follows the project rather than the descriptor: a CMake
@@ -2228,8 +2520,8 @@ QString MainWindow::projectRootDirectory() const
     if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
         return cmakeProject_->sourceDir;
     }
-    if (projectKind_ == ProjectKind::DevCpp && devProject_.has_value()) {
-        return devProject_->projectDir;
+    if (projectKind_ == ProjectKind::DevCpp && hasDevProject_) {
+        return devSummary_.projectDir;
     }
     return projectPath_.isEmpty() ? QString() : QFileInfo(projectPath_).absolutePath();
 }
@@ -2243,8 +2535,8 @@ QString MainWindow::projectDisplayName() const
     if (projectKind_ == ProjectKind::CMake) {
         return info.absolutePath();
     }
-    if (devProject_.has_value() && !devProject_->name.isEmpty()) {
-        return devProject_->name;
+    if (hasDevProject_ && !devSummary_.name.isEmpty()) {
+        return devSummary_.name;
     }
     return info.fileName();
 }
@@ -2296,49 +2588,22 @@ QList<MainWindow::ProjectStep> MainWindow::projectBuildSteps()
         return steps;
     }
 
-    if (projectKind_ == ProjectKind::DevCpp && devProject_.has_value()) {
-        const LightCpp::Project::DevCppProject& project = *devProject_;
-        if (project.useCustomMakefile) {
-            // The kit's make when it names one, else the MSYS2 default.
-            QString make = QDir(kMingwBin).filePath(QStringLiteral("mingw32-make.exe"));
-            QStringList extraMakeArgs;
-            if (const auto kit = activeKit(); kit.has_value()) {
-                const QString kitMake =
-                    kit->buildTools.value(QStringLiteral("gnuMake"));
-                if (!kitMake.isEmpty() && QFileInfo::exists(kitMake)) {
-                    make = kitMake;
-                }
-                extraMakeArgs =
-                    settings_
-                        ->effectiveBuildConfig(*kit, currentBuildConfigurationName())
-                        .buildToolArgs.value(QStringLiteral("gnuMake"));
-            }
-            return {ProjectStep{
-                make, LightCpp::Project::makeArguments(project) + extraMakeArgs,
-                project.projectDir,
-                tr("Running the project's own makefile: %1")
-                    .arg(project.customMakefile)}};
+    if (projectKind_ == ProjectKind::DevCpp && hasDevProject_) {
+        // The backend parsed the file when it was opened; it answers with
+        // the steps itself (custom makefile, or one compiler invocation over
+        // the whole unit list). The IDE only resolves the tools.
+        LightCpp::Plugin::ProjectBackend* backend =
+            pluginManager_ == nullptr
+                ? nullptr
+                : pluginManager_->backendFor(devSummary_.filePath);
+        if (backend == nullptr) {
+            outputPanel_->appendBuildOutput(
+                tr("The plugin that opened %1 is no longer loaded — cannot "
+                   "build.")
+                    .arg(devSummary_.filePath));
+            return {};
         }
-        // The kit's C++ compiler drives the whole unit list, like the
-        // MSYS2 g++ did; the Dev-C++ model only supplies the files.
-        QString gxx = QDir(kMingwBin).filePath(QStringLiteral("g++.exe"));
-        if (const auto kit = activeKit(); kit.has_value()
-            && !kit->cppCompiler.isEmpty()
-            && !isMsvcKit(*kit)) {
-            gxx = kit->cppCompiler;
-        }
-        return {ProjectStep{
-            gxx,
-            LightCpp::Project::gnuBuildArguments(project, config, gxx,
-                                                 project.outputPath()),
-            project.projectDir,
-            // The number handed to the compiler, not the number of rows in the
-            // file: units can be switched off, and the log should describe what
-            // was actually built.
-            tr("Compiling %1 unit(s) [%2]")
-                .arg(project.buildUnitPaths().size())
-                .arg(LightCpp::Project::toString(config)),
-        }};
+        return toProjectSteps(backend->buildSteps(makeBuildRequest()));
     }
 
     outputPanel_->appendBuildOutput(tr("No project is open."));
@@ -2436,8 +2701,8 @@ void MainWindow::finishProjectBuild(bool succeeded, int exitCode)
         if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
             lastProjectExe_ = LightCpp::Project::newestExecutable(
                 LightCpp::Project::buildDirectory(*cmakeProject_, buildConfiguration()));
-        } else if (devProject_.has_value()) {
-            lastProjectExe_ = devProject_->outputPath();
+        } else if (hasDevProject_) {
+            lastProjectExe_ = devSummary_.outputPath;
         }
         if (!lastProjectExe_.isEmpty()) {
             outputPanel_->appendBuildOutput(tr("Run Project will start: %1").arg(lastProjectExe_));
@@ -2479,8 +2744,8 @@ QString MainWindow::gitWorkingDirectory() const
     if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
         return cmakeProject_->sourceDir;
     }
-    if (projectKind_ == ProjectKind::DevCpp && devProject_.has_value()) {
-        return devProject_->projectDir;
+    if (projectKind_ == ProjectKind::DevCpp && hasDevProject_) {
+        return devSummary_.projectDir;
     }
     if (CodeEditor* ed = currentEditor(); ed != nullptr && !ed->filePath().isEmpty()) {
         return QFileInfo(ed->filePath()).absolutePath();
@@ -3092,11 +3357,10 @@ QProcess* MainWindow::ensureProgramRunner()
         });
         // The program's stdin stays open while it runs: the input field in
         // the Program Output channel feeds it, so scanf()/getline() work.
-        // Terminal modes share this runner but expose no input field, so
-        // the field only wakes up in the captured program mode.
+        // Embedded terminal modes share this runner — the field drives the
+        // shell the same way, so it enables for every captured run.
         connect(runner_, &QProcess::started, this, [this] {
-            outputPanel_->setProgramInputEnabled(
-                programOutputMode_ == QLatin1String("program"));
+            outputPanel_->setProgramInputEnabled(true);
         });
         connect(runner_, &QProcess::errorOccurred, this,
                 [this](QProcess::ProcessError e) {
@@ -3176,6 +3440,24 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
     runner_->start(exePath, {});
     updateRunActionStates();
 }
+bool MainWindow::startDetachedInNewConsole(const QString& program,
+                                           const QStringList& args,
+                                           const QString& workDir,
+                                           const QProcessEnvironment& env)
+{
+    // `start ""` — the empty quoted token is the window title placeholder;
+    // without it start would mistake a quoted program path for the title.
+    QProcess launcher;
+    launcher.setProgram(QStringLiteral("cmd.exe"));
+    QStringList cmdArgs{QStringLiteral("/c"), QStringLiteral("start"),
+                        QString(), QDir::toNativeSeparators(program)};
+    cmdArgs.append(args);
+    launcher.setArguments(cmdArgs);
+    launcher.setWorkingDirectory(workDir);
+    launcher.setProcessEnvironment(env);
+    return launcher.startDetached();
+}
+
 void MainWindow::startWithConsolePauser(const QString& exePath,
                                         const QString& workDir)
 {
@@ -3203,17 +3485,13 @@ void MainWindow::startWithConsolePauser(const QString& exePath,
                    + env.value(QStringLiteral("PATH")));
 
     // ConsolePauser.exe <filename> <parameters> — we never pass extra
-    // parameters, so the program itself is the only argument. Detached
-    // start: the console window belongs to the child, the IDE does not
-    // capture anything, and the window stays up after the program exits
-    // (that is the pause the tool adds). The instance overload is used so
-    // the environment and working directory above are honoured.
-    QProcess launcher;
-    launcher.setProgram(pauser);
-    launcher.setArguments({exePath});
-    launcher.setWorkingDirectory(workDir);
-    launcher.setProcessEnvironment(env);
-    if (!launcher.startDetached()) {
+    // parameters, so the program itself is the only argument. Launched via
+    // `cmd /c start`: the console window is always brand new, never the
+    // terminal the IDE itself was started from, and the IDE captures
+    // nothing. The window stays up after the program exits (that is the
+    // pause the tool adds). The environment (PATH with the toolchain's bin
+    // directory) travels through cmd into the child.
+    if (!startDetachedInNewConsole(pauser, {exePath}, workDir, env)) {
         outputPanel_->appendProgramOutput(
             tr("Failed to start %1.").arg(QDir::toNativeSeparators(pauser)));
         return;
@@ -3259,10 +3537,9 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
 {
     outputPanel_->showChannel(OutputPanel::ChannelProgram);
 
-    // The selected terminal from the editable list: "command" is split
-    // command-line style and the program path becomes the final argument.
-    // A PowerShell-style template ending in -Command/-c gets the call
-    // operator (& 'path') so paths with spaces still execute.
+    // The selected terminal from the editable list. The command template is
+    // launched as-is (it starts the shell, e.g. "cmd.exe /k"); the program's
+    // absolute path is then fed to it as a line of user input.
     const QStringList tokens = QProcess::splitCommand(runTerminalCommand_);
     if (tokens.isEmpty()) {
         outputPanel_->appendProgramOutput(
@@ -3275,13 +3552,6 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
         program = tokens.first();
     }
     QStringList args = tokens.mid(1);
-    const QString lastToken = args.isEmpty() ? QString() : args.last();
-    if (lastToken.compare(QLatin1String("-Command"), Qt::CaseInsensitive) == 0
-        || lastToken.compare(QLatin1String("-c"), Qt::CaseInsensitive) == 0) {
-        args << QStringLiteral("& '%1'").arg(exePath);
-    } else {
-        args << exePath;
-    }
 
     // The program needs its toolchain's runtime DLLs wherever it ends up
     // running, so the active kit's compiler directory goes on PATH first.
@@ -3300,32 +3570,66 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
     const QString terminalLabel =
         runTerminalName_.isEmpty() ? program : runTerminalName_;
     if (runTerminalEmbedded_) {
-        // Embedded (VSCode style): the terminal's output — banner, prompts
-        // and the program's own — is captured in the Program Output channel.
-        // No input field: stdin is not forwarded in terminal modes.
+        // Embedded (VSCode style): the shell itself runs in the captured
+        // runner — banner, prompts and the program's output all land in the
+        // Program Output channel. The program's absolute path is "typed" as
+        // the shell's first input line, and the input field stays live, so
+        // everything typed afterwards goes to the shell (or to the program
+        // it is currently running) as plain stdin.
         QProcess* runner = ensureProgramRunner();
         if (runner->state() != QProcess::NotRunning) {
             outputPanel_->appendProgramOutput(tr("A program is already running."));
             return;
         }
+        // A PowerShell-style template ends in -Command/-c, which needs a
+        // value; launch without it and use the call operator when typing.
+        bool needsCallOperator = false;
+        if (!args.isEmpty()
+            && (args.last().compare(QLatin1String("-Command"),
+                                    Qt::CaseInsensitive) == 0
+                || args.last().compare(QLatin1String("-c"),
+                                       Qt::CaseInsensitive) == 0)) {
+            args.removeLast();
+            needsCallOperator = true;
+        }
+        const QString firstInput = needsCallOperator
+            ? QStringLiteral("& '%1'").arg(exePath)
+            : exePath;
         runner->setProcessEnvironment(env);
         runner->setWorkingDirectory(workDir);
         outputPanel_->appendProgramOutput(
             tr("--- Running in %1 (embedded): %2 ---")
                 .arg(terminalLabel, QFileInfo(exePath).absoluteFilePath()));
+        // One-shot: once the shell is up, type the program path into it.
+        QObject::connect(runner, &QProcess::started, this,
+                         [this, runner, firstInput] {
+                             if (runner->state() == QProcess::Running) {
+                                 runner->write(firstInput.toLocal8Bit()
+                                               + QByteArray("\r\n"));
+                             }
+                         },
+                         static_cast<Qt::ConnectionType>(Qt::AutoConnection
+                                                         | Qt::SingleShotConnection));
         runner->start(program, args);
         updateRunActionStates();
         return;
     }
 
     // Non-embedded: the terminal opens its own console window and owns the
-    // program's stdio; the IDE captures nothing.
-    QProcess launcher;
-    launcher.setProgram(program);
-    launcher.setArguments(args);
-    launcher.setWorkingDirectory(workDir);
-    launcher.setProcessEnvironment(env);
-    if (!launcher.startDetached()) {
+    // program's stdio; the IDE captures nothing. There the program path is
+    // passed as a command-line argument (nothing can be typed into it from
+    // the IDE), with the call operator for PowerShell-style templates. The
+    // `cmd /c start` route keeps the window off the IDE's own terminal.
+    QStringList externalArgs = args;
+    const QString lastToken =
+        externalArgs.isEmpty() ? QString() : externalArgs.last();
+    if (lastToken.compare(QLatin1String("-Command"), Qt::CaseInsensitive) == 0
+        || lastToken.compare(QLatin1String("-c"), Qt::CaseInsensitive) == 0) {
+        externalArgs << QStringLiteral("& '%1'").arg(exePath);
+    } else {
+        externalArgs << exePath;
+    }
+    if (!startDetachedInNewConsole(program, externalArgs, workDir, env)) {
         outputPanel_->appendProgramOutput(
             tr("Failed to start %1.").arg(QDir::toNativeSeparators(program)));
         return;
@@ -3808,10 +4112,14 @@ void MainWindow::applyPreferences()
             }
         }
     }
-    // Only the captured program mode has an IDE-side stdin field; Console
-    // Pauser and the terminals (embedded or not) hide the Send row.
+    // The captured program mode and embedded terminals share the IDE-side
+    // stdin field: an embedded shell is driven by "typing" into it, so the
+    // Send row stays. Console Pauser and non-embedded terminals (their own
+    // console window) have no IDE-side stdin and hide the row.
     outputPanel_->setProgramInputVisible(
-        programOutputMode_ == QLatin1String("program"));
+        programOutputMode_ == QLatin1String("program")
+        || (programOutputMode_ != QLatin1String("consolePauser")
+            && runTerminalEmbedded_));
 
     // --- language service: completion backend -----------------------------
     completionBackend_ = prefs.completion.backend.isEmpty()

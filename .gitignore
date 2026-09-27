@@ -15,6 +15,16 @@ _*.cpp
 _*.exe
 _check.txt
 
+# Vendored third-party sources — fetched by _fetch_deps.cmake at configure time
+third_party/
+
+# Local scratch / runtime dirs
+_scratch*/
+_smk*/
+_sdlg*/
+_enc_smoke_dir/
+config/
+
 # Coverage artifacts
 coverage.info
 coverage_html/

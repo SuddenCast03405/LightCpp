@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 project(LightCpp
     VERSION 0.1.0
     DESCRIPTION "LightC++ - Lightweight C/C++ IDE"
-    LANGUAGES CXX)
+    LANGUAGES C CXX)
 
 # ---------------------------------------------------------------------------
 # Global compile settings (C++20 baseline, strict warnings)
@@ -97,12 +97,17 @@ add_subdirectory(src/LightCppCore)
 add_subdirectory(src/LightCppText)
 add_subdirectory(src/LightCppProject)
 add_subdirectory(src/LightCppSettings)
+add_subdirectory(src/LightCppPlugin)
+add_subdirectory(src/LightCppLua)
 add_subdirectory(src/LightCppApp)
 add_subdirectory(apps/LightCppEncodingCli)
+add_subdirectory(plugins)
 
 if(BUILD_TESTING)
     add_subdirectory(tests/LightCppCoreTests)
     add_subdirectory(tests/LightCppTextTests)
     add_subdirectory(tests/LightCppProjectTests)
     add_subdirectory(tests/LightCppSettingsTests)
+    add_subdirectory(tests/LightCppPluginTests)
+    add_subdirectory(tests/LightCppLuaTests)
 endif()

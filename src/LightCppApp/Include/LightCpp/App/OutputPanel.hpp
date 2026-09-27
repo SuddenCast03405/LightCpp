@@ -26,19 +26,20 @@ struct ProblemEntry {
     QString code;
 };
 
-/// Output area.  Six switchable channels behind one drop-down:
-///
-///   Clangd Log      — the language server's own log (stderr + window/logMessage)
-///   Build Log       — compiler output and IDE file operations
-///   Program Output  — the run console: what the built program prints, plus the
-///                     run banner and its exit status. A one-line input field
-///                     below the log feeds the program's stdin while it runs.
-///   Git             — status, diffs and commit output
-///   Problems        — errors/warnings pushed by clangd, as a clickable list
-///                     that jumps to the offending source location
-///   Debugger        — the debug session: debugger console, breakpoints and
-///                     the program's output while it runs under the debugger,
-///                     plus an input row feeding the debugger's console
+    /// Output area.  Seven switchable channels behind one drop-down:
+    ///
+    ///   Clangd Log      — the language server's own log (stderr + window/logMessage)
+    ///   Build Log       — compiler output and IDE file operations
+    ///   Program Output  — the run console: what the built program prints, plus the
+    ///                     run banner and its exit status. A one-line input field
+    ///                     below the log feeds the program's stdin while it runs.
+    ///   Git             — status, diffs and commit output
+    ///   Problems        — errors/warnings pushed by clangd, as a clickable list
+    ///                     that jumps to the offending source location
+    ///   Debugger        — the debug session: debugger console, breakpoints and
+    ///                     the program's output while it runs under the debugger,
+    ///                     plus an input row feeding the debugger's console
+    ///   Plugins         — plugin load/unload messages and plugin command output
 ///
 /// Deliberately a plain QWidget (not a QDockWidget): the panel lives inside
 /// the main window's splitter layout and can never be undocked into a
@@ -54,6 +55,7 @@ public:
         ChannelGit = 3,      // git status / diff / commit
         ChannelProblems = 4, // diagnostics list
         ChannelDebug = 5,    // debug session console
+        ChannelPlugins = 6,  // plugin load/unload + plugin command output
     };
 
     explicit OutputPanel(QWidget* parent = nullptr);
@@ -68,6 +70,9 @@ public:
     void appendGitOutput(const QString& text);
     /// Append a line to the debugger channel.
     void appendDebugOutput(const QString& text);
+    /// Append a line to the plugins channel (load messages and plugin
+    /// command output routed through IdeServices::log).
+    void appendPluginOutput(const QString& text);
     /// Replace the Problems list. An empty list shows "no problems".
     void setProblems(const QList<ProblemEntry>& problems);
 
@@ -85,9 +90,10 @@ public:
     /// IDE owns is running; the Console Pauser mode runs in its own console
     /// and never touches this field).
     void setProgramInputEnabled(bool enabled);
-    /// Show/hide the program input row entirely. Only the captured Program
-    /// Output mode feeds stdin; Console Pauser and external/embedded
-    /// terminals have no IDE-side input, so the Send row is hidden there.
+    /// Show/hide the program input row entirely. The captured Program
+    /// Output mode and embedded terminals drive the run through this field;
+    /// Console Pauser and non-embedded terminals (own console window) have
+    /// no IDE-side stdin and hide the row.
     void setProgramInputVisible(bool visible);
     /// Enable/disable the debugger-input field (enabled while a debug
     /// session is live).
@@ -132,5 +138,6 @@ private:
     QLineEdit* debuggerInput_ = nullptr;  // raw commands for the live session
     QPlainTextEdit* gitLog_;
     QPlainTextEdit* debugLog_;
+    QPlainTextEdit* pluginLog_;
     QTreeWidget* problems_;
 };
