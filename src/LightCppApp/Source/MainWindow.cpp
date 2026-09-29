@@ -431,6 +431,10 @@ MainWindow::MainWindow(QWidget* parent)
         debugger_->writeCommand(text);
     });
     connect(tabWidget_, &QTabWidget::currentChanged, [this](int) {
+        // Whatever made this tab current — opening a file, switching or
+        // closing tabs — the git pane must follow the active file, or a
+        // non-repository directory keeps showing the previous repo's branch.
+        syncGitWorkingDirectory();
         if (auto* ed = currentEditor()) {
             statusLanguage_->setText(languageFromSuffix(ed->filePath()));
             statusFile_->setText(ed->filePath().isEmpty()
