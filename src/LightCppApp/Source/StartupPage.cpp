@@ -1,5 +1,5 @@
 // StartupPage — the start page shown instead of an auto-opened "Untitled"
-// editor tab (recent files + quick actions).
+// editor tab (recent files, quick actions, and the toolchain/kit checks).
 
 #include "LightCpp/App/StartupPage.hpp"
 
@@ -10,6 +10,7 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QPushButton>
+#include <QTimer>
 #include <QVBoxLayout>
 
 StartupPage::StartupPage(const QStringList& recentFiles, QWidget* parent)
@@ -61,6 +62,7 @@ StartupPage::StartupPage(const QStringList& recentFiles, QWidget* parent)
     layout->addWidget(recentHeader);
 
     recentList_ = new QListWidget(this);
+    recentList_->setObjectName(QStringLiteral("startupRecentList"));
     recentList_->setSelectionMode(QAbstractItemView::SingleSelection);
     recentList_->setFrameShape(QFrame::StyledPanel);
     for (const QString& path : recentFiles) {
@@ -95,6 +97,77 @@ StartupPage::StartupPage(const QStringList& recentFiles, QWidget* parent)
                 }
             });
 
-    // Keep the block from stretching over the whole page height.
-    layout->addStretch(0);
+    // --- toolchain / kit checks ------------------------------------------
+    auto* checkHeader = new QLabel(tr("Toolchains & Kits"), this);
+    checkHeader->setFont(headerFont);
+    layout->addWidget(checkHeader);
+
+    checkStatus_ = new QLabel(tr("Not checked."), this);
+    checkStatus_->setObjectName(QStringLiteral("startupCheckStatus"));
+    layout->addWidget(checkStatus_);
+
+    checkList_ = new QListWidget(this);
+    checkList_->setObjectName(QStringLiteral("startupCheckList"));
+    checkList_->setSelectionMode(QAbstractItemView::NoSelection);
+    checkList_->setFrameShape(QFrame::StyledPanel);
+    layout->addWidget(checkList_, /*stretch*/ 1);
+}
+
+void StartupPage::runChecks(const QList<StartupCheckItem>& items)
+{
+    pendingChecks_ = items;
+    totalChecks_ = items.size();
+    failedChecks_ = 0;
+    checkList_->clear();
+    if (totalChecks_ == 0) {
+        checkStatus_->setText(tr("Nothing to check — no toolchains or kits "
+                                 "are configured."));
+        emit checksFinished(0, 0);
+        return;
+    }
+    updateCheckProgress();
+    // One item per event-loop turn: the page keeps repainting between
+    // checks, and a future per-item probe that runs a subprocess (-v) will
+    // slot in without blocking the UI.
+    QTimer::singleShot(0, this, &StartupPage::runNextCheck);
+}
+
+void StartupPage::updateCheckProgress()
+{
+    const int done = totalChecks_ - pendingChecks_.size();
+    checkStatus_->setText(
+        tr("Checking toolchains and kits... %1/%2").arg(done).arg(totalChecks_));
+}
+
+void StartupPage::runNextCheck()
+{
+    if (pendingChecks_.isEmpty()) {
+        checkStatus_->setText(
+            failedChecks_ == 0
+                ? tr("All toolchains and kits are ready.")
+                : tr("%1 of %2 have a problem — see the red rows.")
+                      .arg(failedChecks_)
+                      .arg(totalChecks_));
+        emit checksFinished(totalChecks_, failedChecks_);
+        return;
+    }
+
+    const StartupCheckItem item = pendingChecks_.takeFirst();
+    bool ok = false;
+    QString status;
+    if (item.requiresFile) {
+        ok = QFileInfo(item.detail).isFile();
+        status = ok ? tr("OK")
+                    : tr("missing: %1").arg(item.detail);
+    } else {
+        status = item.detail;  // the reason, already phrased by the caller
+    }
+    auto* row = new QListWidgetItem(
+        QStringLiteral("%1  \u2014  %2").arg(item.label, status), checkList_);
+    if (!ok) {
+        row->setForeground(Qt::red);
+        ++failedChecks_;
+    }
+    updateCheckProgress();
+    QTimer::singleShot(0, this, &StartupPage::runNextCheck);
 }

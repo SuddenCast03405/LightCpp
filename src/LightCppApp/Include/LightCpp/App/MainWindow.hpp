@@ -16,6 +16,7 @@
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
+#include "LightCpp/App/StartupPage.hpp"
 #include "LightCpp/Plugin/Plugin.hpp"
 #include "LightCpp/Plugin/PluginManager.hpp"
 #include "LightCpp/Plugin/PluginTypes.hpp"
@@ -39,7 +40,6 @@ class QAction;
 class QActionGroup;
 class QProcess;
 class QTimer;
-class StartupPage;
 namespace LightCpp::App {
 class BatchFormatter;
 class CodeFormatter;
@@ -263,6 +263,11 @@ private:
     /// Remove the start page tab (if it is still up) and delete it. Called
     /// once the user picked something to do from it.
     void closeStartupTab();
+    /// The environment check plan for the start page: one row per toolchain
+    /// (its compiler exists) and one per enabled kit (its toolchain
+    /// reference resolves and its compiler exists).
+    [[nodiscard]] QList<StartupPage::StartupCheckItem>
+    buildStartupChecks() const;
     /// The start page tab while it is up; auto-nulls when the user closes
     /// the tab by hand.
     QPointer<StartupPage> startupTab_;

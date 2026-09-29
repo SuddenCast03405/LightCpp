@@ -428,11 +428,12 @@ TEST(SettingsJson, PluginDisableListsParseAndRoundTrip)
 
 TEST(SettingsJson, StartupPagePrefsParseAndRoundTrip)
 {
-    // Absent -> defaults: empty recents, page on.
+    // Absent -> defaults: empty recents, page on, checks on.
     Preferences fresh;
     fromJson(QJsonObject{{"type", "preferences"}}, fresh);
     EXPECT_TRUE(fresh.recentFiles.isEmpty());
     EXPECT_TRUE(fresh.showStartupPage);
+    EXPECT_TRUE(fresh.checkToolchainsAtStartup);
 
     // Present -> parsed, and survives a write/read round trip.
     Preferences prefs;
@@ -440,6 +441,7 @@ TEST(SettingsJson, StartupPagePrefsParseAndRoundTrip)
                  {"type", "preferences"},
                  {"general", QJsonObject{
                                  {"showStartupPage", false},
+                                 {"checkToolchainsAtStartup", false},
                                  {"recentFiles",
                                   QJsonArray{"E:/demo/main.cpp",
                                              "E:/demo/CMakeLists.txt"}}}}},
@@ -448,6 +450,7 @@ TEST(SettingsJson, StartupPagePrefsParseAndRoundTrip)
     EXPECT_EQ(prefs.recentFiles[0], "E:/demo/main.cpp");
     EXPECT_EQ(prefs.recentFiles[1], "E:/demo/CMakeLists.txt");
     EXPECT_FALSE(prefs.showStartupPage);
+    EXPECT_FALSE(prefs.checkToolchainsAtStartup);
 
     const Preferences roundTripped = [&] {
         Preferences p;
@@ -456,6 +459,8 @@ TEST(SettingsJson, StartupPagePrefsParseAndRoundTrip)
     }();
     EXPECT_EQ(roundTripped.recentFiles, prefs.recentFiles);
     EXPECT_EQ(roundTripped.showStartupPage, prefs.showStartupPage);
+    EXPECT_EQ(roundTripped.checkToolchainsAtStartup,
+              prefs.checkToolchainsAtStartup);
 
     // Wrong type -> untouched defaults.
     Preferences guarded;

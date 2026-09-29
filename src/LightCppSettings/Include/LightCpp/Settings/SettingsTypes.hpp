@@ -206,6 +206,11 @@ struct Preferences {
     QStringList detectionPriority;   ///< modelled; detection order is fixed
     QString lineEndingDefault;       ///< "auto" | "LF" | "CRLF"
 
+    /// When true (default), the start-up page checks every toolchain and
+    /// enabled kit when it opens (compiler files exist, kit toolchain
+    /// references resolve) and shows the progress inline.
+    bool checkToolchainsAtStartup = true;
+
     /// When true, start-up checks the default kit's compilers and offers to
     /// open the settings when one cannot be found.
     bool checkCompilersAtStartup = true;

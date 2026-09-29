@@ -844,6 +844,14 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
            "launch: it lists recently opened files and projects and the "
            "four ways to begin. When off, an empty Untitled editor opens."));
     generalForm->addRow(QStringLiteral(), showStartupPage_);
+    checkToolchainsAtStartup_ =
+        makeCheck(QStringLiteral("prefs.general.checkToolchainsAtStartup"),
+                  tr("Check toolchains and kits at start-up"));
+    checkToolchainsAtStartup_->setToolTip(
+        tr("When enabled, the start-up page verifies every toolchain and "
+           "enabled kit when it opens (compiler files exist, kit "
+           "toolchain references resolve) and shows the progress inline."));
+    generalForm->addRow(QStringLiteral(), checkToolchainsAtStartup_);
     runOutputMode_ = makeCombo(QStringLiteral("prefs.run.output"), false);
     runOutputMode_->addItem(tr("Program Output"), QStringLiteral("program"));
     runOutputMode_->addItem(tr("Console Pauser"), QStringLiteral("consolePauser"));
@@ -1999,6 +2007,7 @@ void SettingsDialog::loadPreferencesPage(const Settings::Preferences& prefs)
                                            : prefs.lineEndingDefault);
     checkCompilersAtStartup_->setChecked(prefs.checkCompilersAtStartup);
     showStartupPage_->setChecked(prefs.showStartupPage);
+    checkToolchainsAtStartup_->setChecked(prefs.checkToolchainsAtStartup);
     // Fill the editable terminal table from the settings. The guard keeps
     // itemChanged from treating this as a user edit; ids ride in the name
     // item's UserRole so the selection survives a reload.
@@ -2060,6 +2069,7 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->lineEndingDefault = lineEndingDefault_->currentText();
     prefs->checkCompilersAtStartup = checkCompilersAtStartup_->isChecked();
     prefs->showStartupPage = showStartupPage_->isChecked();
+    prefs->checkToolchainsAtStartup = checkToolchainsAtStartup_->isChecked();
     // recentFiles is not edited here: it is carried through from the loaded
     // state, so saving the dialog never wipes the list.
     prefs->programOutput = runOutputMode_->currentData().toString();

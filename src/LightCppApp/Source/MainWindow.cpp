@@ -656,6 +656,12 @@ void MainWindow::openStartupTab()
         closeStartupTab();
         onOpenFolder();
     });
+    // The environment check (preferences.general.checkToolchainsAtStartup)
+    // runs one row per event-loop turn on the page itself, so the progress
+    // line advances visibly.
+    if (settings_->preferences().checkToolchainsAtStartup) {
+        page->runChecks(buildStartupChecks());
+    }
 }
 
 void MainWindow::closeStartupTab()
@@ -671,6 +677,55 @@ void MainWindow::closeStartupTab()
     }
     // removeTab does not delete: drop the stateless page right away.
     page->deleteLater();
+}
+
+QList<StartupPage::StartupCheckItem> MainWindow::buildStartupChecks() const
+{
+    using Item = StartupPage::StartupCheckItem;
+    QList<Item> items;
+
+    // One row per toolchain: the C++ compiler is the one that matters, the
+    // C compiler is the fallback thing to name when there is nothing else.
+    for (const LightCpp::Settings::Toolchain& toolchain : settings_->toolchains()) {
+        Item item;
+        item.label = tr("Toolchain %1").arg(toolchain.name.isEmpty()
+                                                ? toolchain.id
+                                                : toolchain.name);
+        item.detail = !toolchain.cppCompiler.isEmpty()
+                          ? toolchain.cppCompiler
+                          : toolchain.cCompiler;
+        item.requiresFile = true;
+        if (item.detail.isEmpty()) {
+            item.requiresFile = false;
+            item.detail = tr("no compiler configured");
+        }
+        items.append(item);
+    }
+
+    // One row per enabled kit. kits() already resolved inheritToolchain,
+    // so an unresolved toolchain reference shows up as empty compilers —
+    // but naming the missing id is far more useful, so check it first.
+    for (const LightCpp::Settings::Kit& kit : settings_->kits()) {
+        if (!kit.enabled) {
+            continue;
+        }
+        Item item;
+        item.label = tr("Kit %1").arg(kit.name.isEmpty() ? kit.id : kit.name);
+        if (kit.inheritToolchain && !kit.toolchainId.isEmpty()
+            && !settings_->toolchain(kit.toolchainId).has_value()) {
+            item.requiresFile = false;
+            item.detail = tr("toolchain '%1' not found").arg(kit.toolchainId);
+        } else if (kit.cppCompiler.isEmpty() && kit.cCompiler.isEmpty()) {
+            item.requiresFile = false;
+            item.detail = tr("no compiler configured");
+        } else {
+            item.detail = !kit.cppCompiler.isEmpty() ? kit.cppCompiler
+                                                     : kit.cCompiler;
+            item.requiresFile = true;
+        }
+        items.append(item);
+    }
+    return items;
 }
 
 void MainWindow::openFromRecent(const QString& path)
