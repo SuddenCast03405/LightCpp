@@ -426,6 +426,46 @@ TEST(SettingsJson, PluginDisableListsParseAndRoundTrip)
     EXPECT_TRUE(guarded.disabledPlugins.isEmpty());
 }
 
+TEST(SettingsJson, StartupPagePrefsParseAndRoundTrip)
+{
+    // Absent -> defaults: empty recents, page on.
+    Preferences fresh;
+    fromJson(QJsonObject{{"type", "preferences"}}, fresh);
+    EXPECT_TRUE(fresh.recentFiles.isEmpty());
+    EXPECT_TRUE(fresh.showStartupPage);
+
+    // Present -> parsed, and survives a write/read round trip.
+    Preferences prefs;
+    fromJson(QJsonObject{
+                 {"type", "preferences"},
+                 {"general", QJsonObject{
+                                 {"showStartupPage", false},
+                                 {"recentFiles",
+                                  QJsonArray{"E:/demo/main.cpp",
+                                             "E:/demo/CMakeLists.txt"}}}}},
+             prefs);
+    ASSERT_EQ(prefs.recentFiles.size(), 2);
+    EXPECT_EQ(prefs.recentFiles[0], "E:/demo/main.cpp");
+    EXPECT_EQ(prefs.recentFiles[1], "E:/demo/CMakeLists.txt");
+    EXPECT_FALSE(prefs.showStartupPage);
+
+    const Preferences roundTripped = [&] {
+        Preferences p;
+        fromJson(toJson(prefs), p);
+        return p;
+    }();
+    EXPECT_EQ(roundTripped.recentFiles, prefs.recentFiles);
+    EXPECT_EQ(roundTripped.showStartupPage, prefs.showStartupPage);
+
+    // Wrong type -> untouched defaults.
+    Preferences guarded;
+    fromJson(QJsonObject{{"type", "preferences"},
+                          {"general", QJsonObject{{"recentFiles", 42}}}},
+             guarded);
+    EXPECT_TRUE(guarded.recentFiles.isEmpty());
+    EXPECT_TRUE(guarded.showStartupPage);
+}
+
 // ---------------------------------------------------------------------------
 // Store: layers, merging, resolution
 // ---------------------------------------------------------------------------

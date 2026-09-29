@@ -245,6 +245,12 @@ struct Preferences {
     /// still loaded (the locked dll): deleted on the next start, before
     /// loading. Lua scripts are deleted right away and never listed here.
     QStringList pendingPluginDeletes;
+
+    /// Files and project descriptors opened recently, most recent first
+    /// (absolute paths). Feeds the start-up page; capped at a short list.
+    QStringList recentFiles;
+    /// When true (default), the start-up page shows once at launch.
+    bool showStartupPage = true;
 };
 
 // ---------------------------------------------------------------------------

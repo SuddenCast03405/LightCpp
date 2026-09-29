@@ -13,6 +13,7 @@
 #include "LightCpp/App/LibClangCompleter.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/App/SettingsDialog.hpp"
+#include "LightCpp/App/StartupPage.hpp"
 #include "LightCpp/App/ToolchainPaths.hpp"
 #include "LightCpp/Plugin/ProjectBackend.hpp"
 #include "LightCpp/Project/CompilerDiagnostics.hpp"
@@ -444,7 +445,6 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     resize(1280, 800);
-    onNewFile();  // start with an empty editor
     updateProjectActions();  // nothing is open yet, so most of Project is greyed out
 
     // Git runs on demand: nothing polls the working tree behind the user's
@@ -491,6 +491,15 @@ MainWindow::MainWindow(QWidget* parent)
     // may customize menus (the zh-cn language pack does) and they fill the
     // plugin management panel.
     loadPlugins();
+
+    // The start page takes the place of the auto-opened "Untitled" editor
+    // tab; the old behaviour stays available behind the preference.
+    if (settings_->preferences().showStartupPage) {
+        openStartupTab();
+    } else {
+        onNewFile();  // start with an empty editor
+    }
+    updateProjectActions();
 
     // The start-up compiler check runs once the event loop is up: asking
     // from inside the constructor would open a dialog before the window is
@@ -611,6 +620,158 @@ bool MainWindow::persistPluginLists(const QStringList& disabled,
     QJsonObject obj;
     obj.insert(QStringLiteral("type"), QStringLiteral("preferences"));
     return save(QJsonDocument(apply(obj, disabled, pendingDeletes)));
+}
+
+// ---------------------------------------------------------------------------
+// Start page / recent files
+// ---------------------------------------------------------------------------
+void MainWindow::openStartupTab()
+{
+    if (startupTab_ != nullptr
+        && tabWidget_->indexOf(startupTab_) >= 0) {
+        // Already up (e.g. a settings reload ran this again): focus it.
+        tabWidget_->setCurrentIndex(tabWidget_->indexOf(startupTab_));
+        return;
+    }
+    startupTab_ = nullptr;  // stale pointer to a page that is going away
+    auto* page =
+        new StartupPage(settings_->preferences().recentFiles, tabWidget_);
+    startupTab_ = page;
+    tabWidget_->setCurrentIndex(tabWidget_->addTab(page, tr("Start Page")));
+    connect(page, &StartupPage::recentActivated, this,
+            &MainWindow::openFromRecent);
+    connect(page, &StartupPage::newFileRequested, this, [this] {
+        closeStartupTab();
+        onNewFile();
+    });
+    connect(page, &StartupPage::openFileRequested, this, [this] {
+        closeStartupTab();
+        onOpenFile();
+    });
+    connect(page, &StartupPage::openProjectRequested, this, [this] {
+        closeStartupTab();
+        onOpenProject();
+    });
+    connect(page, &StartupPage::openFolderRequested, this, [this] {
+        closeStartupTab();
+        onOpenFolder();
+    });
+}
+
+void MainWindow::closeStartupTab()
+{
+    StartupPage* page = startupTab_;
+    startupTab_ = nullptr;
+    if (page == nullptr) {
+        return;
+    }
+    const int index = tabWidget_->indexOf(page);
+    if (index >= 0) {
+        tabWidget_->removeTab(index);
+    }
+    // removeTab does not delete: drop the stateless page right away.
+    page->deleteLater();
+}
+
+void MainWindow::openFromRecent(const QString& path)
+{
+    closeStartupTab();
+    if (isProjectDescriptorPath(path)) {
+        openProjectFile(path, true);
+    } else {
+        onFileActivated(path);
+    }
+}
+
+bool MainWindow::isProjectDescriptorPath(const QString& path)
+{
+    const QFileInfo info(path);
+    if (info.fileName().compare(QStringLiteral("CMakeLists.txt"),
+                                Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    // In step with FolderContents' descriptor search: the formats the
+    // project-backend plugins claim.
+    const QString suffix = info.suffix().toLower();
+    return suffix == QLatin1String("dev") || suffix == QLatin1String("vcxproj")
+        || suffix == QLatin1String("vcproj") || suffix == QLatin1String("dsw")
+        || suffix == QLatin1String("dsp");
+}
+
+void MainWindow::noteRecentFile(const QString& path)
+{
+    const QFileInfo info(path);
+    if (!info.isFile()) {
+        return;  // untitled buffers and virtual lint paths never land here
+    }
+    const QString absolute = info.absoluteFilePath();
+    const LightCpp::Settings::Preferences prefs = settings_->preferences();
+    QStringList recent = prefs.recentFiles;
+    recent.removeAll(absolute);
+    recent.prepend(absolute);
+    while (recent.size() > kMaxRecentFiles) {
+        recent.removeLast();
+    }
+    persistGeneralPrefs(recent, prefs.showStartupPage);
+}
+
+bool MainWindow::persistGeneralPrefs(const QStringList& recentFiles,
+                                     bool showStartupPage)
+{
+    const QString path =
+        QDir(LightCpp::Settings::SettingsStore::baseConfigDirectory())
+            .filePath(QStringLiteral("preferences.json"));
+    // Surgical update: read the document, replace only the "general" key of
+    // the preferences document, leave everything else exactly as it is.
+    // The file may be a single document or an array of documents.
+    QByteArray raw;
+    QFile file(path);
+    if (file.open(QIODevice::ReadOnly)) {
+        raw = file.readAll();
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(raw);
+    QJsonArray recentArray;
+    for (const QString& entry : recentFiles) {
+        recentArray.append(entry);
+    }
+    const auto apply = [&recentArray, showStartupPage](const QJsonObject& obj) {
+        QJsonObject general = obj.value(QLatin1String("general")).toObject();
+        // Keep the flag this helper does not manage exactly where it was.
+        if (!general.contains(QLatin1String("checkCompilersAtStartup"))) {
+            general.insert(QStringLiteral("checkCompilersAtStartup"), true);
+        }
+        general.insert(QStringLiteral("recentFiles"), recentArray);
+        general.insert(QStringLiteral("showStartupPage"), showStartupPage);
+        QJsonObject out = obj;
+        out.insert(QStringLiteral("general"), general);
+        return out;
+    };
+    const auto save = [this, &path](const QJsonDocument& document) {
+        const bool ok =
+            LightCpp::Settings::SettingsStore::writeDocument(path, document);
+        if (ok && settings_ != nullptr) {
+            settings_->reload();
+        }
+        return ok;
+    };
+    if (doc.isArray()) {
+        QJsonArray arr = doc.array();
+        for (int i = 0; i < arr.size(); ++i) {
+            const QJsonObject obj = arr.at(i).toObject();
+            if (obj.value(QStringLiteral("type")).toString()
+                == QLatin1String("preferences")) {
+                arr[i] = apply(obj);
+            }
+        }
+        return save(QJsonDocument(arr));
+    }
+    if (doc.isObject()) {
+        return save(QJsonDocument(apply(doc.object())));
+    }
+    // No usable document yet: create a minimal preferences document.
+    QJsonObject obj;
+    obj.insert(QStringLiteral("type"), QStringLiteral("preferences"));
+    return save(QJsonDocument(apply(obj)));
 }
 
 QList<MainWindow::PluginCandidate> MainWindow::pluginCandidates() const
@@ -2020,6 +2181,12 @@ void MainWindow::onSaveAll()
 
 void MainWindow::onCloseTab(int index)
 {
+    if (qobject_cast<StartupPage*>(tabWidget_->widget(index)) != nullptr) {
+        // The start page owns no buffer; its close goes through the shared
+        // path, which removes the tab and deletes the page.
+        closeStartupTab();
+        return;
+    }
     if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(index))) {
         if (ed->isModified()) {
             const auto reply = QMessageBox::warning(
@@ -2236,6 +2403,9 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
         if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
             if (ed->filePath() == path) {
                 tabWidget_->setCurrentIndex(i);
+                // Navigating back to an already-open file still counts as
+                // using it: move it to the top of the recent list.
+                noteRecentFile(path);
                 return ed;
             }
         }
@@ -2272,6 +2442,10 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
             .arg(toName(content.encoding))
             .arg(content.byteSize)
             .arg(content.hadBom ? QStringLiteral(", BOM") : QString()));
+
+    // A file that really opened goes to the top of the recent list the
+    // start-up page shows.
+    noteRecentFile(path);
 
     // Push the freshly opened document to the language server — unless the
     // large-file parse limit says even that is too much.
@@ -3128,6 +3302,9 @@ void MainWindow::openProjectFile(const QString& path, bool showInExplorer)
     }
 
     setWindowTitle(QStringLiteral("LightC++ — %1").arg(projectDisplayName()));
+    // The descriptor goes on top of the recent list (the start-up page
+    // routes it back through openFromRecent on the next launch).
+    noteRecentFile(info.absoluteFilePath());
     updateProjectActions();
     syncGitWorkingDirectory();
     // The project's own config/ directory (if any) now overlays the

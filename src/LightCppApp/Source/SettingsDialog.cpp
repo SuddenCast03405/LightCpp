@@ -836,6 +836,14 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
         tr("When enabled, start-up verifies the default kit's compilers and "
            "offers to open the settings when one is missing."));
     generalForm->addRow(QStringLiteral(), checkCompilersAtStartup_);
+    showStartupPage_ =
+        makeCheck(QStringLiteral("prefs.general.showStartupPage"),
+                  tr("Show the start-up page at launch"));
+    showStartupPage_->setToolTip(
+        tr("The start page replaces the auto-opened Untitled tab at "
+           "launch: it lists recently opened files and projects and the "
+           "four ways to begin. When off, an empty Untitled editor opens."));
+    generalForm->addRow(QStringLiteral(), showStartupPage_);
     runOutputMode_ = makeCombo(QStringLiteral("prefs.run.output"), false);
     runOutputMode_->addItem(tr("Program Output"), QStringLiteral("program"));
     runOutputMode_->addItem(tr("Console Pauser"), QStringLiteral("consolePauser"));
@@ -1990,6 +1998,7 @@ void SettingsDialog::loadPreferencesPage(const Settings::Preferences& prefs)
                                            ? QStringLiteral("auto")
                                            : prefs.lineEndingDefault);
     checkCompilersAtStartup_->setChecked(prefs.checkCompilersAtStartup);
+    showStartupPage_->setChecked(prefs.showStartupPage);
     // Fill the editable terminal table from the settings. The guard keeps
     // itemChanged from treating this as a user edit; ids ride in the name
     // item's UserRole so the selection survives a reload.
@@ -2050,6 +2059,9 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->detectionPriority = linesOf(encodingPriority_);
     prefs->lineEndingDefault = lineEndingDefault_->currentText();
     prefs->checkCompilersAtStartup = checkCompilersAtStartup_->isChecked();
+    prefs->showStartupPage = showStartupPage_->isChecked();
+    // recentFiles is not edited here: it is carried through from the loaded
+    // state, so saving the dialog never wipes the list.
     prefs->programOutput = runOutputMode_->currentData().toString();
     // Read the terminal table back. Rows keep the id generated for them
     // (or the one loaded from disk); a row without an id gets a fresh one.

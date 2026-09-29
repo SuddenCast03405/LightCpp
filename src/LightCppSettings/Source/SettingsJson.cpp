@@ -287,6 +287,9 @@ QJsonObject toJson(const Preferences& prefs)
     QJsonObject general;
     general.insert(QStringLiteral("checkCompilersAtStartup"),
                    prefs.checkCompilersAtStartup);
+    general.insert(QStringLiteral("showStartupPage"), prefs.showStartupPage);
+    general.insert(QStringLiteral("recentFiles"),
+                   fromStringList(prefs.recentFiles));
     object.insert(QStringLiteral("general"), general);
 
     QJsonObject shortcuts;
@@ -473,6 +476,8 @@ void fromJson(const QJsonObject& object, Preferences& out)
     if (generalValue.isObject()) {
         const QJsonObject general = generalValue.toObject();
         readBool(general, "checkCompilersAtStartup", out.checkCompilersAtStartup);
+        readBool(general, "showStartupPage", out.showStartupPage);
+        readStringList(general, "recentFiles", out.recentFiles);
     }
 
     const QJsonValue shortcutsValue = object.value(QLatin1String("shortcuts"));

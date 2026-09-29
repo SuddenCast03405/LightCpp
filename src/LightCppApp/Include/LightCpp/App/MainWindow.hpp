@@ -39,6 +39,7 @@ class QAction;
 class QActionGroup;
 class QProcess;
 class QTimer;
+class StartupPage;
 namespace LightCpp::App {
 class BatchFormatter;
 class CodeFormatter;
@@ -105,6 +106,10 @@ private slots:
     /// when the default kit's compilers cannot be found on disk, offer to
     /// open the settings. Runs once, from the event loop after show().
     void checkStartupCompilers();
+    /// A recent entry activated on the start page: project descriptors
+    /// (CMakeLists.txt, .dev, .vcxproj, ...) go to openProjectFile(),
+    /// everything else to onFileActivated().
+    void openFromRecent(const QString& path);
     void onCompileCurrentFile();
     /// Compile the active file and, if the build succeeds, run the result.
     void onCompileAndRun();
@@ -248,6 +253,31 @@ private:
     [[nodiscard]] bool fileExceeds(const QString& path, int limitMB) const;
     /// Log a disabled feature for an oversized file, once per file+feature.
     void noteLargeFile(const QString& path, const QString& feature);
+
+    // --- start page / recent files ------------------------------------------
+    /// How many entries the recent list keeps. Older ones fall off.
+    static constexpr int kMaxRecentFiles = 10;
+    /// Open the start page as the first tab — it replaces the auto-opened
+    /// "Untitled" editor when preferences.general.showStartupPage is on.
+    void openStartupTab();
+    /// Remove the start page tab (if it is still up) and delete it. Called
+    /// once the user picked something to do from it.
+    void closeStartupTab();
+    /// The start page tab while it is up; auto-nulls when the user closes
+    /// the tab by hand.
+    QPointer<StartupPage> startupTab_;
+    /// Record a successfully opened file/project at the front of the recent
+    /// list (deduplicated, capped) and persist it into preferences.json.
+    void noteRecentFile(const QString& path);
+    /// Write recentFiles / showStartupPage into the base layer's
+    /// preferences.json ("general" key), leaving every other field
+    /// untouched, then reload the store so the in-memory snapshot matches.
+    bool persistGeneralPrefs(const QStringList& recentFiles,
+                             bool showStartupPage);
+    /// true when `path` names something the IDE opens as a project:
+    /// CMakeLists.txt or a backend format (.dev/.vcxproj/.vcproj/.dsw/.dsp).
+    /// Kept in step with FolderContents' descriptor list.
+    [[nodiscard]] static bool isProjectDescriptorPath(const QString& path);
 
     CodeEditor* currentEditor() const;
     /// The tab title as shown, without the modification dot — for messages
