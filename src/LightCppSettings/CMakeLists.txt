@@ -9,6 +9,7 @@
 add_library(LightCppSettings STATIC
     Source/SettingsJson.cpp
     Source/SettingsStore.cpp
+    Source/ToolchainScanner.cpp
 )
 
 add_library(LightCpp::Settings ALIAS LightCppSettings)

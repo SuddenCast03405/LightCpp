@@ -2,6 +2,7 @@
 
 add_executable(LightCppSettingsTests
     SettingsTests.cpp
+    ToolchainScannerTests.cpp
 )
 
 target_link_libraries(LightCppSettingsTests PRIVATE

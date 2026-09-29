@@ -9,8 +9,10 @@
 
 #include "LightCpp/Settings/SettingsJson.hpp"
 #include "LightCpp/Settings/SettingsStore.hpp"
+#include "LightCpp/Settings/ToolchainScanner.hpp"
 
 #include <QCheckBox>
+#include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDoubleSpinBox>
@@ -165,54 +167,6 @@ void setToolchainPath(Settings::Toolchain* toolchain, const QString& key,
             toolchain->buildTools.insert(key, path);
         }
     }
-}
-
-/// Candidate file names per toolchain role, used by the folder scan.
-struct ScanSpec {
-    const char* key;
-    std::initializer_list<const char*> fileNames;
-};
-constexpr ScanSpec kScanSpecs[] = {
-    {"cCompiler", {"gcc.exe", "clang.exe", "cl.exe"}},
-    {"cppCompiler", {"g++.exe", "clang++.exe", "cl.exe"}},
-    {"debugger", {"gdb.exe", "lldb.exe"}},
-    {"clangd", {"clangd.exe"}},
-    {"clangFormat", {"clang-format.exe"}},
-    {"cmake", {"cmake.exe"}},
-    {"ninja", {"ninja.exe"}},
-    {"gnuMake", {"mingw32-make.exe", "make.exe"}},
-    {"msbuild", {"MSBuild.exe"}},
-};
-
-/// Fill a toolchain from the executables found in `dir`: every known tool
-/// file that exists in the folder is entered with its full path. Returns
-/// the roles filled, so the caller can report what was recognised.
-QStringList scanToolchainFolder(const QString& dir, Settings::Toolchain* out)
-{
-    QStringList filled;
-    for (const ScanSpec& spec : kScanSpecs) {
-        for (const char* fileName : spec.fileNames) {
-            const QString path = QDir(dir).filePath(QLatin1String(fileName));
-            if (!QFileInfo::exists(path)) {
-                continue;
-            }
-            // The first existing candidate wins; cl.exe below fills both
-            // compiler rows via the post-loop fix-up.
-            if (toolchainPath(*out, QLatin1String(spec.key)).isEmpty()) {
-                setToolchainPath(out, QLatin1String(spec.key), path);
-                filled.append(QLatin1String(spec.key));
-            }
-            break;  // one hit per role is enough
-        }
-    }
-    // cl.exe compiles both C and C++.
-    if (filled.contains(QLatin1String("cCompiler"))
-        && out->cppCompiler.isEmpty()
-        && out->cCompiler.endsWith(QLatin1String("cl.exe"),
-                                   Qt::CaseInsensitive)) {
-        out->cppCompiler = out->cCompiler;
-    }
-    return filled;
 }
 
 void fillStyleCombo(QComboBox* combo)
@@ -476,11 +430,11 @@ QWidget* SettingsDialog::buildToolchainsPage()
         tr("Toolchains are stored in toolchains.json of the edited layer. "
            "Kits reference them by id."));
     listPane->addWidget(toolchainList_, 1);
-    auto* scanButton = new QPushButton(tr("Identify Folder..."), this);
+    auto* scanButton = new QPushButton(tr("Find Compilers..."), this);
     scanButton->setObjectName(QStringLiteral("toolchains.identifyFolder"));
     scanButton->setToolTip(
-        tr("Pick a folder and every known tool in it (compilers, debugger, "
-           "clangd, ...) is entered into the selected toolchain."));
+        tr("Pick a folder; it is searched recursively and a new toolchain "
+           "is created for every directory that contains a compiler."));
     connect(scanButton, &QPushButton::clicked, this,
             [this] { identifyToolchainFolder(); });
     listPane->addWidget(scanButton);
@@ -1456,40 +1410,87 @@ void SettingsDialog::checkCurrentToolchain()
 
 void SettingsDialog::identifyToolchainFolder()
 {
-    if (currentToolchainIndex_ < 0
-        || currentToolchainIndex_
-            >= state(currentScope_).toolchains.size()) {
-        return;
-    }
     const QString dir = QFileDialog::getExistingDirectory(
-        this, tr("Identify tools in a folder"), QString());
+        this, tr("Find compilers in a folder"), QString());
     if (dir.isEmpty()) {
         return;
     }
-    commitToolchainForm();
-    Settings::Toolchain& toolchain =
-        state(currentScope_).toolchains[currentToolchainIndex_];
-    const QStringList filled = scanToolchainFolder(dir, &toolchain);
-    loadToolchainForm(currentToolchainIndex_);
-    markDirty();
-    if (filled.isEmpty()) {
+
+    // Scan options first: how deep to look and which folder names never
+    // to enter. The defaults mirror ToolchainScanOptions.
+    QDialog optionsDialog(this);
+    optionsDialog.setObjectName(QStringLiteral("toolchains.scanOptions"));
+    optionsDialog.setWindowTitle(tr("Scan options"));
+    auto* depthLabel = new QLabel(tr("Recursion depth:"), &optionsDialog);
+    auto* depth = new QSpinBox(&optionsDialog);
+    depth->setObjectName(QStringLiteral("toolchains.scanDepth"));
+    depth->setRange(1, 32);
+    depth->setValue(5);
+    auto* excludedLabel =
+        new QLabel(tr("Excluded folder names (comma separated):"),
+                   &optionsDialog);
+    auto* excluded = new QLineEdit(&optionsDialog);
+    excluded->setObjectName(QStringLiteral("toolchains.scanExcluded"));
+    excluded->setText(QStringLiteral("include, lib, share, libexec, var"));
+    excluded->setToolTip(
+        tr("The scan never enters folders with these names, at any depth."));
+    auto* buttons =
+        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+                             &optionsDialog);
+    connect(buttons, &QDialogButtonBox::accepted, &optionsDialog,
+            &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &optionsDialog,
+            &QDialog::reject);
+    auto* form = new QFormLayout;
+    form->addRow(depthLabel, depth);
+    form->addRow(excludedLabel, excluded);
+    auto* layout = new QVBoxLayout(&optionsDialog);
+    layout->addLayout(form);
+    layout->addWidget(buttons);
+
+    if (optionsDialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    Settings::ToolchainScanOptions scanOptions;
+    scanOptions.maxDepth = depth->value();
+    scanOptions.excludedDirectories.clear();
+    const QStringList tokens =
+        excluded->text().split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (const QString& token : tokens) {
+        const QString name = token.trimmed();
+        if (!name.isEmpty()) {
+            scanOptions.excludedDirectories.append(name);
+        }
+    }
+
+    const QList<Settings::Toolchain> found =
+        Settings::scanForToolchains(dir, scanOptions);
+    if (found.isEmpty()) {
         QMessageBox::information(
             this, tr("Identify tools"),
-            tr("No known tools were found in\n%1")
-                .arg(QDir::toNativeSeparators(dir)));
-    } else {
-        QStringList names;
-        for (const QString& key : filled) {
-            for (const ToolchainToolSpec& spec : kToolchainToolSpecs) {
-                if (key == QLatin1String(spec.key)) {
-                    names.append(tr(spec.label));
-                }
-            }
-        }
-        setStatus(tr("Identified in %1: %2")
-                      .arg(QDir::toNativeSeparators(dir),
-                           names.join(QLatin1String(", "))));
+            tr("No compilers were found under\n%1 (depth %2)")
+                .arg(QDir::toNativeSeparators(dir),
+                     QString::number(scanOptions.maxDepth)));
+        return;
     }
+
+    commitToolchainForm();
+    for (const Settings::Toolchain& scanned : found) {
+        Settings::Toolchain toolchain = scanned;
+        toolchain.id = uniqueToolchainId(QStringLiteral("found-toolchain"));
+        state(currentScope_).toolchains.append(toolchain);
+    }
+    markDirty();
+    const int firstRow =
+        static_cast<int>(state(currentScope_).toolchains.size())
+        - found.size();
+    rebuildToolchainList(firstRow);
+    loadToolchainForm(firstRow);
+    updateKitSuggestions();
+    setStatus(tr("Created %1 toolchain(s) under %2")
+                  .arg(found.size())
+                  .arg(QDir::toNativeSeparators(dir)));
 }
 
 // ---------------------------------------------------------------------------
