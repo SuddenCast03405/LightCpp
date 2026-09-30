@@ -321,6 +321,13 @@ void OutputPanel::showChannel(Channel channel)
     }
 }
 
+void OutputPanel::setServerChannelTitle(const QString& title)
+{
+    // ChannelServer is drop-down entry 0. The title follows the configured
+    // completion backend, so "Clangd Log" does not label ccls traffic.
+    channelCombo_->setItemText(int(ChannelServer), title);
+}
+
 void OutputPanel::setOutputFont(const QFont& font)
 {
     // The four log channels plus the Problems tree — everything the output

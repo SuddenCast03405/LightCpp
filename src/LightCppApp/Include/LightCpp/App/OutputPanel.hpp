@@ -99,6 +99,11 @@ public:
     /// Bring `channel` to the front.
     void showChannel(Channel channel);
 
+    /// Rename the server-log drop-down entry after the configured
+    /// completion backend ("Clangd Log" vs "ccls Log"), so the channel
+    /// label names the server that actually runs.
+    void setServerChannelTitle(const QString& title);
+
     /// Apply the settings' output font to the log channels and the Problems
     /// list. Invalid (unset) fonts are ignored.
     void setOutputFont(const QFont& font);

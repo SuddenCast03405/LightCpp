@@ -5348,6 +5348,11 @@ void MainWindow::applyPreferences()
         ? QStringLiteral("clangd") : prefs.completion.backend;
     completionRetryCount_ = qMax(0, prefs.completion.retryCount);
     completionAttempts_ = 0;
+    // Name the server-log channel after the backend that actually runs, so
+    // "Clangd Log" never labels ccls traffic (`.tmp.txt` item 3).
+    outputPanel_->setServerChannelTitle(
+        completionBackend_ == QLatin1String("ccls") ? tr("ccls Log")
+                                                    : tr("Clangd Log"));
     if (completionBackend_ == QStringLiteral("libclang")) {
         if (libClang_ != nullptr && !libClang_->isLoaded()) {
             const QString libPath = resolveLibClangPath();
