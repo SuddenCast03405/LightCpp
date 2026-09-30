@@ -26,15 +26,16 @@ struct ProblemEntry {
     QString code;
 };
 
-    /// Output area.  Eight switchable channels behind one drop-down:
+    /// Output area.  Ten switchable channels behind one drop-down:
     ///
-    ///   Clangd Log      — the language server's own log (stderr + window/logMessage)
+    ///   Clangd Output   — the clangd language server's own log
+    ///                     (stderr + window/logMessage)
     ///   Build Log       — compiler output and IDE file operations
     ///   Program Output  — the run console: what the built program prints, plus the
     ///                     run banner and its exit status. A one-line input field
     ///                     below the log feeds the program's stdin while it runs.
     ///   Git             — status, diffs and commit output
-    ///   Problems (LSP Server) — errors/warnings pushed by clangd, as a
+    ///   Problems (LSP Server) — errors/warnings pushed by the language server, as a
     ///                     clickable list that jumps to the offending source location
     ///   Problems (Compiler) — errors/warnings parsed out of the compiler's
     ///                     log (single-file compile and project build alike),
@@ -43,6 +44,12 @@ struct ProblemEntry {
     ///                     the program's output while it runs under the debugger,
     ///                     plus an input row feeding the debugger's console
     ///   Plugins         — plugin load/unload messages and plugin command output
+    ///   ccls Output     — the ccls language server's own log
+    ///   libclang Output — libclang completer chatter (load failures, parse retries)
+    ///
+    /// clangd and ccls never run at the same time (one completion backend),
+    /// but each keeps its own channel so the drop-down names the server
+    /// whose output it holds.
 ///
 /// Deliberately a plain QWidget (not a QDockWidget): the panel lives inside
 /// the main window's splitter layout and can never be undocked into a
@@ -60,12 +67,18 @@ public:
         ChannelProblemsCompiler = 5, // compiler diagnostics list
         ChannelDebug = 6,           // debug session console
         ChannelPlugins = 7,         // plugin load/unload + plugin command output
+        ChannelCcls = 8,            // ccls server log
+        ChannelLibClang = 9,        // libclang completer chatter
     };
 
     explicit OutputPanel(QWidget* parent = nullptr);
 
     /// Append a line to the clangd server log.
     void appendServerLog(const QString& text);
+    /// Append a line to the ccls server log.
+    void appendCclsOutput(const QString& text);
+    /// Append a line to the libclang completer log.
+    void appendLibClangOutput(const QString& text);
     /// Append a line to the compiler / IDE log.
     void appendBuildOutput(const QString& text);
     /// Append a line of output produced by the running program.
@@ -98,11 +111,6 @@ public:
 
     /// Bring `channel` to the front.
     void showChannel(Channel channel);
-
-    /// Rename the server-log drop-down entry after the configured
-    /// completion backend ("Clangd Log" vs "ccls Log"), so the channel
-    /// label names the server that actually runs.
-    void setServerChannelTitle(const QString& title);
 
     /// Apply the settings' output font to the log channels and the Problems
     /// list. Invalid (unset) fonts are ignored.
@@ -163,6 +171,8 @@ private:
     QToolButton* clearButton_;
     QStackedWidget* stack_;
     QPlainTextEdit* serverLog_;
+    QPlainTextEdit* cclsLog_;
+    QPlainTextEdit* libClangLog_;
     QPlainTextEdit* buildLog_;
     QPlainTextEdit* programOutput_;
     QLineEdit* programInput_ = nullptr;  // stdin for the running program

@@ -750,6 +750,15 @@ private:
     /// Set by onRestartIde(): the accepted closeEvent spawns a fresh
     /// instance, so the unsaved-file prompts still run before the restart.
     bool restartPending_ = false;
+    /// Set when a C++ plugin was enabled that is not running yet — it only
+    /// loads at the next start, so the plugin panel offers the restart.
+    bool cppReloadPending_ = false;
+    /// Route a language-server / completion-backend log line to the Output
+    /// channel of the backend it belongs to — Clangd Output, ccls Output or
+    /// libclang Output — so the three never mix in one view.
+    void appendLanguageServerLog(const QString& text);
+    /// The Output channel matching the configured completion backend.
+    [[nodiscard]] OutputPanel::Channel serverLogChannel() const;
     /// Look up an action by its objectName (the id plugins use).
     [[nodiscard]] QAction* findNamedAction(const QString& id) const;
     /// Discover and load plugins (shared libraries + Lua scripts) and log

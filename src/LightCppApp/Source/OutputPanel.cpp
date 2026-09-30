@@ -83,6 +83,8 @@ OutputPanel::OutputPanel(QWidget* parent)
     , clearButton_(new QToolButton(this))
     , stack_(new QStackedWidget(this))
     , serverLog_(makeLogView(this))
+    , cclsLog_(makeLogView(this))
+    , libClangLog_(makeLogView(this))
     , buildLog_(makeLogView(this))
     , programOutput_(makeLogView(this))
     , gitLog_(makeLogView(this))
@@ -100,7 +102,7 @@ OutputPanel::OutputPanel(QWidget* parent)
 
     // The drop-down switches which view is on screen; each channel keeps its
     // own buffer, so switching never mixes clangd chatter into build output.
-    channelCombo_->addItem(tr("Clangd Log"));       // ChannelServer
+    channelCombo_->addItem(tr("Clangd Output"));    // ChannelServer
     channelCombo_->addItem(tr("Build Log"));        // ChannelBuild
     channelCombo_->addItem(tr("Program Output"));   // ChannelProgram
     channelCombo_->addItem(tr("Git"));              // ChannelGit
@@ -108,6 +110,8 @@ OutputPanel::OutputPanel(QWidget* parent)
     channelCombo_->addItem(tr("Problems (Compiler)"));         // ChannelProblemsCompiler
     channelCombo_->addItem(tr("Debugger"));         // ChannelDebug
     channelCombo_->addItem(tr("Plugins"));          // ChannelPlugins
+    channelCombo_->addItem(tr("ccls Output"));      // ChannelCcls
+    channelCombo_->addItem(tr("libclang Output"));  // ChannelLibClang
     channelCombo_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     channelCombo_->setToolTip(tr("Choose what the output area shows"));
     connect(channelCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -129,6 +133,8 @@ OutputPanel::OutputPanel(QWidget* parent)
 
     // --- stacked views ---------------------------------------------------
     serverLog_->setPlaceholderText(tr("No language server output yet."));
+    cclsLog_->setPlaceholderText(tr("No ccls output yet."));
+    libClangLog_->setPlaceholderText(tr("No libclang output yet."));
     buildLog_->setPlaceholderText(tr("No build output yet."));
     programOutput_->setPlaceholderText(tr("No program output yet."));
     gitLog_->setPlaceholderText(tr("No git output yet."));
@@ -161,6 +167,8 @@ OutputPanel::OutputPanel(QWidget* parent)
 
     pluginLog_->setPlaceholderText(tr("No plugin output yet."));
     stack_->addWidget(pluginLog_);      // ChannelPlugins
+    stack_->addWidget(cclsLog_);        // ChannelCcls
+    stack_->addWidget(libClangLog_);    // ChannelLibClang
 
     // Both Problems channels share the same tree shape and click behaviour:
     // single click jumps, like the problem lists in other IDEs.
@@ -208,6 +216,16 @@ OutputPanel::OutputPanel(QWidget* parent)
 void OutputPanel::appendServerLog(const QString& text)
 {
     serverLog_->appendPlainText(text);
+}
+
+void OutputPanel::appendCclsOutput(const QString& text)
+{
+    cclsLog_->appendPlainText(text);
+}
+
+void OutputPanel::appendLibClangOutput(const QString& text)
+{
+    libClangLog_->appendPlainText(text);
 }
 
 void OutputPanel::appendBuildOutput(const QString& text)
@@ -319,13 +337,6 @@ void OutputPanel::showChannel(Channel channel)
         QSignalBlocker blocker(channelCombo_);
         channelCombo_->setCurrentIndex(index);
     }
-}
-
-void OutputPanel::setServerChannelTitle(const QString& title)
-{
-    // ChannelServer is drop-down entry 0. The title follows the configured
-    // completion backend, so "Clangd Log" does not label ccls traffic.
-    channelCombo_->setItemText(int(ChannelServer), title);
 }
 
 void OutputPanel::setOutputFont(const QFont& font)

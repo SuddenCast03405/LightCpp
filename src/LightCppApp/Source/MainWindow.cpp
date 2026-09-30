@@ -231,11 +231,12 @@ MainWindow::MainWindow(QWidget* parent)
     connect(lintDebounceTimer_, &QTimer::timeout,
             this, &MainWindow::onLintTimerTimeout);
     // The server's own log (stderr + window/logMessage) goes to its own
-    // channel, so it never drowns out compiler output.
-    connect(lsp_, &LightCpp::App::LanguageServerClient::serverLog,
-            outputPanel_, &OutputPanel::appendServerLog);
+    // channel, so it never drowns out compiler output. The channel follows
+    // the configured backend: Clangd Output, ccls Output or libclang Output.
+    connect(lsp_, &LightCpp::App::LanguageServerClient::serverLog, this,
+            [this](const QString& text) { appendLanguageServerLog(text); });
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverStarted, [this] {
-        outputPanel_->appendServerLog(tr("clangd started"));
+        appendLanguageServerLog(tr("language server started"));
         // Open the documents that are already in tabs. Use lintPath so
         // unsaved (untitled) buffers get their virtual path pushed too.
         for (int i = 0; i < tabWidget_->count(); ++i) {
@@ -288,7 +289,7 @@ MainWindow::MainWindow(QWidget* parent)
         const auto prev = lastCounts.value(key, qMakePair(-1, -1));
         if (prev.first != errors || prev.second != warnings) {
             lastCounts.insert(key, qMakePair(errors, warnings));
-            outputPanel_->appendServerLog(
+            appendLanguageServerLog(
                 tr("%1: %2 error(s), %3 warning(s)")
                     .arg(QFileInfo(filePath).fileName())
                     .arg(errors).arg(warnings));
@@ -337,7 +338,7 @@ MainWindow::MainWindow(QWidget* parent)
         if (!location.isValid()) {
             // Common and expected: the click landed on whitespace, a keyword
             // or a local. Say so instead of looking like nothing happened.
-            outputPanel_->appendServerLog(
+            appendLanguageServerLog(
                 tr("No definition found at that position."));
             return;
         }
@@ -345,9 +346,9 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverFailed,
             this, [this](const QString& message) {
-        outputPanel_->appendServerLog(tr("language server error: %1").arg(message));
+        appendLanguageServerLog(tr("language server error: %1").arg(message));
         // Surface the reason instead of leaving the user with a silent pane.
-        outputPanel_->showChannel(OutputPanel::ChannelServer);
+        outputPanel_->showChannel(serverLogChannel());
         actSyntaxCheck_->setChecked(false);
         // A completion was on its way: burn one retry attempt on bringing
         // the server back up. Bounded by preferences.completion.retryCount.
@@ -358,8 +359,10 @@ MainWindow::MainWindow(QWidget* parent)
 
     // --- libclang (in-process completion engine) ---
     libClang_ = new LightCpp::App::LibClangCompleter(this);
-    connect(libClang_, &LightCpp::App::LibClangCompleter::logMessage,
-            outputPanel_, &OutputPanel::appendServerLog);
+    connect(libClang_, &LightCpp::App::LibClangCompleter::logMessage, this,
+            [this](const QString& message) {
+                appendLanguageServerLog(message);
+            });
 
     // --- debugger session ---
     debugger_ = new LightCpp::App::DebuggerController(this);
@@ -913,6 +916,11 @@ void MainWindow::onPluginDisable(const QString& relPath)
             tr("Plugin disabled — takes effect after a restart: %1")
                 .arg(relPath));
     }
+    // A C++ plugin just went back onto the disable list; whatever the
+    // earlier "enable" promised, this disable is what the next start
+    // applies (and a still-running one is covered by the loaded check in
+    // refreshPluginPanel).
+    cppReloadPending_ = false;
     persistPluginLists(disabled, prefs.pendingPluginDeletes);
     refreshPluginPanel();
 }
@@ -950,6 +958,25 @@ void MainWindow::onPluginEnable(const QString& relPath)
                 tr("Plugin %1 failed to load: %2").arg(relPath, loaded.error));
         }
     } else {
+        // A C++ plugin that is not running only loads at the next start —
+        // the plugin panel shows the restart banner for it. One that is
+        // still loaded (it was disabled a moment ago and the dll cannot
+        // leave) keeps running, so no restart is needed for it.
+        const QString absolute =
+            QDir(QCoreApplication::applicationDirPath()
+                 + QStringLiteral("/plugins"))
+                .filePath(relPath);
+        const QString normalized = QDir::fromNativeSeparators(absolute);
+        bool currentlyLoaded = false;
+        if (pluginManager_ != nullptr) {
+            for (const auto& entry : pluginManager_->loaded()) {
+                if (QDir::fromNativeSeparators(entry.path) == normalized) {
+                    currentlyLoaded = true;
+                    break;
+                }
+            }
+        }
+        cppReloadPending_ = !currentlyLoaded;
         outputPanel_->appendPluginOutput(
             tr("Plugin enabled — takes effect after a restart: %1")
                 .arg(relPath));
@@ -1139,9 +1166,10 @@ void MainWindow::refreshPluginPanel()
         }
         return std::nullopt;
     };
-    // Set when a C++ plugin is disabled but still loaded: the banner then
-    // offers the restart that actually unloads it.
-    bool needsRestart = false;
+    // Set when a C++ plugin is disabled but still loaded, or was enabled
+    // without being loadable until the next start: the banner then offers
+    // the restart that applies the change.
+    bool needsRestart = cppReloadPending_;
     for (const PluginCandidate& c : candidates) {
         auto* item = new QListWidgetItem(pluginList_);
         item->setData(Qt::UserRole, c.relPath);
@@ -1224,6 +1252,32 @@ void MainWindow::refreshPluginPanel()
     }
     if (restartBanner_ != nullptr) {
         restartBanner_->setVisible(needsRestart);
+    }
+}
+
+OutputPanel::Channel MainWindow::serverLogChannel() const
+{
+    if (completionBackend_ == QLatin1String("ccls")) {
+        return OutputPanel::ChannelCcls;
+    }
+    if (completionBackend_ == QLatin1String("libclang")) {
+        return OutputPanel::ChannelLibClang;
+    }
+    return OutputPanel::ChannelServer;
+}
+
+void MainWindow::appendLanguageServerLog(const QString& text)
+{
+    switch (serverLogChannel()) {
+    case OutputPanel::ChannelCcls:
+        outputPanel_->appendCclsOutput(text);
+        break;
+    case OutputPanel::ChannelLibClang:
+        outputPanel_->appendLibClangOutput(text);
+        break;
+    default:
+        outputPanel_->appendServerLog(text);
+        break;
     }
 }
 
@@ -2674,11 +2728,11 @@ void MainWindow::onSyntaxCheckToggled(bool enabled)
 {
     if (enabled) {
         lsp_->start();
-        outputPanel_->appendServerLog(
+        appendLanguageServerLog(
             tr("Starting language server: %1").arg(lsp_->serverPath()));
     } else {
         lsp_->stop();
-        outputPanel_->appendServerLog(tr("Language server stopped"));
+        appendLanguageServerLog(tr("Language server stopped"));
         // Clear all diagnostic markers and any pending completion popups.
         pendingCompletions_.clear();
         pendingDefinitions_.clear();
@@ -3224,6 +3278,9 @@ void MainWindow::openFolder(const QString& dir)
         }
         outputPanel_->appendBuildOutput(
             tr("No project descriptor here — showing the folder on its own."));
+        // The status-bar git slot follows the folder just opened: leaving a
+        // repository behind (or entering one) must show up immediately.
+        syncGitWorkingDirectory();
         // Leaving the previous project also drops its config/ overlay; the
         // base settings apply again from here on.
         syncSettingsOverlays();
@@ -3714,6 +3771,16 @@ QString MainWindow::gitWorkingDirectory() const
     }
     if (projectKind_ == ProjectKind::DevCpp && hasDevProject_) {
         return devSummary_.projectDir;
+    }
+    // An open Explorer folder is the session's working set, and it wins
+    // over a stray editor tab: after browsing to a non-repository folder
+    // the git slot must go (bug report 2026-09-30: the branch of whatever
+    // directory the process was started in stayed on).
+    if (fileExplorer_ != nullptr) {
+        const QString root = fileExplorer_->rootPath();
+        if (!root.isEmpty() && QFileInfo::exists(root)) {
+            return root;
+        }
     }
     if (CodeEditor* ed = currentEditor(); ed != nullptr && !ed->filePath().isEmpty()) {
         return QFileInfo(ed->filePath()).absolutePath();
@@ -5063,7 +5130,7 @@ void MainWindow::applyToolchainHeaders()
     }
     lsp_->stop();
     lsp_->start();
-    outputPanel_->appendServerLog(
+    appendLanguageServerLog(
         headers.isEmpty()
             ? tr("Restarting the language server with its own headers")
             : tr("Restarting the language server for %1").arg(msvcToolchain_.label));
@@ -5091,7 +5158,7 @@ void MainWindow::requestCompletionFor(CodeEditor* ed, int line, int column,
         if (libClang_ == nullptr || !libClang_->isLoaded()) {
             // Never loaded (path missing): fall through to clangd rather
             // than pretending completion is unavailable.
-            outputPanel_->appendServerLog(
+            appendLanguageServerLog(
                 tr("libclang unavailable; completion request went to the "
                    "language server"));
         } else {
@@ -5137,7 +5204,7 @@ void MainWindow::deliverLibClangCompletion()
          lastCompletion_.column},
         &error);
     if (items.isEmpty() && !error.isEmpty()) {
-        outputPanel_->appendServerLog(error);
+        appendLanguageServerLog(error);
         if (scheduleCompletionRetry()) {
             return;  // the retry timer will call back into this
         }
@@ -5348,18 +5415,13 @@ void MainWindow::applyPreferences()
         ? QStringLiteral("clangd") : prefs.completion.backend;
     completionRetryCount_ = qMax(0, prefs.completion.retryCount);
     completionAttempts_ = 0;
-    // Name the server-log channel after the backend that actually runs, so
-    // "Clangd Log" never labels ccls traffic (`.tmp.txt` item 3).
-    outputPanel_->setServerChannelTitle(
-        completionBackend_ == QLatin1String("ccls") ? tr("ccls Log")
-                                                    : tr("Clangd Log"));
     if (completionBackend_ == QStringLiteral("libclang")) {
         if (libClang_ != nullptr && !libClang_->isLoaded()) {
             const QString libPath = resolveLibClangPath();
             if (!libPath.isEmpty()) {
                 libClang_->load(libPath);
             } else {
-                outputPanel_->appendServerLog(
+                appendLanguageServerLog(
                     tr("libclang.dll was not found next to clangd or the "
                        "executable; completion stays on clangd"));
                 completionBackend_ = QStringLiteral("clangd");
@@ -5379,7 +5441,7 @@ void MainWindow::applyPreferences()
             if (lsp_->isRunning()) {
                 lsp_->stop();
                 lsp_->start();
-                outputPanel_->appendServerLog(
+                appendLanguageServerLog(
                     tr("Language server switched to %1")
                         .arg(QDir::toNativeSeparators(serverPath)));
             }
@@ -5536,7 +5598,7 @@ void MainWindow::noteLargeFile(const QString& path, const QString& feature)
         return;
     }
     largeFileNoted_.insert(key);
-    outputPanel_->appendServerLog(
+    appendLanguageServerLog(
         tr("Large file: %1 — %2 disabled by settings.")
             .arg(QFileInfo(path).fileName(), feature));
 }
