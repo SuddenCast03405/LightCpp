@@ -2221,7 +2221,10 @@ void MainWindow::createStatusBar()
             this, &MainWindow::onEncodingChanged);
 
     statusBar()->addWidget(statusFile_, 3);
-    statusBar()->addPermanentWidget(statusGit_);
+    // statusGit_ is NOT added here: a hidden permanent widget still leaves
+    // its separator behind in the status bar, so the slot is inserted only
+    // when a repository actually reports in (onGitStatusReady) and removed
+    // again the moment it is gone.
     statusBar()->addPermanentWidget(statusLanguage_);
     statusBar()->addPermanentWidget(statusCursor_);
     statusBar()->addPermanentWidget(encodingCombo_);
@@ -3785,7 +3788,13 @@ QString MainWindow::gitWorkingDirectory() const
     if (CodeEditor* ed = currentEditor(); ed != nullptr && !ed->filePath().isEmpty()) {
         return QFileInfo(ed->filePath()).absolutePath();
     }
-    return QDir::currentPath();
+    // Nothing open: no project, no folder, no file. The user's Explorer
+    // shows "This PC" — there is no working set for git to describe, and
+    // falling back to the process's start-up directory would drag in
+    // whatever repository the IDE happened to be launched from (bug
+    // report 2026-09-30: launched from dist, git reported LightCpp while
+    // the Explorer showed "This PC"). An empty result means "no git".
+    return {};
 }
 
 void MainWindow::syncGitWorkingDirectory()
@@ -3794,6 +3803,22 @@ void MainWindow::syncGitWorkingDirectory()
         return;
     }
     const QString dir = gitWorkingDirectory();
+    if (dir.isEmpty()) {
+        // No working set at all: drop the previous directory together with
+        // the slot and the remembered status, so nothing from a repository
+        // the IDE was launched from survives.
+        if (!git_->workingDirectory().isEmpty()) {
+            git_->setWorkingDirectory(QString());
+            inRepository_ = false;
+            gitStatus_ = {};
+            statusBar()->removeWidget(statusGit_);
+            gitSlotInserted_ = false;
+            statusGit_->hide();
+            statusGit_->setToolTip(QString());
+            setGitActionsEnabled();
+        }
+        return;
+    }
     if (git_->workingDirectory() == dir) {
         return;
     }
@@ -3822,7 +3847,10 @@ void MainWindow::onGitStatusReady(const LightCpp::Project::GitStatusSummary& sum
     setGitActionsEnabled();
     if (!inRepository_) {
         // Outside a repository the slot disappears entirely instead of sitting
-        // there as an empty label.
+        // there as an empty label — removeWidget, not just hide(): a hidden
+        // widget keeps its separator line in the status bar.
+        statusBar()->removeWidget(statusGit_);
+        gitSlotInserted_ = false;
         statusGit_->hide();
         statusGit_->setToolTip(QString());
         if (gitStatusWantsFileList_) {
@@ -3837,6 +3865,19 @@ void MainWindow::onGitStatusReady(const LightCpp::Project::GitStatusSummary& sum
         return;
     }
 
+    // (Re-)insert the slot at the head of the permanent group — its place
+    // before the language/cursor/encoding widgets — then bring it up.
+    // Qt indexes the bar's TEMPORARY and PERMANENT widgets in one combined
+    // list; statusFile_ (stretch 3) is the only temporary widget, so the
+    // permanent group starts at combined index 1. insertPermanentWidget(0)
+    // would land inside the temporary region: Qt warns "Index out of range"
+    // and falls back to appending after the encoding combo. Never test
+    // parentWidget() here — removeWidget() does not reparent, so it still
+    // reports the status bar even when the slot is out of the item list.
+    if (!gitSlotInserted_) {
+        statusBar()->insertPermanentWidget(1, statusGit_);
+        gitSlotInserted_ = true;
+    }
     statusGit_->show();
     statusGit_->setText(summary.label());
     statusGit_->setToolTip(LightCpp::Project::describeGitStatus(summary));

@@ -583,6 +583,10 @@ private:
     /// Set by an explicit refresh, so the next status answer prints the whole
     /// file list while an automatic one stays to a single line.
     bool gitStatusWantsFileList_ = false;
+    /// Whether statusGit_ is currently part of the status bar's item list.
+    /// removeWidget() does not reparent, so parentWidget() cannot tell —
+    /// only this flag can, and re-inserting without it would double-insert.
+    bool gitSlotInserted_ = false;
 
     // --- open project state ---
     ProjectKind projectKind_ = ProjectKind::None;
