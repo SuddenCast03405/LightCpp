@@ -39,6 +39,7 @@ class QComboBox;
 class QAction;
 class QActionGroup;
 class QProcess;
+class QPushButton;
 class QTimer;
 namespace LightCpp::App {
 class BatchFormatter;
@@ -514,6 +515,11 @@ private:
     /// management panel.
     QTabWidget* sideTabs_ = nullptr;
     QListWidget* pluginList_ = nullptr;
+    /// The "this change needs a restart" banner above the plugin list plus
+    /// its Restart IDE button. Shown only while a C++ plugin is disabled
+    /// but still loaded — Lua plugins apply immediately.
+    QWidget* restartBanner_ = nullptr;
+    QPushButton* restartButton_ = nullptr;
     FileExplorer* fileExplorer_;
     OutputPanel* outputPanel_;
     QComboBox* encodingCombo_;
@@ -741,6 +747,9 @@ private:
     LightCpp::Plugin::PluginManager* pluginManager_ = nullptr;
     /// The Plugins menu, created lazily by the first registered command.
     class QMenu* pluginsMenu_ = nullptr;
+    /// Set by onRestartIde(): the accepted closeEvent spawns a fresh
+    /// instance, so the unsaved-file prompts still run before the restart.
+    bool restartPending_ = false;
     /// Look up an action by its objectName (the id plugins use).
     [[nodiscard]] QAction* findNamedAction(const QString& id) const;
     /// Discover and load plugins (shared libraries + Lua scripts) and log
@@ -772,6 +781,14 @@ private:
     void onPluginDisable(const QString& relPath);
     void onPluginEnable(const QString& relPath);
     void onPluginUninstall(const QString& relPath);
+    /// Restart the IDE: spawn a fresh instance and close this one. The
+    /// closeEvent save prompts still run — a cancelled close leaves the
+    /// current instance alive and drops the restart as well.
+    void onRestartIde();
+    /// Drop the Plugins-menu commands that belong to one Lua plugin
+    /// (object names "pluginCommand.<plugin>.<id>"). Hot unloading removes
+    /// the script, so its commands must not linger until a restart.
+    void removePluginCommands(const QString& pluginName);
     /// The plugins-directory-relative paths of the disabled plugins plus
     /// the files still waiting to be deleted, as read by settings_.
     [[nodiscard]] LightCpp::Settings::Preferences pluginPrefsSnapshot() const;

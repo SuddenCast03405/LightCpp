@@ -900,9 +900,12 @@ void MainWindow::onPluginDisable(const QString& relPath)
                                  .filePath(relPath);
     // Lua plugins can leave right now; shared-library plugins keep running
     // until the restart (their dll stays mapped into this process).
+    const QString normalized = QDir::fromNativeSeparators(absolute);
     if (pluginManager_ != nullptr
-        && pluginManager_->unloadRegistered(
-            QDir::fromNativeSeparators(absolute))) {
+        && pluginManager_->unloadRegistered(normalized)) {
+        // The script is gone, so its Plugins-menu entries must go with it:
+        // a lingering action would call back into a closed Lua state.
+        removePluginCommands(QFileInfo(normalized).completeBaseName());
         outputPanel_->appendPluginOutput(
             tr("Plugin disabled (unloaded): %1").arg(relPath));
     } else {
@@ -960,10 +963,10 @@ void MainWindow::onPluginUninstall(const QString& relPath)
     const QString absolute = QDir(QCoreApplication::applicationDirPath()
                                   + QStringLiteral("/plugins"))
                                  .filePath(relPath);
+    const QString normalized = QDir::fromNativeSeparators(absolute);
     const bool wasLoaded =
         pluginManager_ != nullptr
-        && pluginManager_->unloadRegistered(
-            QDir::fromNativeSeparators(absolute));
+        && pluginManager_->unloadRegistered(normalized);
 
     // Loaded C++ dlls are locked by the process and cannot be deleted (or
     // renamed) while the IDE runs — schedule the deletion for the next
@@ -984,6 +987,7 @@ void MainWindow::onPluginUninstall(const QString& relPath)
             tr("Plugin uninstalled: %1").arg(relPath));
     }
     if (wasLoaded) {
+        removePluginCommands(QFileInfo(normalized).completeBaseName());
         outputPanel_->appendPluginOutput(
             tr("Plugin unloaded: %1").arg(relPath));
     }
@@ -1081,6 +1085,29 @@ QWidget* MainWindow::createPluginPanel()
     panel->setObjectName(QStringLiteral("pluginPanel"));
     auto* layout = new QVBoxLayout(panel);
     layout->setContentsMargins(0, 0, 0, 0);
+    // A disabled C++ plugin keeps running until the restart (its dll is
+    // mapped into this process), so the panel offers the restart right
+    // where the change was made. Hidden until refreshPluginPanel() finds
+    // a plugin in that state.
+    restartBanner_ = new QWidget(panel);
+    restartBanner_->setObjectName(QStringLiteral("pluginRestartBanner"));
+    auto* bannerLayout = new QHBoxLayout(restartBanner_);
+    bannerLayout->setContentsMargins(10, 8, 10, 8);
+    bannerLayout->setSpacing(6);
+    auto* bannerLabel =
+        new QLabel(tr("A plugin change takes effect after a restart."),
+                   restartBanner_);
+    bannerLabel->setWordWrap(true);
+    restartButton_ = new QPushButton(tr("Restart IDE"), restartBanner_);
+    restartButton_->setObjectName(QStringLiteral("pluginRestartButton"));
+    restartButton_->setToolTip(
+        tr("Close this window and start LightC++ again"));
+    connect(restartButton_, &QPushButton::clicked, this,
+            [this] { onRestartIde(); });
+    bannerLayout->addWidget(bannerLabel, 1);
+    bannerLayout->addWidget(restartButton_, 0);
+    restartBanner_->hide();
+    layout->addWidget(restartBanner_);
     pluginList_ = new QListWidget(panel);
     pluginList_->setObjectName(QStringLiteral("pluginList"));
     pluginList_->setSelectionMode(QAbstractItemView::NoSelection);
@@ -1112,6 +1139,9 @@ void MainWindow::refreshPluginPanel()
         }
         return std::nullopt;
     };
+    // Set when a C++ plugin is disabled but still loaded: the banner then
+    // offers the restart that actually unloads it.
+    bool needsRestart = false;
     for (const PluginCandidate& c : candidates) {
         auto* item = new QListWidgetItem(pluginList_);
         item->setData(Qt::UserRole, c.relPath);
@@ -1121,6 +1151,9 @@ void MainWindow::refreshPluginPanel()
         layout->setSpacing(5);
         const std::optional<LightCpp::Plugin::PluginManager::Loaded> entry =
             loadedFor(c);
+        if (!c.lua && c.disabled && entry.has_value()) {
+            needsRestart = true;
+        }
         auto* nameLabel =
             new QLabel(entry.has_value() ? entry->name : c.fileName, row);
         nameLabel->setStyleSheet(QStringLiteral("font-weight: bold;"));
@@ -1188,6 +1221,9 @@ void MainWindow::refreshPluginPanel()
 
         pluginList_->setItemWidget(item, row);
         item->setSizeHint(row->sizeHint());
+    }
+    if (restartBanner_ != nullptr) {
+        restartBanner_->setVisible(needsRestart);
     }
 }
 
@@ -1336,6 +1372,39 @@ void MainWindow::registerCommand(const QString& pluginName, const QString& id,
     pluginsMenu_->addAction(action);
 }
 
+void MainWindow::removePluginCommands(const QString& pluginName)
+{
+    if (pluginsMenu_ == nullptr || pluginName.isEmpty()) {
+        return;
+    }
+    const QString prefix = QStringLiteral("pluginCommand.%1.").arg(pluginName);
+    const QList<QAction*> actions = pluginsMenu_->actions();
+    for (QAction* action : actions) {
+        if (action->objectName().startsWith(prefix, Qt::CaseInsensitive)) {
+            pluginsMenu_->removeAction(action);
+            action->deleteLater();
+        }
+    }
+    if (pluginsMenu_->actions().isEmpty()) {
+        // No plugin registers a command any more: an empty submenu is worse
+        // than none at all, so the Plugins menu itself goes away too.
+        if (QAction* menuAction = pluginsMenu_->menuAction()) {
+            menuBar()->removeAction(menuAction);
+        }
+        pluginsMenu_->deleteLater();
+        pluginsMenu_ = nullptr;
+    }
+}
+
+void MainWindow::onRestartIde()
+{
+    // Deferred to an accepted close so the unsaved-file prompts still run
+    // first: a cancelled close keeps this instance and drops the restart
+    // with it (closeEvent clears the flag).
+    restartPending_ = true;
+    close();
+}
+
 QList<MainWindow::ProjectStep> MainWindow::toProjectSteps(
     const QList<LightCpp::Plugin::BuildStep>& steps) const
 {
@@ -1401,6 +1470,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
                 if (reply == QMessageBox::Yes) {
                     onSaveFile();
                 } else if (reply == QMessageBox::Cancel) {
+                    // No restart either: the user asked to stay here.
+                    restartPending_ = false;
                     event->ignore();
                     return;
                 }
@@ -1408,6 +1479,15 @@ void MainWindow::closeEvent(QCloseEvent* event)
         }
     }
     event->accept();
+    if (restartPending_) {
+        restartPending_ = false;
+        // Start the replacement before this process goes away: same command
+        // line (minus argv[0]) and working directory. The new instance
+        // re-reads the plugin lists, so a disabled C++ plugin is gone.
+        QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                QCoreApplication::arguments().mid(1),
+                                QDir::currentPath());
+    }
 }
 
 // ---------------------------------------------------------------------------

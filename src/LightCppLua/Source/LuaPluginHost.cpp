@@ -11,6 +11,8 @@ extern "C" {
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QList>
+#include <QStringList>
 
 #include <string>
 #include <vector>
@@ -40,15 +42,48 @@ public:
     ::LightCpp::Plugin::IdeServices* services;
 };
 
+/// The menu / action texts a script rewrote, together with the values they
+/// had before the script ran. Hot-unloading a plugin (a language pack is the
+/// obvious case) has to put them back: otherwise the IDE keeps half its
+/// menus translated until the next start.
+struct UiTextUndo {
+    struct Entry {
+        QString id;
+        QString text;
+    };
+    QList<Entry> menuTitles;
+    QList<Entry> actionTexts;
+    QStringList menuTitleSeen;
+    QStringList actionTextSeen;
+
+    /// Remember `id`'s value once — the first rewrite is the one to undo.
+    void noteMenuTitle(const QString& id, const QString& original)
+    {
+        if (!menuTitleSeen.contains(id)) {
+            menuTitleSeen.append(id);
+            menuTitles.append(Entry{id, original});
+        }
+    }
+    void noteActionText(const QString& id, const QString& original)
+    {
+        if (!actionTextSeen.contains(id)) {
+            actionTextSeen.append(id);
+            actionTexts.append(Entry{id, original});
+        }
+    }
+};
+
 class UiApi {
 public:
-    UiApi() : services(nullptr) {}
+    UiApi() : services(nullptr), undo(nullptr) {}
     std::string actionText(const std::string& id) const;
     void setActionText(const std::string& id, const std::string& text);
     std::string menuTitle(const std::string& id) const;
     void setMenuTitle(const std::string& id, const std::string& title);
 
     ::LightCpp::Plugin::IdeServices* services;
+    /// Where the rewrites are recorded; owned by the plugin's Impl.
+    UiTextUndo* undo;
 };
 
 class CommandApi {
@@ -98,6 +133,8 @@ public:
     UiApi ui;
     CommandApi commands;
     SnippetApi snippets;
+    /// What the script changed in the IDE's menus — undone on unload.
+    UiTextUndo uiUndo;
 
     ExecutionResult callLifecycle(const char* functionName)
     {
@@ -120,6 +157,26 @@ public:
             sandbox->callFunction(functionIndex, 0);
         lua_pop(L, 2);  // the function reference and the plugin table
         return result;
+    }
+
+    /// Put back the menu / action texts the script rewrote. Called on unload
+    /// — before the state goes away, so a disabled language pack stops
+    /// translating the IDE immediately instead of at the next start.
+    void restoreUiTexts()
+    {
+        if (services == nullptr) {
+            return;
+        }
+        // Reverse order: a rename of a rename lands back on the original.
+        for (auto it = uiUndo.menuTitles.crbegin();
+             it != uiUndo.menuTitles.crend(); ++it) {
+            services->setMenuTitle(it->id, it->text);
+        }
+        for (auto it = uiUndo.actionTexts.crbegin();
+             it != uiUndo.actionTexts.crend(); ++it) {
+            services->setActionText(it->id, it->text);
+        }
+        uiUndo = UiTextUndo();
     }
 
     void releaseState()
@@ -439,10 +496,14 @@ std::string UiApi::actionText(const std::string& id) const
 
 void UiApi::setActionText(const std::string& id, const std::string& text)
 {
-    if (services != nullptr) {
-        services->setActionText(QString::fromStdString(id),
-                                QString::fromStdString(text));
+    if (services == nullptr) {
+        return;
     }
+    const QString key = QString::fromStdString(id);
+    if (undo != nullptr) {
+        undo->noteActionText(key, services->actionText(key));
+    }
+    services->setActionText(key, QString::fromStdString(text));
 }
 
 std::string UiApi::menuTitle(const std::string& id) const
@@ -454,10 +515,14 @@ std::string UiApi::menuTitle(const std::string& id) const
 
 void UiApi::setMenuTitle(const std::string& id, const std::string& title)
 {
-    if (services != nullptr) {
-        services->setMenuTitle(QString::fromStdString(id),
-                               QString::fromStdString(title));
+    if (services == nullptr) {
+        return;
     }
+    const QString key = QString::fromStdString(id);
+    if (undo != nullptr) {
+        undo->noteMenuTitle(key, services->menuTitle(key));
+    }
+    services->setMenuTitle(key, QString::fromStdString(title));
 }
 
 void CommandApi::registerInternal(const QString& shortcut,
@@ -551,6 +616,8 @@ bool LuaPlugin::initialize(::LightCpp::Plugin::IdeServices* /*services*/)
 void LuaPlugin::shutdown()
 {
     impl_->callLifecycle("onShutdown");
+    // The script is about to disappear: give the IDE its texts back.
+    impl_->restoreUiTexts();
     impl_->releaseState();
 }
 
@@ -582,6 +649,7 @@ LuaPluginHost::LoadResult LuaPluginHost::loadPlugin(
     impl->log.services = services;
     impl->editor.services = services;
     impl->ui.services = services;
+    impl->ui.undo = &impl->uiUndo;
     impl->commands.services = services;
     impl->commands.sandbox = impl->sandbox.get();
     // Commands registered at load time carry the file name as their owner —
