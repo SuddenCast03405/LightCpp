@@ -277,7 +277,19 @@ QList<LspCompletionItem> LibClangCompleter::complete(const Request& request,
             item.documentation = QString::fromUtf8(getCString_(brief));
             disposeString_(&brief);
         }
-        const QString dedupKey = item.label + QLatin1Char('\x1F') + item.detail;
+        // Preprocessor candidates come twice — `include "header"` and
+        // `include <header>` — with an identical TypedText, so the popup
+        // shows the same entry two times (bug report 2026-09-29). Folding
+        // the quote/bracket placeholders out of the detail makes those two
+        // share one key, while real overloads keep their distinct
+        // parameter lists.
+        QString normalizedDetail = item.detail;
+        normalizedDetail.remove(QLatin1Char('"'));
+        normalizedDetail.remove(QLatin1Char('<'));
+        normalizedDetail.remove(QLatin1Char('>'));
+        normalizedDetail.remove(QLatin1Char(' '));
+        const QString dedupKey =
+            item.label + QLatin1Char('\x1F') + normalizedDetail;
         if (!seen.contains(dedupKey)) {
             seen.insert(dedupKey);
             items.append(item);
