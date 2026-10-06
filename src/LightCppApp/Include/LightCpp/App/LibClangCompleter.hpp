@@ -11,8 +11,11 @@
 #pragma once
 
 #include <QLibrary>
+#include <QMutex>
 #include <QObject>
+#include <QQueue>
 #include <QStringList>
+#include <QThread>
 
 #include "LightCpp/App/LanguageServerClient.hpp"
 
@@ -52,8 +55,24 @@ public:
     /// Synchronous completion. Returns the items clang produced; an empty
     /// list with a non-empty `*errorOut` means the request failed (parse
     /// error, library trouble) rather than "no suggestions".
+    ///
+    /// This parses the whole translation unit — on a loaded disk that reads
+    /// every included header — so it must never be called on the GUI thread.
+    /// Use completeAsync() unless a test needs the answer inline.
     QList<LspCompletionItem> complete(const Request& request,
                                       QString* errorOut = nullptr);
+
+    /// Queue `request` for completion on a worker thread and answer through
+    /// completed(). `token` is echoed back so the caller can drop an answer
+    /// that a later keystroke already made stale.
+    ///
+    /// Only one parse runs at a time: a second request made while one is in
+    /// flight replaces nothing and simply queues behind it, and libclang's
+    /// CXIndex is not re-entered concurrently.
+    void completeAsync(Request request, quint64 token);
+
+    /// True while a parse issued through completeAsync() is in flight.
+    [[nodiscard]] bool isBusy() const;
 
     /// libclang's own version string, for the language-server log.
     [[nodiscard]] QString version() const;
@@ -62,7 +81,43 @@ signals:
     /// Diagnostic chatter from the completer (load failures, parse retries).
     void logMessage(const QString& message);
 
+    /// The answer to a completeAsync() request. `items` is empty and `error`
+    /// non-empty when the request failed rather than finding nothing.
+    void completed(quint64 token, const QList<LightCpp::App::LspCompletionItem>& items,
+                   const QString& error);
+
+    /// Internal: the parse to run, handed to the worker object. Public only
+    /// because Q_OBJECT signal plumbing lives in the header.
+    void parseRequested(LightCpp::App::LibClangCompleter* completer,
+                        const Request& request, quint64 token);
+
+public slots:
+    /// Answer arriving from the worker; re-emits completed() and starts the
+    /// next queued parse.
+    void onParseFinished(quint64 token,
+                         const QList<LightCpp::App::LspCompletionItem>& items,
+                         const QString& error);
+
 private:
+    /// One queued async request: the parse input plus the caller's token.
+    struct AsyncRequest {
+        Request request;
+        quint64 token = 0;
+    };
+
+    /// Serialises access to index_ / the resolved entry points, which are
+    /// shared between the GUI thread (load, version) and the parse worker.
+    mutable QMutex mutex_;
+    /// The worker that owns the CXIndex, created on first async request so
+    /// an IDE that never completes through libclang spawns no thread.
+    QThread* worker_ = nullptr;
+    /// Requests waiting for the worker, newest last.
+    QQueue<AsyncRequest> queue_;
+    bool parseRunning_ = false;
+
+    void ensureWorker();
+    void drainQueue();
+
     /// Layout-compatible stand-in for clang's CXString (a pointer plus an
     /// opaque flag word). Returned by value, so the exact shape matters.
     struct ClangString {

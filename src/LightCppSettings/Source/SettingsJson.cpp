@@ -282,6 +282,9 @@ QJsonObject toJson(const Preferences& prefs)
     QJsonObject lineEnding;
     lineEnding.insert(QStringLiteral("default"), prefs.lineEndingDefault);
     files.insert(QStringLiteral("lineEnding"), lineEnding);
+    files.insert(QStringLiteral("longLineMode"),
+                 prefs.longLineMode.isEmpty() ? QStringLiteral("scroll")
+                                              : prefs.longLineMode);
     object.insert(QStringLiteral("files"), files);
 
     QJsonObject general;
@@ -470,6 +473,12 @@ void fromJson(const QJsonObject& object, Preferences& out)
         if (lineEndingValue.isObject()) {
             const QJsonObject lineEnding = lineEndingValue.toObject();
             readString(lineEnding, "default", out.lineEndingDefault);
+        }
+        readString(files, "longLineMode", out.longLineMode);
+        // Anything but the two known modes means the file says nothing useful.
+        if (out.longLineMode != QLatin1String("scroll")
+            && out.longLineMode != QLatin1String("wrap")) {
+            out.longLineMode = QStringLiteral("scroll");
         }
         // Legacy "platformOverrides" objects are deliberately not read: the
         // per-platform line-ending overrides were removed from the model.

@@ -237,6 +237,46 @@ TEST(SettingsJson, ExamplePreferencesParsesFully)
     EXPECT_EQ(prefs.globalStyle, "file");
 }
 
+TEST(SettingsJson, LongLineModeReadsAndRoundTrips)
+{
+    // Absent -> the "scroll" default. Present -> parsed. Anything else ->
+    // "scroll" again, so a typo in the file cannot leave the editor in a mode
+    // the UI cannot show.
+    Preferences prefs;
+    fromJson(examplePreferencesJson(), prefs);
+    EXPECT_EQ(prefs.longLineMode, "scroll");
+
+    QJsonObject wrap = examplePreferencesJson();
+    QJsonObject files = wrap.value("files").toObject();
+    files.insert("longLineMode", "wrap");
+    wrap.insert("files", files);
+    Preferences wrapping;
+    fromJson(wrap, wrapping);
+    EXPECT_EQ(wrapping.longLineMode, "wrap");
+
+    QJsonObject bogus = examplePreferencesJson();
+    QJsonObject badFiles = bogus.value("files").toObject();
+    badFiles.insert("longLineMode", "sideways");
+    bogus.insert("files", badFiles);
+    Preferences fallback;
+    fromJson(bogus, fallback);
+    EXPECT_EQ(fallback.longLineMode, "scroll");
+
+    // Round trip: "wrap" survives toJson -> fromJson.
+    Preferences written;
+    written.longLineMode = "wrap";
+    Preferences back;
+    fromJson(toJson(written), back);
+    EXPECT_EQ(back.longLineMode, "wrap");
+
+    // An empty value is written out as the default rather than "".
+    Preferences empty;
+    empty.longLineMode.clear();
+    const QJsonObject emptyObj = toJson(empty);
+    EXPECT_EQ(emptyObj.value("files").toObject().value("longLineMode").toString(),
+              "scroll");
+}
+
 TEST(SettingsJson, ExampleToolchainAndDefaultsParse)
 {
     Toolchain toolchain;

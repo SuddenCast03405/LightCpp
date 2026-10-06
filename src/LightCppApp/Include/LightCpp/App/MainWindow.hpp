@@ -476,7 +476,14 @@ private:
     void requestCompletionFor(CodeEditor* editor, int line, int column,
                               const QString& triggerChar);
     /// Run the last completion request against libclang and show the popup.
+    /// The parse itself runs on the completer's worker thread.
     void deliverLibClangCompletion();
+    /// The libclang answer, back from the worker thread. Answers whose token
+    /// is not the newest request describe text the caret has left behind and
+    /// are dropped.
+    void onLibClangCompleted(
+        quint64 token, const QList<LightCpp::App::LspCompletionItem>& items,
+        const QString& error);
     /// Schedule one re-issue of the most recent completion request. Returns
     /// false when the retry budget (preferences.completion.retryCount) is
     /// spent or nothing is pending.
@@ -506,6 +513,10 @@ private:
     /// In-process completion engine (libclang.dll), used when the
     /// preferences name it as the backend. Created in the constructor.
     LightCpp::App::LibClangCompleter* libClang_ = nullptr;
+    /// Token of the libclang request whose answer is still wanted; bumped for
+    /// every new request so a slow parse cannot overwrite a newer popup.
+    quint64 libclangToken_ = 0;
+    quint64 libclangTokenCounter_ = 0;
 
     // --- widgets ---
     std::unique_ptr<LightCpp::Settings::SettingsStore> settings_;
@@ -717,6 +728,9 @@ private:
     int largeFileHighlightMB_ = 0;
     int largeFileIndexMB_ = 0;
     int largeFileParseMB_ = 0;
+    /// files.longLineMode == "wrap": lines longer than the editor are broken
+    /// at its edge instead of scrolling sideways.
+    bool longLinesWrap_ = false;
     /// files.encoding default for new buffers (canonical encoding name).
     QString defaultEncodingName_ = QStringLiteral("UTF-8");
     /// files.lineEnding resolved for this platform: "LF" or "CRLF".
@@ -763,6 +777,14 @@ private:
     void appendLanguageServerLog(const QString& text);
     /// The Output channel matching the configured completion backend.
     [[nodiscard]] OutputPanel::Channel serverLogChannel() const;
+    /// The Output channel of the language-server PROCESS (Clangd Output or
+    /// ccls Output), decided by the executable rather than by the current
+    /// backend setting — so a server's own messages, including its death, land
+    /// in its own pane even after the user switches backends.
+    [[nodiscard]] OutputPanel::Channel serverProcessLogChannel() const;
+    void appendServerProcessLog(const QString& text);
+    /// libclang's own chatter, always in the libclang Output pane.
+    void appendLibClangLog(const QString& text);
     /// Look up an action by its objectName (the id plugins use).
     [[nodiscard]] QAction* findNamedAction(const QString& id) const;
     /// Discover and load plugins (shared libraries + Lua scripts) and log

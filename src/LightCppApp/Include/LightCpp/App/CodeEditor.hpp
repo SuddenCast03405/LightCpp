@@ -51,6 +51,14 @@ public:
         return syntaxHighlightEnabled_;
     }
 
+    /// What a line too long for the viewport does: true wraps it at the
+    /// editor edge, false keeps one row per line and scrolls sideways.
+    void setLongLinesWrap(bool wrap);
+    [[nodiscard]] bool longLinesWrap() const noexcept
+    {
+        return longLinesWrap_;
+    }
+
     void setFilePath(const QString& path) { filePath_ = path; }
     [[nodiscard]] const QString& filePath() const noexcept { return filePath_; }
 
@@ -157,6 +165,10 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    /// Paste. Overridden so a paste cancels any pending as-you-type
+    /// completion and asks for a syntax check straight away instead of
+    /// waiting for the next keystroke to trigger one.
+    void insertFromMimeData(const QMimeData* source) override;
     /// Intercepts QEvent::ToolTip to show the diagnostic message for the
     /// text under the mouse (extra-selection tooltips don't work natively).
     bool event(QEvent* event) override;
@@ -169,6 +181,11 @@ private slots:
     void updateLineNumberAreaWidth(int newBlockCount);
     void updateLineNumberArea(const QRect& rect, int dy);
     void highlightCurrentLine();
+    /// Fold regions are recomputed on a short idle timer instead of inside
+    /// the textChanged handler: the analysis is a whole-document pass, so
+    /// running it per keystroke — and especially once per pasted block —
+    /// is what made a paste visibly stutter.
+    void rebuildFoldRegionsOnIdle();
 
 private:
     /// Reset the tab width to four monospace cells of the current font.
@@ -267,6 +284,7 @@ private:
     LineNumberArea* lineNumberArea_;
     CppSyntaxHighlighter* highlighter_;
     bool syntaxHighlightEnabled_ = true;
+    bool longLinesWrap_ = false;
     LightCpp::App::CompletionPopup* popup_;
     /// The top-level window currently watched for Move/Resize events that
     /// require repositioning the popup (installed by presentPopup()).
@@ -274,6 +292,10 @@ private:
     /// Fires ~200ms after the last identifier keystroke to request
     /// "as-you-type" completion (no trigger char needed).
     QTimer* completionIdleTimer_ = nullptr;
+    /// Coalesces the fold analysis: restarted on every text change and run
+    /// once the burst is over, so a paste costs ONE whole-document pass
+    /// instead of one per inserted change notification.
+    QTimer* foldRebuildTimer_ = nullptr;
     QString filePath_;
     QString lintPath_;
     QString encodingLabel_;

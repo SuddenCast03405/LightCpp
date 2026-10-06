@@ -206,6 +206,12 @@ struct Preferences {
     QStringList detectionPriority;   ///< modelled; detection order is fixed
     QString lineEndingDefault;       ///< "auto" | "LF" | "CRLF"
 
+    /// What the editor does with a line too long to fit the viewport.
+    /// "scroll" (default) keeps one line per row and scrolls it sideways;
+    /// "wrap" breaks it at the viewport edge. Unknown values fall back to
+    /// "scroll".
+    QString longLineMode = QStringLiteral("scroll");
+
     /// When true (default), the start-up page checks every toolchain and
     /// enabled kit when it opens (compiler files exist, kit toolchain
     /// references resolve) and shows the progress inline.

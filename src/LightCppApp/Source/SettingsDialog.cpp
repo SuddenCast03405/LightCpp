@@ -778,6 +778,14 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
     lineEndingDefault_->addItems(
         {QStringLiteral("auto"), QStringLiteral("LF"), QStringLiteral("CRLF")});
     filesForm->addRow(tr("Line ending"), lineEndingDefault_);
+    longLineMode_ = makeCombo(QStringLiteral("prefs.longLineMode"), false);
+    longLineMode_->addItems(
+        {QStringLiteral("scroll"), QStringLiteral("wrap")});
+    longLineMode_->setToolTip(
+        tr("What to do with a line longer than the editor is wide.\n"
+           "scroll — keep one line per row and scroll it sideways\n"
+           "wrap   — break it at the edge of the editing area"));
+    filesForm->addRow(tr("Line longer than the editor"), longLineMode_);
     column->addWidget(files);
 
     // --- general -----------------------------------------------------------------
@@ -2006,6 +2014,9 @@ void SettingsDialog::loadPreferencesPage(const Settings::Preferences& prefs)
     lineEndingDefault_->setCurrentText(prefs.lineEndingDefault.isEmpty()
                                            ? QStringLiteral("auto")
                                            : prefs.lineEndingDefault);
+    longLineMode_->setCurrentText(prefs.longLineMode.isEmpty()
+                                      ? QStringLiteral("scroll")
+                                      : prefs.longLineMode);
     checkCompilersAtStartup_->setChecked(prefs.checkCompilersAtStartup);
     showStartupPage_->setChecked(prefs.showStartupPage);
     checkToolchainsAtStartup_->setChecked(prefs.checkToolchainsAtStartup);
@@ -2068,6 +2079,7 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->defaultEncoding = encodingDefault_->currentText().trimmed();
     prefs->detectionPriority = linesOf(encodingPriority_);
     prefs->lineEndingDefault = lineEndingDefault_->currentText();
+prefs->longLineMode = longLineMode_->currentText().trimmed();
     prefs->checkCompilersAtStartup = checkCompilersAtStartup_->isChecked();
     prefs->showStartupPage = showStartupPage_->isChecked();
     prefs->checkToolchainsAtStartup = checkToolchainsAtStartup_->isChecked();

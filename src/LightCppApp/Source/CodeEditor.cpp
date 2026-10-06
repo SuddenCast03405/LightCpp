@@ -85,6 +85,11 @@ CodeEditor::CodeEditor(QWidget* parent)
     font.setStyleHint(QFont::Monospace);
     setFont(font);
     applyTabWidthForCurrentFont();
+    // Qt wraps by default; the IDE's default is files.longLineMode == "scroll"
+    // (one row per line, sideways scrolling), so the widget has to be told
+    // before it lays anything out. setLongLinesWrap() is a no-op while
+    // longLinesWrap_ is already false, hence the direct call.
+    setLineWrapMode(QPlainTextEdit::NoWrap);
 
     // Attach the C++ highlighter to the underlying document.
     highlighter_ = new CppSyntaxHighlighter(document());
@@ -97,9 +102,16 @@ CodeEditor::CodeEditor(QWidget* parent)
             this, &CodeEditor::highlightCurrentLine);
     // Folding is derived from the text, so it is recomputed whenever the text
     // changes. The analysis is a single pass over the document, and the fold
-    // state itself survives re-parsing (see FoldAnchor).
+    // state itself survives re-parsing (see FoldAnchor). It runs on a short
+    // idle timer rather than inside textChanged: a keystroke or a large paste
+    // must not pay for a whole-document analysis inline.
+    foldRebuildTimer_ = new QTimer(this);
+    foldRebuildTimer_->setSingleShot(true);
+    foldRebuildTimer_->setInterval(120);
+    connect(foldRebuildTimer_, &QTimer::timeout,
+            this, &CodeEditor::rebuildFoldRegionsOnIdle);
     connect(this, &QPlainTextEdit::textChanged,
-            this, &CodeEditor::rebuildFoldRegions);
+            this, [this] { foldRebuildTimer_->start(); });
 
     // Force the line-number gutter to be visible and opaque: creating it
     // as a child of an un-shown widget can leave it hidden by default.
@@ -173,6 +185,19 @@ void CodeEditor::applyTabWidthForCurrentFont()
     // normally indented with — and it makes a visual column stop line up with
     // nothing. Measured from a space so it stays correct if the font changes.
     setTabStopDistance(QFontMetricsF(font()).horizontalAdvance(QLatin1Char(' ')) * 4.0);
+}
+
+void CodeEditor::setLongLinesWrap(bool wrap)
+{
+    if (longLinesWrap_ == wrap) {
+        return;
+    }
+    longLinesWrap_ = wrap;
+    // Switching the wrap mode re-lays out the whole document, so the folds
+    // have to be re-applied against the new block geometry.
+    setLineWrapMode(wrap ? QPlainTextEdit::WidgetWidth
+                         : QPlainTextEdit::NoWrap);
+    applyFoldState();
 }
 
 void CodeEditor::loadUtf8(const QByteArray& utf8)
@@ -993,6 +1018,25 @@ void CodeEditor::keyPressEvent(QKeyEvent* event)
     QPlainTextEdit::keyPressEvent(event);
 }
 
+void CodeEditor::insertFromMimeData(const QMimeData* source)
+{
+    // A pending as-you-type request belongs to the text before the paste, and
+    // a popup built from it would filter against the wrong prefix.
+    completionIdleTimer_->stop();
+    if (popup_ && popup_->isVisible()) {
+        dismissPopup();
+    }
+
+    QPlainTextEdit::insertFromMimeData(source);
+
+    // The debounced didChange that textChanged schedules is enough to get the
+    // buffer to clangd, but a paste is a deliberate, complete edit: asking for
+    // a fresh completion list right away means the popup offers the symbols of
+    // the pasted text instead of staying silent until the next keystroke.
+    const QTextCursor c = textCursor();
+    emit completionRequested(c.blockNumber(), c.positionInBlock(), QString());
+}
+
 void CodeEditor::mousePressEvent(QMouseEvent* event)
 {
     // Clicking inside the editor dismisses the popup and cancels any
@@ -1192,6 +1236,12 @@ void CodeEditor::applyCompletionItem(const LightCpp::App::LspCompletionItem& ite
 // widgets; everything here is about keeping a fold attached to its block while
 // the text moves underneath it.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+void CodeEditor::rebuildFoldRegionsOnIdle()
+{
+    rebuildFoldRegions();
+}
+
 void CodeEditor::rebuildFoldRegions()
 {
     // Splitting the document text once is simpler than translating block

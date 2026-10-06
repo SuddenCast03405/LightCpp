@@ -234,9 +234,9 @@ MainWindow::MainWindow(QWidget* parent)
     // channel, so it never drowns out compiler output. The channel follows
     // the configured backend: Clangd Output, ccls Output or libclang Output.
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverLog, this,
-            [this](const QString& text) { appendLanguageServerLog(text); });
+            [this](const QString& text) { appendServerProcessLog(text); });
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverStarted, [this] {
-        appendLanguageServerLog(tr("language server started"));
+        appendServerProcessLog(tr("language server started"));
         // Open the documents that are already in tabs. Use lintPath so
         // unsaved (untitled) buffers get their virtual path pushed too.
         for (int i = 0; i < tabWidget_->count(); ++i) {
@@ -346,9 +346,9 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverFailed,
             this, [this](const QString& message) {
-        appendLanguageServerLog(tr("language server error: %1").arg(message));
+        appendServerProcessLog(tr("language server error: %1").arg(message));
         // Surface the reason instead of leaving the user with a silent pane.
-        outputPanel_->showChannel(serverLogChannel());
+        outputPanel_->showChannel(serverProcessLogChannel());
         actSyntaxCheck_->setChecked(false);
         // A completion was on its way: burn one retry attempt on bringing
         // the server back up. Bounded by preferences.completion.retryCount.
@@ -361,8 +361,12 @@ MainWindow::MainWindow(QWidget* parent)
     libClang_ = new LightCpp::App::LibClangCompleter(this);
     connect(libClang_, &LightCpp::App::LibClangCompleter::logMessage, this,
             [this](const QString& message) {
-                appendLanguageServerLog(message);
+                // libclang's own chatter always belongs in the libclang pane,
+                // whatever backend happens to be selected.
+                appendLibClangLog(message);
             });
+    connect(libClang_, &LightCpp::App::LibClangCompleter::completed, this,
+            &MainWindow::onLibClangCompleted);
 
     // --- debugger session ---
     debugger_ = new LightCpp::App::DebuggerController(this);
@@ -1266,6 +1270,20 @@ OutputPanel::Channel MainWindow::serverLogChannel() const
     return OutputPanel::ChannelServer;
 }
 
+OutputPanel::Channel MainWindow::serverProcessLogChannel() const
+{
+    // A message coming FROM the server process must be filed under the server
+    // that produced it, not under whatever the completion backend currently
+    // says. Routing by the setting sent a dead ccls.exe's parting line to the
+    // Clangd Output pane the moment the user switched backends, which made an
+    // unrelated crash look like the wrong server's failure.
+    const QString name = QFileInfo(lsp_->serverPath()).fileName().toLower();
+    if (name.contains(QLatin1String("ccls"))) {
+        return OutputPanel::ChannelCcls;
+    }
+    return OutputPanel::ChannelServer;
+}
+
 void MainWindow::appendLanguageServerLog(const QString& text)
 {
     switch (serverLogChannel()) {
@@ -1279,6 +1297,23 @@ void MainWindow::appendLanguageServerLog(const QString& text)
         outputPanel_->appendServerLog(text);
         break;
     }
+}
+
+void MainWindow::appendServerProcessLog(const QString& text)
+{
+    switch (serverProcessLogChannel()) {
+    case OutputPanel::ChannelCcls:
+        outputPanel_->appendCclsOutput(text);
+        break;
+    default:
+        outputPanel_->appendServerLog(text);
+        break;
+    }
+}
+
+void MainWindow::appendLibClangLog(const QString& text)
+{
+    outputPanel_->appendLibClangOutput(text);
 }
 
 QAction* MainWindow::findNamedAction(const QString& id) const
@@ -2492,6 +2527,7 @@ CodeEditor* MainWindow::createEditorTab(const QString& title)
     if (!editorFont_.family().isEmpty()) {
         editor->setEditorFont(editorFont_);
     }
+    editor->setLongLinesWrap(longLinesWrap_);
     connect(editor, &QPlainTextEdit::cursorPositionChanged,
             this, &MainWindow::onCursorPositionChanged);
     // The tab's modification dot follows the document's modified flag, not
@@ -5239,11 +5275,28 @@ void MainWindow::deliverLibClangCompletion()
     if (ed == nullptr || libClang_ == nullptr) {
         return;
     }
-    QString error;
-    const auto items = libClang_->complete(
-        {lastCompletion_.lintPath, ed->toPlainText(), lastCompletion_.line,
-         lastCompletion_.column},
-        &error);
+    // The parse reads every included header, so it goes to the completer's
+    // worker thread; completed() routes the answer back to the popup. Running
+    // it inline froze the whole IDE whenever the disk was busy.
+    libclangToken_ = ++libclangTokenCounter_;
+    libClang_->completeAsync({lastCompletion_.lintPath, ed->toPlainText(),
+                               lastCompletion_.line, lastCompletion_.column},
+                              libclangToken_);
+}
+
+void MainWindow::onLibClangCompleted(
+    quint64 token, const QList<LightCpp::App::LspCompletionItem>& items,
+    const QString& error)
+{
+    // A later keystroke already asked again: this answer describes text the
+    // caret has moved past, so it must not touch the popup.
+    if (token != libclangToken_) {
+        return;
+    }
+    CodeEditor* ed = lastCompletion_.editor.data();
+    if (ed == nullptr) {
+        return;
+    }
     if (items.isEmpty() && !error.isEmpty()) {
         appendLanguageServerLog(error);
         if (scheduleCompletionRetry()) {
@@ -5401,6 +5454,17 @@ void MainWindow::applyPreferences()
         : QStringLiteral("UTF-8");
     lineEndingForSaving_ = settings_->lineEndingForSaving();
 
+    // files.longLineMode: "scroll" (one row per line, sideways scroll) or
+    // "wrap" (break at the editor edge). Applied to every open buffer, not
+    // just new ones, so the setting takes effect without a restart.
+    const bool wrapLongLines = prefs.longLineMode == QLatin1String("wrap");
+    longLinesWrap_ = wrapLongLines;
+    for (int i = 0; i < tabWidget_->count(); ++i) {
+        if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
+            ed->setLongLinesWrap(wrapLongLines);
+        }
+    }
+
     // --- performance ------------------------------------------------------
     largeFileHighlightMB_ = prefs.largeFile.syntaxHighlightDisabledAboveMB;
     largeFileIndexMB_ = prefs.largeFile.indexDisabledAboveMB;
@@ -5456,6 +5520,7 @@ void MainWindow::applyPreferences()
         ? QStringLiteral("clangd") : prefs.completion.backend;
     completionRetryCount_ = qMax(0, prefs.completion.retryCount);
     completionAttempts_ = 0;
+    const QString previousBackend = completionBackend_;
     if (completionBackend_ == QStringLiteral("libclang")) {
         if (libClang_ != nullptr && !libClang_->isLoaded()) {
             const QString libPath = resolveLibClangPath();
@@ -5475,18 +5540,35 @@ void MainWindow::applyPreferences()
             completionBackend_ = QStringLiteral("clangd");
         }
         const QString serverPath = resolveCompletionServerPath(completionBackend_);
-        if (lsp_->serverPath() != serverPath) {
+        // Compare BEFORE overwriting: the running process is still the old
+        // server, and that difference is what says a restart is needed.
+        const bool serverChanged = lsp_->serverPath() != serverPath;
+        if (serverChanged) {
             lsp_->setServerPath(serverPath);
-            // The running process is still the old server; restart it so
-            // the switch takes effect immediately.
-            if (lsp_->isRunning()) {
+        }
+        // A language-server backend is useless while the process is down —
+        // most visibly when coming back from libclang with syntax check off,
+        // which left completion silently answering nothing. Bring it up (and
+        // restart it, so the switch takes effect at once when it is already
+        // running the previous server).
+        if (actSyntaxCheck_ != nullptr && actSyntaxCheck_->isChecked()) {
+            if (lsp_->isRunning() && serverChanged) {
                 lsp_->stop();
+            }
+            if (!lsp_->isRunning()) {
                 lsp_->start();
-                appendLanguageServerLog(
-                    tr("Language server switched to %1")
-                        .arg(QDir::toNativeSeparators(serverPath)));
             }
         }
+        if (serverChanged) {
+            appendServerProcessLog(
+                tr("Language server: %1")
+                    .arg(QDir::toNativeSeparators(serverPath)));
+        }
+    }
+
+    if (completionBackend_ != previousBackend) {
+        appendLanguageServerLog(
+            tr("Completion backend: %1").arg(completionBackend_));
     }
 
     // --- language service: clang-format ----------------------------------

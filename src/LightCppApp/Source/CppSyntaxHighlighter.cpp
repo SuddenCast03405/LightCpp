@@ -2,8 +2,41 @@
 
 #include "LightCpp/App/CppSyntaxHighlighter.hpp"
 
+#include <algorithm>
+
+#include <QHash>
 #include <QRegularExpression>
 #include <QTextDocument>
+
+namespace {
+
+/// Build "\\b(a|b|c)\\b" with the alternatives longest-first, so a prefix
+/// ("int" vs "int8_t") is never shadowed by a shorter alternative that would
+/// only match because the trailing \\b had not been tried yet.
+///
+/// The keyword and type lists used to be one QRegularExpression each (~110 in
+/// total), all run over every block. That is what made pasting a large block
+/// — or typing in a long file — visibly stutter: the cost grew with the
+/// NUMBER OF WORDS rather than with the text. One combined pattern per class
+/// turns that into two passes, and the captured word selects the colour.
+QString alternationOf(QStringList words)
+{
+    std::sort(words.begin(), words.end(),
+              [](const QString& a, const QString& b) {
+                  if (a.size() != b.size()) {
+                      return a.size() > b.size();
+                  }
+                  return a < b;
+              });
+    QStringList escaped;
+    escaped.reserve(words.size());
+    for (const QString& word : words) {
+        escaped.append(QRegularExpression::escape(word));
+    }
+    return QStringLiteral("\\b(?:%1)\\b").arg(escaped.join(QLatin1Char('|')));
+}
+
+}  // namespace
 
 CppSyntaxHighlighter::CppSyntaxHighlighter(QTextDocument* parent)
     : QSyntaxHighlighter(parent)
@@ -28,6 +61,9 @@ CppSyntaxHighlighter::CppSyntaxHighlighter(QTextDocument* parent)
     funcFormat_.setForeground(QColor(0xDC, 0xD8, 0x4A));      // yellow
 
     // --- Rules ---
+    // Order is significant: a later setFormat() wins on an overlapping range,
+    // so a preprocessor line is coloured first and the word classes paint over
+    // it, exactly as when each word had a pattern of its own.
     Rule r;
 
     // Preprocessor (must come before keywords to match #include etc.)
@@ -35,7 +71,7 @@ CppSyntaxHighlighter::CppSyntaxHighlighter(QTextDocument* parent)
     r.format = preprocFormat_;
     rules_.append(r);
 
-    // Keywords
+    // Keywords — one pass for the whole class.
     const QStringList keywords = {
         QStringLiteral("alignas"), QStringLiteral("alignof"), QStringLiteral("auto"),
         QStringLiteral("break"), QStringLiteral("case"), QStringLiteral("catch"),
@@ -57,12 +93,9 @@ CppSyntaxHighlighter::CppSyntaxHighlighter(QTextDocument* parent)
         QStringLiteral("virtual"), QStringLiteral("while"),
         // C keywords
         QStringLiteral("restrict"),
+        // Literals share the keyword colour and the keyword pass.
+        QStringLiteral("true"), QStringLiteral("false"), QStringLiteral("nullptr"),
     };
-    for (const auto& kw : keywords) {
-        r.pattern = QRegularExpression(QStringLiteral("\\b") + kw + QStringLiteral("\\b"));
-        r.format = keywordFormat_;
-        rules_.append(r);
-    }
 
     // Built-in types
     const QStringList types = {
@@ -80,16 +113,17 @@ CppSyntaxHighlighter::CppSyntaxHighlighter(QTextDocument* parent)
         QStringLiteral("QList"), QStringLiteral("QVector"), QStringLiteral("QHash"),
         QStringLiteral("QObject"), QStringLiteral("QWidget"), QStringLiteral("QMainWindow"),
     };
-    for (const auto& ty : types) {
-        r.pattern = QRegularExpression(QStringLiteral("\\b") + ty + QStringLiteral("\\b"));
-        r.format = typeFormat_;
-        rules_.append(r);
-    }
 
-    // Literals
-    r.pattern = QRegularExpression(QStringLiteral("\\btrue\\b|\\bfalse\\b|\\bnullptr\\b"));
-    r.format = keywordFormat_;
-    rules_.append(r);
+    wordClasses_.append(
+        WordClass{QRegularExpression(alternationOf(keywords)), {}});
+    for (const QString& word : keywords) {
+        wordClasses_.last().formats.insert(word, keywordFormat_);
+    }
+    wordClasses_.append(
+        WordClass{QRegularExpression(alternationOf(types)), {}});
+    for (const QString& word : types) {
+        wordClasses_.last().formats.insert(word, typeFormat_);
+    }
 
     // Numbers (hex, binary, float, int).
     // The alternation must sit INSIDE the \b(...)\b group: an extra ")"
@@ -127,6 +161,19 @@ void CppSyntaxHighlighter::highlightBlock(const QString& text)
         while (it.hasNext()) {
             const QRegularExpressionMatch m = it.next();
             setFormat(m.capturedStart(), m.capturedLength(), rule.format);
+        }
+    }
+
+    // Word classes (keywords, literals, built-in types): one regex pass per
+    // class, then a hash lookup per match to pick the colour.
+    for (const WordClass& wc : wordClasses_) {
+        auto it = wc.pattern.globalMatch(text);
+        while (it.hasNext()) {
+            const QRegularExpressionMatch m = it.next();
+            const auto format = wc.formats.constFind(m.captured());
+            if (format != wc.formats.constEnd()) {
+                setFormat(m.capturedStart(), m.capturedLength(), *format);
+            }
         }
     }
 
