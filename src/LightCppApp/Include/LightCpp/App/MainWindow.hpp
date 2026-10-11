@@ -205,6 +205,8 @@ private slots:
 
 private:
     void createActions();
+    /// Grey the clipboard actions out when no editor tab is current.
+    void updateEditActions();
     void createMenuBar();
     void createToolBar();
     void createStatusBar();
@@ -587,6 +589,11 @@ private:
     QAction* actFindNext_ = nullptr;       // F3
     QAction* actFindPrev_ = nullptr;       // Shift+F3
     QAction* actReplace_ = nullptr;        // open the bar in replace mode (Ctrl+H)
+    QAction* actUndo_ = nullptr;           // Edit > Undo (Ctrl+Z)
+    QAction* actRedo_ = nullptr;           // Edit > Redo (Ctrl+Y)
+    QAction* actCut_ = nullptr;            // Edit > Cut (Ctrl+X)
+    QAction* actCopy_ = nullptr;           // Edit > Copy (Ctrl+C)
+    QAction* actPaste_ = nullptr;          // Edit > Paste (Ctrl+V)
     QAction* actFormat_ = nullptr;         // clang-format the whole file
     QAction* actFormatFolder_ = nullptr;   // clang-format a folder
     QAction* actFormatProject_ = nullptr;  // clang-format the open project

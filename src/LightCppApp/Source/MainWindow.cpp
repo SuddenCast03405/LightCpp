@@ -38,6 +38,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QColor>
 #include <QComboBox>
@@ -50,6 +51,7 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
+#include <QGuiApplication>
 #include <QHash>
 #include <QHBoxLayout>
 #include <QMenu>
@@ -480,6 +482,7 @@ MainWindow::MainWindow(QWidget* parent)
             statusFile_->clear();
             statusCursor_->clear();
         }
+        updateEditActions();
     });
 
     resize(1280, 800);
@@ -1865,6 +1868,71 @@ void MainWindow::createActions()
         }
     });
 
+    // --- clipboard / undo / redo -----------------------------------------
+    // Menu entries for what the editor's context menu already does. The
+    // shortcuts use the WidgetWithChildren context scoped to the tab widget,
+    // so they only fire while an editor tab owns the keyboard — a QLineEdit
+    // elsewhere in the window (the find bar, the terminal input rows) keeps
+    // its own native Ctrl+C/V/X/Z handling instead of being starved by the
+    // menu action.
+    actUndo_ = new QAction(tr("&Undo"), this);
+    actUndo_->setShortcut(QKeySequence::Undo);
+    actUndo_->setStatusTip(tr("Undo the last editing change"));
+    connect(actUndo_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->undo();
+        }
+    });
+
+    actRedo_ = new QAction(tr("&Redo"), this);
+    actRedo_->setShortcuts({QKeySequence::Redo,
+                            QKeySequence(QStringLiteral("Ctrl+Shift+Z"))});
+    actRedo_->setStatusTip(tr("Redo the last undone change"));
+    connect(actRedo_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->redo();
+        }
+    });
+
+    actCut_ = new QAction(tr("Cu&t"), this);
+    actCut_->setShortcut(QKeySequence::Cut);
+    actCut_->setStatusTip(tr("Cut the selection to the clipboard"));
+    connect(actCut_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->cut();
+        }
+    });
+
+    actCopy_ = new QAction(tr("&Copy"), this);
+    actCopy_->setShortcut(QKeySequence::Copy);
+    actCopy_->setStatusTip(tr("Copy the selection to the clipboard"));
+    connect(actCopy_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->copy();
+        }
+    });
+
+    actPaste_ = new QAction(tr("&Paste"), this);
+    actPaste_->setShortcut(QKeySequence::Paste);
+    actPaste_->setStatusTip(tr("Paste the clipboard at the cursor"));
+    connect(actPaste_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->paste();
+        }
+    });
+
+    for (QAction* clipboardAction :
+         {actUndo_, actRedo_, actCut_, actCopy_, actPaste_}) {
+        clipboardAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+        tabWidget_->addAction(clipboardAction);
+    }
+
+    // Greyed out until an editor tab becomes current; the tab switch below
+    // and the clipboard changes re-evaluate it.
+    updateEditActions();
+    connect(QGuiApplication::clipboard(), &QClipboard::dataChanged,
+            this, &MainWindow::updateEditActions);
+
     // --- code formatting ------------------------------------------------
     actFormat_ = new QAction(tr("&Format Document"), this);
     actFormat_->setShortcuts({QKeySequence(QStringLiteral("Shift+Alt+F")),
@@ -2000,6 +2068,11 @@ void MainWindow::createActions()
         {actFindNext_, "actionFindNext"},
         {actFindPrev_, "actionFindPrev"},
         {actReplace_, "actionReplace"},
+        {actUndo_, "actionUndo"},
+        {actRedo_, "actionRedo"},
+        {actCut_, "actionCut"},
+        {actCopy_, "actionCopy"},
+        {actPaste_, "actionPaste"},
         {actFormat_, "actionFormat"},
         {actFormatFolder_, "actionFormatFolder"},
         {actFormatProject_, "actionFormatProject"},
@@ -2040,6 +2113,13 @@ void MainWindow::createMenuBar()
 
     auto* editMenu = menuBar()->addMenu(tr("&Edit"));
     editMenu->setObjectName(QStringLiteral("menuEdit"));
+    editMenu->addAction(actUndo_);
+    editMenu->addAction(actRedo_);
+    editMenu->addSeparator();
+    editMenu->addAction(actCut_);
+    editMenu->addAction(actCopy_);
+    editMenu->addAction(actPaste_);
+    editMenu->addSeparator();
     editMenu->addAction(actFind_);
     editMenu->addAction(actFindNext_);
     editMenu->addAction(actFindPrev_);
@@ -2623,6 +2703,18 @@ void MainWindow::onAbout()
 CodeEditor* MainWindow::currentEditor() const
 {
     return qobject_cast<CodeEditor*>(tabWidget_->currentWidget());
+}
+
+void MainWindow::updateEditActions()
+{
+    const bool hasEditor = currentEditor() != nullptr;
+    actUndo_->setEnabled(hasEditor);
+    actRedo_->setEnabled(hasEditor);
+    actCut_->setEnabled(hasEditor);
+    actCopy_->setEnabled(hasEditor);
+    // Paste also needs something on the clipboard.
+    actPaste_->setEnabled(hasEditor
+                          && !QGuiApplication::clipboard()->text().isEmpty());
 }
 
 QString MainWindow::tabTitleFor(const CodeEditor* editor) const
