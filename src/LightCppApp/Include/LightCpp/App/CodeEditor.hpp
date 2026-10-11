@@ -167,12 +167,20 @@ public slots:
     void presentPopup(const QList<LightCpp::App::LspCompletionItem>& items);
     /// Hide the completion popup if it is visible.
     void dismissPopup();
+    /// Show the signature-help tooltip (rich text) anchored at the caret.
+    /// An empty string hides it.
+    void showSignatureHelp(const QString& html);
 
 signals:
     /// Emitted when the editor wants completion at the current cursor.
     /// `line` / `column` are 0-based; `triggerChar` is the character
     /// that caused the request (".", ":", ">") or empty for Ctrl+Space.
     void completionRequested(int line, int column, const QString& triggerChar);
+
+    /// Emitted after `(` or `,` inside a call: the IDE asks the language
+    /// server for signature help and feeds the answer back through
+    /// showSignatureHelp().
+    void signatureHelpRequested(int line, int column);
 
     /// Go-to-definition was asked for at (line, column) — Ctrl+Click on an
     /// identifier, or F12 with the caret on one. Both are 0-based.

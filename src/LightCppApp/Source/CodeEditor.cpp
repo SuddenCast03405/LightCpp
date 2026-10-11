@@ -747,6 +747,19 @@ void CodeEditor::dismissPopup()
     popup_->dismiss();
 }
 
+void CodeEditor::showSignatureHelp(const QString& html)
+{
+    if (html.isEmpty()) {
+        QToolTip::hideText();
+        return;
+    }
+    // Anchor just below the caret line, like every IDE's parameter hint.
+    const QRect r = cursorRect();
+    QToolTip::showText(
+        viewport()->mapToGlobal(QPoint(r.left(), r.bottom() + 2)), html,
+        this);
+}
+
 // ---------------------------------------------------------------------------
 // Bracket auto-pairing
 // ---------------------------------------------------------------------------
@@ -1088,6 +1101,11 @@ void CodeEditor::keyPressEvent(QKeyEvent* event)
     const int key = event->key();
     const QString text = event->text();
 
+    // Any Enter leaves the call line — the signature tooltip is stale there.
+    if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+        QToolTip::hideText();
+    }
+
     // --- go to definition --------------------------------------------------
     // F12 is the keyboard twin of Ctrl+Click. Handled before everything else
     // so it works regardless of what is under the caret.
@@ -1114,6 +1132,14 @@ void CodeEditor::keyPressEvent(QKeyEvent* event)
             requestCompletionAtCursor(QStringLiteral("\""));
         } else if (popup_ && popup_->isVisible()) {
             dismissPopup();
+        }
+        // `(` opens a call context: ask for the signature tooltip. `)`
+        // leaves it (stepping over a closer included) — hide the tooltip.
+        if (text.at(0) == QLatin1Char('(')) {
+            emit signatureHelpRequested(textCursor().blockNumber(),
+                                        textCursor().columnNumber());
+        } else if (text.at(0) == QLatin1Char(')')) {
+            QToolTip::hideText();
         }
         return;
     }
@@ -1207,6 +1233,15 @@ void CodeEditor::keyPressEvent(QKeyEvent* event)
                 completionIdleTimer_->start();         // re-request fresh items
                 return;
             }
+            // A comma continues the parameter list: refresh the signature
+            // tooltip after the insertion.
+            if (text == QLatin1String(",")) {
+                completionIdleTimer_->stop();
+                QPlainTextEdit::keyPressEvent(event);
+                emit signatureHelpRequested(textCursor().blockNumber(),
+                                            textCursor().columnNumber());
+                return;
+            }
             // Any other char (space, operator, ...): close popup and
             // let the editor handle the keystroke normally.
             completionIdleTimer_->stop();
@@ -1220,6 +1255,13 @@ void CodeEditor::keyPressEvent(QKeyEvent* event)
                 completionIdleTimer_->stop();
                 QPlainTextEdit::keyPressEvent(event);  // insert trigger char
                 requestCompletionAtCursor(text);
+                return;
+            }
+            // A comma inside a call: refresh the signature tooltip.
+            if (text == QLatin1String(",")) {
+                QPlainTextEdit::keyPressEvent(event);
+                emit signatureHelpRequested(textCursor().blockNumber(),
+                                            textCursor().columnNumber());
                 return;
             }
             if (isIdentText()) {

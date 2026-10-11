@@ -418,6 +418,14 @@ MainWindow::MainWindow(QWidget* parent)
         dialog->raise();
         dialog->activateWindow();
     });
+    connect(lsp_, &LightCpp::App::LanguageServerClient::signatureHelpReady,
+            this, [this](int requestId,
+                         const LightCpp::App::LspSignatureHelp& help) {
+        if (requestId != latestSignatureHelpId_) {
+            return;  // stale: the caret has moved on
+        }
+        showSignatureHelp(help);
+    });
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverFailed,
             this, [this](const QString& message) {
         appendServerProcessLog(tr("language server error: %1").arg(message));
@@ -3112,6 +3120,37 @@ void MainWindow::requestNavigation(int kind)
     }
 }
 
+void MainWindow::showSignatureHelp(
+    const LightCpp::App::LspSignatureHelp& help)
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr) {
+        return;
+    }
+    if (help.label.isEmpty()) {
+        // Not inside a call (or the caret left the argument list).
+        ed->showSignatureHelp(QString());
+        return;
+    }
+    // Rich text: the active parameter bolded inside the escaped label. The
+    // ranges are cut BEFORE escaping — toHtmlEscaped() changes the length
+    // (& < → &lt;), so slicing afterwards would point at the wrong bytes.
+    QString html;
+    if (help.paramStart >= 0 && help.paramEnd > help.paramStart
+        && help.paramEnd <= help.label.size()) {
+        html = help.label.left(help.paramStart).toHtmlEscaped()
+               + QStringLiteral("<b>")
+               + help.label.mid(help.paramStart,
+                                help.paramEnd - help.paramStart)
+                     .toHtmlEscaped()
+               + QStringLiteral("</b>")
+               + help.label.mid(help.paramEnd).toHtmlEscaped();
+    } else {
+        html = help.label.toHtmlEscaped();
+    }
+    ed->showSignatureHelp(html);
+}
+
 QString MainWindow::tabTitleFor(const CodeEditor* editor) const
 {
     const int index = tabWidget_->indexOf(editor);
@@ -3228,6 +3267,26 @@ CodeEditor* MainWindow::createEditorTab(const QString& title)
         if (reqId > 0) {
             latestDefinitionId_ = reqId;
             pendingDefinitions_[reqId] = edPtr;
+        }
+    });
+
+    // `(` / `,` inside a call asks for signature help. Same push-text-first
+    // contract; the answer is shown as a tooltip anchored at the caret of
+    // the editor that asked, guarded by the newest-request id.
+    connect(editor, &CodeEditor::signatureHelpRequested,
+            this, [this, edPtr](int line, int column) {
+        CodeEditor* ed = edPtr;
+        if (ed == nullptr || !lsp_->isRunning()) {
+            return;
+        }
+        const QString lintPath = ed->lintPath();
+        if (lintPath.isEmpty() || !isCppLikeFile(lintPath)) {
+            return;
+        }
+        lsp_->changeDocument(lintPath, ed->toPlainText());
+        const int reqId = lsp_->requestSignatureHelp(lintPath, line, column);
+        if (reqId > 0) {
+            latestSignatureHelpId_ = reqId;
         }
     });
 

@@ -401,6 +401,7 @@ void LanguageServerClient::stop()
     declarationRequests_.clear();
     implementationRequests_.clear();
     referencesRequests_.clear();
+    signatureHelpRequests_.clear();
 }
 
 bool LanguageServerClient::isRunning() const
@@ -694,6 +695,34 @@ int LanguageServerClient::requestReferences(const QString& filePath, int line,
     return id;
 }
 
+int LanguageServerClient::requestSignatureHelp(const QString& filePath,
+                                               int line, int column)
+{
+    if (process_ == nullptr || !initialized_
+        || !documentVersions_.contains(toFileUri(filePath))) {
+        return 0;
+    }
+    const int id = nextRequestId_++;
+    signatureHelpRequests_.insert(id, filePath);
+
+    QJsonObject position;
+    position.insert("line", line);
+    position.insert("character", column);
+    QJsonObject textDocument;
+    textDocument.insert("uri", toFileUri(filePath));
+    QJsonObject params;
+    params.insert("textDocument", textDocument);
+    params.insert("position", position);
+
+    QJsonObject request;
+    request.insert("jsonrpc", "2.0");
+    request.insert("id", id);
+    request.insert("method", "textDocument/signatureHelp");
+    request.insert("params", params);
+    sendJsonRpc(request);
+    return id;
+}
+
 // ---------------------------------------------------------------------------
 // URI helpers
 // ---------------------------------------------------------------------------
@@ -886,6 +915,51 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
                 }
             }
             emit locationsReady(id, filePath, locations);
+            return;
+        }
+        if (signatureHelpRequests_.contains(id)) {
+            signatureHelpRequests_.remove(id);
+            // result: SignatureHelp | null. Only the ACTIVE signature is
+            // shown; its activeParameter maps into the label if clangd
+            // names the range as [start,end] (it does; a plain string is
+            // the fallback and gets a -1 range = no bolding).
+            LspSignatureHelp help;
+            const QJsonObject result = message.value("result").toObject();
+            const QJsonArray signatures =
+                result.value("signatures").toArray();
+            const int activeSignature =
+                result.value("activeSignature").toInt(0);
+            if (activeSignature >= 0
+                && activeSignature < signatures.size()) {
+                const QJsonObject signature =
+                    signatures.at(activeSignature).toObject();
+                help.label = signature.value("label").toString();
+                const int activeParameter =
+                    result.value("activeParameter").toInt(0);
+                const QJsonArray parameters =
+                    signature.value("parameters").toArray();
+                if (activeParameter >= 0
+                    && activeParameter < parameters.size()) {
+                    const QJsonValue labelValue =
+                        parameters.at(activeParameter).toObject()
+                            .value("label");
+                    if (labelValue.isArray()) {
+                        help.paramStart =
+                            labelValue.toArray().at(0).toInt(-1);
+                        help.paramEnd =
+                            labelValue.toArray().at(1).toInt(-1);
+                    } else if (labelValue.isString()) {
+                        help.paramStart = help.label.indexOf(
+                            labelValue.toString());
+                        if (help.paramStart >= 0) {
+                            help.paramEnd =
+                                help.paramStart
+                                + labelValue.toString().size();
+                        }
+                    }
+                }
+            }
+            emit signatureHelpReady(id, help);
             return;
         }
         return;

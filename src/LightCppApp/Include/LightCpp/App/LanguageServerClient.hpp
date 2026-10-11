@@ -61,6 +61,16 @@ struct LspLocation {
     [[nodiscard]] bool isValid() const noexcept { return !filePath.isEmpty(); }
 };
 
+/// The active signature of a textDocument/signatureHelp answer: the call's
+/// full label (e.g. "void foo(int a, const QString &b)") plus the UTF-16
+/// label range of the parameter the caret sits in (-1 when clangd could not
+/// narrow it down). Empty `label` = nothing to show at that position.
+struct LspSignatureHelp {
+    QString label;
+    int paramStart = -1;
+    int paramEnd = -1;
+};
+
 class LanguageServerClient : public QObject {
     Q_OBJECT
 public:
@@ -162,6 +172,10 @@ public:
     int requestReferences(const QString& filePath, int line, int column,
                           bool includeDeclaration = true);
 
+    /// textDocument/signatureHelp — the call signature at (line, column),
+    /// requested after `(` or `,`. Answer via signatureHelpReady().
+    int requestSignatureHelp(const QString& filePath, int line, int column);
+
     // --- URI helpers (LSP uses file:// URIs with percent encoding) ---
 
     [[nodiscard]] static QString toFileUri(const QString& filePath);
@@ -191,6 +205,10 @@ signals:
     /// return hundreds — cap them at the call site if needed.
     void locationsReady(int requestId, const QString& filePath,
                         const QList<LspLocation>& locations);
+
+    /// Signature help response arrived. An empty label means no call
+    /// context at that position (hide whatever is showing).
+    void signatureHelpReady(int requestId, const LspSignatureHelp& help);
 
     /// The initialize handshake completed; documents can now be opened.
     void serverStarted();
@@ -225,6 +243,7 @@ private:
     QMap<int, QString> declarationRequests_;      // requestId -> fileUri
     QMap<int, QString> implementationRequests_;   // requestId -> fileUri
     QMap<int, QString> referencesRequests_;       // requestId -> fileUri
+    QMap<int, QString> signatureHelpRequests_;    // requestId -> fileUri
     bool initialized_ = false;          // handshake done
     bool everInitialized_ = false;      // handshake completed at least once —
                                         // separates "exited during start-up"

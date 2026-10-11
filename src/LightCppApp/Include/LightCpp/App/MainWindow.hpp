@@ -718,6 +718,14 @@ private:
     /// 2 = references), plus the newest request id for staleness guarding.
     QMap<int, int> navigationKinds_;
     int latestLocationRequestId_ = 0;
+    /// The newest in-flight signature-help request id; older answers are
+    /// stale and dropped (same guard as latestCompletionId_).
+    int latestSignatureHelpId_ = 0;
+    /// Format one signature-help answer into rich text for the tooltip:
+    /// the label HTML-escaped with the active parameter bolded. (A plain
+    /// private method, not a slot — MOC would demand a metatype for the
+    /// parameter here.)
+    void showSignatureHelp(const LightCpp::App::LspSignatureHelp& help);
 
     /// Latest diagnostics per document, keyed by the editor's lint path
     /// (a virtual temp path for unsaved buffers). Feeds the Problems list.
