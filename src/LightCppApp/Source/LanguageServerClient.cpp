@@ -309,7 +309,9 @@ void LanguageServerClient::start()
             this, &LanguageServerClient::onReadyRead);
     connect(process_, &QProcess::readyReadStandardError, this, [this] {
         if (process_ == nullptr) return;
-        const QString text = QString::fromLocal8Bit(process_->readAllStandardError());
+        // clangd/ccls write UTF-8 (their own source paths land there);
+        // fromLocal8Bit garbled them on non-UTF-8 system code pages.
+        const QString text = QString::fromUtf8(process_->readAllStandardError());
         // Emit line by line so the log pane never gets a half-written line.
         for (const QString& line : text.split(u'\n', Qt::SkipEmptyParts)) {
             emit serverLog(line.trimmed());
@@ -1020,6 +1022,19 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
         const QJsonValue idVal = message.value("id");
         const int id = idVal.toInt();
         if (id == initializeRequestId_ && !initialized_) {
+            if (message.contains("error")) {
+                // The server rejected the handshake (unknown options,
+                // version mismatch...). Pretending this was success left a
+                // running-but-dead server: no capabilities, every request
+                // silently unanswered. Report it and drop the process —
+                // the finished handler cleans it up (it fires the
+                // start-up-exit failure again, which is fine).
+                const QJsonObject err = message.value("error").toObject();
+                emit serverFailed(tr("language server rejected initialize: %1")
+                                      .arg(err.value("message").toString()));
+                process_->kill();
+                return;
+            }
             // initialize response — complete the handshake.
             initialized_ = true;
             everInitialized_ = true;

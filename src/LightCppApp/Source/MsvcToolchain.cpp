@@ -102,7 +102,9 @@ QString capture(const QString& program, const QStringList& args)
     if (process.exitCode() != 0) {
         return {};
     }
-    return QString::fromLocal8Bit(process.readAllStandardOutput());
+    // vswhere emits UTF-8 JSON; fromLocal8Bit mangled non-ASCII install
+    // paths (VS previews install under "…/2026Preview/"-style names).
+    return QString::fromUtf8(process.readAllStandardOutput());
 }
 
 /// Visual Studio 2017 and later, straight from the installer's own locator.

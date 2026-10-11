@@ -34,8 +34,12 @@ constexpr std::array kBoms{
 };
 
 /// True when the buffer "looks like" UTF-16 without a BOM: even length and
-/// every second byte is NUL (typical for Latin-script UTF-16 text where all
-/// code units have the high byte zero).
+/// a large majority of code units carry NUL in the same position (high byte
+/// for LE, low byte for BE). Pure-Latin UTF-16 has NUL in every unit, but
+/// CJK/Arabic/… text legitimately has non-zero bytes there too — requiring
+/// ALL of them to be NUL used to classify any non-Latin UTF-16 file as
+/// binary (and `.dev`/`.vcxproj` projects written in UTF-16 failed to open
+/// with it).
 [[nodiscard]] bool looksLikeUtf16NoBom(QByteArrayView bytes, int stride) noexcept
 {
     if (bytes.size() < 8 || bytes.size() % 2 != 0) {
@@ -51,7 +55,11 @@ constexpr std::array kBoms{
             ++zeros;
         }
     }
-    return checked > 0 && zeros == checked;
+    // ≥60% zero bytes in the fixed position is far beyond what any 8-bit
+    // encoding or binary format produces by accident, while still admitting
+    // UTF-16 text dominated by ASCII with CJK runs mixed in. A false "yes"
+    // here is cheap: the strict UTF-16 decoder rejects garbage afterwards.
+    return checked > 0 && zeros * 10 >= checked * 6;
 }
 
 }  // namespace
@@ -147,6 +155,9 @@ TextEncoding localAnsiEncoding() noexcept
     //   932   -> Shift-JIS (Japanese)
     //   1252  -> Windows-1252 (Western European)
     //   54936 -> GB18030
+    //   65001 -> UTF-8 ("Beta: Use Unicode UTF-8 for worldwide language
+    //             support" flips the system ANSI page to this; treating it
+    //             as Windows-1252 garbled every detected legacy file)
     const UINT cp = ::GetACP();
     switch (cp) {
     case 936:   return TextEncoding::Gbk;
@@ -155,6 +166,7 @@ TextEncoding localAnsiEncoding() noexcept
     case 932:   return TextEncoding::ShiftJis;
     case 54936: return TextEncoding::Gb18030;
     case 1252:  return TextEncoding::Windows1252;
+    case 65001: return TextEncoding::Utf8;
     default:    return TextEncoding::Windows1252;
     }
 #else

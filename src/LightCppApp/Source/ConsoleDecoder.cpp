@@ -70,9 +70,13 @@ QString decodeConsoleBlock(const QByteArray& block)
 QString ConsoleDecoder::decode(const QByteArray& chunk)
 {
     pending_ += chunk;
-    // Consume only up to the last newline: a multi-byte character split
+    // Consume only up to the last terminator: a multi-byte character split
     // across two chunks would otherwise be misjudged at the seam.
-    const int lastNewline = pending_.lastIndexOf('\n');
+    // '\r' counts as a terminator too — progress bars and prompts carry
+    // their updates on bare '\r', and waiting for a '\n' that never comes
+    // made interactive programs look hung.
+    const int lastNewline = qMax(pending_.lastIndexOf('\n'),
+                                 pending_.lastIndexOf('\r'));
     if (lastNewline < 0) {
         return {};
     }
@@ -82,16 +86,27 @@ QString ConsoleDecoder::decode(const QByteArray& chunk)
     // Probe line by line, not block by block: one pipe chunk can mix the
     // program's own UTF-8 output with the GBK echo of what was typed into
     // it, and a whole-block probe would then garble the UTF-8 half. Line
-    // boundaries are ASCII, so splitting is always safe.
+    // boundaries are ASCII, so splitting is always safe. A "\r\n" pair is
+    // one terminator; a bare '\r' also flushes its line.
     QString result;
     int start = 0;
     const int size = complete.size();
     for (int i = 0; i < size; ++i) {
-        if (complete[i] == '\n') {
-            result += decodeConsoleBlock(complete.mid(start, i - start));
-            result += QLatin1Char('\n');
-            start = i + 1;
+        const char c = complete[i];
+        if (c != '\n' && c != '\r') {
+            continue;
         }
+        result += decodeConsoleBlock(complete.mid(start, i - start));
+        if (c == '\r') {
+            // Fold "\r\n" into one break; a lone '\r' becomes a break too
+            // (the panel cannot overwrite a line the way a console does,
+            // and a visible update beats a silently swallowed one).
+            if (i + 1 < size && complete[i + 1] == '\n') {
+                ++i;
+            }
+        }
+        result += QLatin1Char('\n');
+        start = i + 1;
     }
     return result;
 }
