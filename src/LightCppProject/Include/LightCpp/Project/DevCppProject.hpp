@@ -52,6 +52,9 @@ struct DevCppProject {
     QString name;        // [Project] Name, falling back to the file stem
     bool isCpp = true;   // IsCpp=1 → C++; 0 → C
     int type = 0;        // [Project] Type (see kDevCpp* above)
+    /// [Project] UnitCount= — what the file *claims*; the authoritative list
+    /// is `units`. Kept so a mismatch can be reported as a warning.
+    int unitCount = 0;
 
     QStringList compilerFlags;   // [Project] CppCompiler / Compiler
     QStringList linkerFlags;     // [Project] Linker
@@ -125,13 +128,19 @@ struct DevCppProject {
     [[nodiscard]] QByteArray iconResourceScript() const;
 };
 
-/// Parses `.dev` content already in memory.
+/// Parses `.dev` content already in memory. `warnings` (when given) collects
+/// non-fatal oddities — a unit dropped because the two list spellings
+/// disagree, or a declared UnitCount= that does not match what was found —
+/// so a project that silently lost units is not reported as a clean load.
 [[nodiscard]] std::optional<DevCppProject> parseDevProject(
-    const QString& filePath, const QByteArray& content, QString* error = nullptr);
+    const QString& filePath, const QByteArray& content, QString* error = nullptr,
+    QStringList* warnings = nullptr);
 
-/// Reads and parses a `.dev` file from disk.
+/// Reads and parses a `.dev` file from disk. See parseDevProject() for the
+/// `warnings` contract.
 [[nodiscard]] std::optional<DevCppProject> loadDevProject(
-    const QString& filePath, QString* error = nullptr);
+    const QString& filePath, QString* error = nullptr,
+    QStringList* warnings = nullptr);
 
 /// Compiles and links every unit in one compiler invocation.
 ///

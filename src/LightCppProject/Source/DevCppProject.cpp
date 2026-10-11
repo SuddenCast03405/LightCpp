@@ -397,10 +397,40 @@ QString objectFileFor(const DevCppProject& project, const DevCppUnit& unit)
         return withExtension(source, QStringLiteral(".o"));
     }
     const QString base = QFileInfo(source).fileName();
+    const QFileInfo info(source);
+    QString name = withExtension(base, QStringLiteral(".o"));
+    // ObjectOutput= collects every unit in one directory, so two sources in
+    // different folders with the same file name would overwrite each other's
+    // object file. Only those units fold their sub-path into the name
+    // (src/foo.cpp -> src_foo.cpp.o): everything else keeps the original
+    // IDE's classic flat name, so existing projects build identically.
+    int sameBase = 0;
+    for (const DevCppUnit& other : project.units) {
+        if (&other == &unit || (!other.compile && !other.link)) {
+            continue;  // not an object participant
+        }
+        const QString otherSuffix =
+            QFileInfo(other.fileName).suffix().toLower();
+        if (isHeaderSuffix(otherSuffix) || otherSuffix == QLatin1String("rc")) {
+            continue;
+        }
+        const QString otherBase = QFileInfo(pathRelativeTo(
+            project.projectDir,
+            absoluteFrom(project.projectDir, other.fileName))).fileName();
+        if (QString::compare(otherBase, base, Qt::CaseInsensitive) == 0) {
+            ++sameBase;
+        }
+    }
+    if (sameBase > 0) {
+        QString dir = info.path();
+        if (dir != QStringLiteral(".")) {
+            name = dir.replace(QChar(u'/'), QChar(u'_')) + u'_' + name;
+        }
+    }
     return QDir::fromNativeSeparators(
-        pathRelativeTo(project.projectDir,
-                       absoluteFrom(project.projectDir, project.objectOutput)))
-        + u'/' + withExtension(base, QStringLiteral(".o"));
+               pathRelativeTo(project.projectDir,
+                              absoluteFrom(project.projectDir, project.objectOutput)))
+        + u'/' + name;
 }
 
 /// One line of makefile text: a name padded to the classic column, then the
@@ -790,7 +820,8 @@ bool writeDevCppMakefile(const DevCppMakefilePlan& plan,
 // ---------------------------------------------------------------------------
 std::optional<DevCppProject> parseDevProject(const QString& filePath,
                                              const QByteArray& content,
-                                             QString* error)
+                                             QString* error,
+                                             QStringList* warnings)
 {
     const auto fail = [error](const QString& reason) -> std::optional<DevCppProject> {
         if (error != nullptr) {
@@ -857,6 +888,8 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
     project.isCpp = lookup(entries, QStringLiteral("Project"), "IsCpp") != QStringLiteral("0");
     const QString type = lookup(entries, QStringLiteral("Project"), "Type");
     project.type = type.isEmpty() ? 0 : type.toInt();
+    project.unitCount = lookup(entries, QStringLiteral("Project"), "UnitCount")
+                            .toInt();
 
     // C++ projects record their switches in CppCompiler=, C projects in
     // Compiler=; use whichever the flavour calls for and fall back to the
@@ -902,6 +935,12 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
         project.iconPath = absoluteFrom(project.projectDir, icon);
     }
 
+    const auto warn = [warnings](const QString& message) {
+        if (warnings != nullptr) {
+            warnings->append(message);
+        }
+    };
+
     // Units are numbered. They are listed either as [UnitN] sections (what a
     // real project file has) or as UnitN= keys inside [Project] (what a
     // template has), and the two spellings can appear together — so both go
@@ -926,8 +965,24 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
             return;
         }
         const QString key = absoluteFrom(project.projectDir, fileName).toLower();
-        if (seenPaths.contains(key) || unitsByIndex.contains(index)) {
-            return;  // the other spelling already covered this unit
+        if (unitsByIndex.contains(index)) {
+            // The other spelling already claimed this index. Same file is
+            // the benign case (both spellings of one unit); a DIFFERENT
+            // file means one of the two silently vanished from the tree.
+            const QString kept = unitsByIndex.value(index).fileName;
+            if (absoluteFrom(project.projectDir, kept).toLower() != key) {
+                warn(QStringLiteral(
+                         "unit %1 is listed twice with different files "
+                         "('%2' wins, '%3' is dropped)")
+                         .arg(index).arg(kept, fileName));
+            }
+            return;
+        }
+        if (seenPaths.contains(key)) {
+            warn(QStringLiteral("'%1' is listed more than once in the "
+                                "project; only one entry is kept")
+                     .arg(fileName));
+            return;
         }
         seenPaths.insert(key);
         // No per-unit CompileCpp= yet → the project's flavour decides.
@@ -995,10 +1050,21 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
     if (!project.isValid()) {
         return fail(QStringLiteral("the project lists no compilable source files"));
     }
+    // UnitCount= is what the IDE sized its unit table to; a mismatch means
+    // the file was edited by hand (or by another tool) and some units went
+    // missing along the way. Not fatal — the file still opens — but it must
+    // not look like a clean load.
+    if (project.unitCount > 0
+        && project.unitCount != project.units.size()) {
+        warn(QStringLiteral("UnitCount=%1 but %2 unit(s) were found")
+                 .arg(project.unitCount).arg(project.units.size()));
+    }
     return project;
 }
 
-std::optional<DevCppProject> loadDevProject(const QString& filePath, QString* error)
+std::optional<DevCppProject> loadDevProject(const QString& filePath,
+                                            QString* error,
+                                            QStringList* warnings)
 {
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -1008,8 +1074,15 @@ std::optional<DevCppProject> loadDevProject(const QString& filePath, QString* er
         return std::nullopt;
     }
     const QByteArray content = file.readAll();
+    if (file.error() != QFileDevice::NoError) {
+        if (error != nullptr) {
+            *error = QStringLiteral("error reading %1: %2")
+                         .arg(filePath, file.errorString());
+        }
+        return std::nullopt;
+    }
     file.close();
-    return parseDevProject(filePath, content, error);
+    return parseDevProject(filePath, content, error, warnings);
 }
 
 }  // namespace LightCpp::Project

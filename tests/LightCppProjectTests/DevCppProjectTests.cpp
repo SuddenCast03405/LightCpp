@@ -607,6 +607,36 @@ TEST(DevCppProject, MakefileCarriesThePerUnitRules)
         QStringLiteral("\t$(CPP) -c src/util.cpp -o obj/util.o $(CXXFLAGS)")));
 }
 
+TEST(DevCppProject, MakefileDisambiguatesCollidingObjectNames)
+{
+    const auto project = parse(
+        "[Project]\n"
+        "Name=collide\n"
+        "Type=0\n"
+        "UnitCount=2\n"
+        "ObjectOutput=obj\n"
+        "[Unit1]\n"
+        "FileName=src/util.cpp\n"
+        "Compile=1\n"
+        "Link=1\n"
+        "[Unit2]\n"
+        "FileName=lib/util.cpp\n"
+        "Compile=1\n"
+        "Link=1\n");
+    ASSERT_TRUE(project.has_value());
+    const DevCppMakefilePlan plan =
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain());
+    const QStringList lines = makefileLines(plan);
+
+    // Two sources with the same file name in different folders would both
+    // compile to obj/util.o and silently overwrite each other. Only these
+    // units fold their sub-path into the object name; non-colliding projects
+    // keep the original IDE's flat naming (see the per-unit-rules test).
+    EXPECT_TRUE(lines.contains(QStringLiteral("obj/src_util.o: src/util.cpp")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("obj/lib_util.o: lib/util.cpp")));
+    EXPECT_FALSE(lines.contains(QStringLiteral("obj/util.o: src/util.cpp")));
+}
+
 TEST(DevCppProject, MakefileForACProjectLinksThroughCC)
 {
     const auto project = parse(

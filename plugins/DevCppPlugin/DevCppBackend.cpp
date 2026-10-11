@@ -67,8 +67,9 @@ public:
                      QString* error) override
     {
         QString parseError;
+        QStringList warnings;
         std::optional<LightCpp::Project::DevCppProject> project =
-            LightCpp::Project::loadDevProject(filePath, &parseError);
+            LightCpp::Project::loadDevProject(filePath, &parseError, &warnings);
         if (!project.has_value()) {
             if (error != nullptr) {
                 *error = parseError;
@@ -77,6 +78,15 @@ public:
         }
         project_ = std::move(*project);
         open_ = true;
+        // A load that silently lost units must not look like a clean one:
+        // the file "opened" but the tree is smaller than what was written.
+        for (const QString& warning : std::as_const(warnings)) {
+            if (services_ != nullptr) {
+                services_->log(QStringLiteral("[DevCppProject] %1: %2")
+                                   .arg(QFileInfo(filePath).fileName(),
+                                        warning));
+            }
+        }
 
         if (summary != nullptr) {
             summary->filePath = project_.filePath;
@@ -129,7 +139,14 @@ public:
                 services_->log(QStringLiteral("[DevCppProject] %1")
                                    .arg(writeError));
             }
-        } else if (services_ != nullptr) {
+            // No makefile, no build: running make now would either use the
+            // stale previous generation (invisible wrong rules) or fail
+            // with a confusing "-f: No such file". Returning no steps makes
+            // the IDE report the declined build, with the reason above in
+            // the Plugins channel.
+            return {};
+        }
+        if (services_ != nullptr) {
             services_->log(QStringLiteral(
                                "[DevCppProject] Generated makefile: %1")
                                .arg(plan.path));
