@@ -370,6 +370,16 @@ void OutputPanel::clearOutput()
     case ChannelGit:     gitLog_->clear(); break;
     case ChannelDebug:   debugLog_->clear(); break;
     case ChannelPlugins: pluginLog_->clear(); break;
+    case ChannelCcls:
+        if (cclsLog_ != nullptr) {
+            cclsLog_->clear();
+        }
+        break;
+    case ChannelLibClang:
+        if (libClangLog_ != nullptr) {
+            libClangLog_->clear();
+        }
+        break;
     case ChannelProblems:        setProblems({}); break;
     case ChannelProblemsCompiler: setCompilerProblems({}); break;
     default:

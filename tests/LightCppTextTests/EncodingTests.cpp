@@ -321,6 +321,21 @@ TEST(EncodingConvert, UnpairedSurrogateRejected)
     EXPECT_FALSE(converted.hasValue());
 }
 
+TEST(EncodingConvert, InvalidUtf8Rejected)
+{
+    // 0xFF is never valid UTF-8. A manual "reopen as UTF-8" override on a
+    // misdetected legacy file used to produce U+FFFD soup here, which a
+    // later save then wrote back over the original bytes — the strict
+    // decoder must fail instead.
+    const QByteArray invalid("a\xFF""b");
+    EXPECT_FALSE(LightCpp::Text::decodeToQString(
+        invalid, TextEncoding::Utf8).has_value());
+    const auto converted = LightCpp::Text::convertToUtf8(
+        invalid, TextEncoding::Utf8);
+    ASSERT_FALSE(converted.hasValue());
+    EXPECT_EQ(converted.error(), LightCpp::Text::ConvertError::InvalidInput);
+}
+
 // --- encoding: QString -> target bytes (the save path) --------------------------
 
 TEST(EncodingEncode, Utf8NoBom)
@@ -411,6 +426,19 @@ TEST(EncodingEncode, GbkUnmappableEmojiRejected)
     // Emoji are outside GBK: saving a GBK tab containing one must fail.
     const auto encoded = LightCpp::Text::encodeFromQString(
         QString::fromUtf8("\xF0\x9F\x98\x80"), TextEncoding::Gbk);
+    EXPECT_FALSE(encoded.hasValue());
+}
+
+TEST(EncodingEncode, BestFitCharacterRejected)
+{
+    // U+0410 (Cyrillic capital A) has a best-fit mapping to ASCII 'A' in
+    // Windows-1252. Best-fit substitution does not set usedDefault, so a
+    // plain dwFlags=0 encoder used to report SUCCESS while writing a
+    // different character than the user typed — silent corruption. The
+    // WC_NO_BEST_FIT_CHARS encoder must fail instead.
+    const QChar cyrillicA(0x0410);
+    const auto encoded = LightCpp::Text::encodeFromQString(
+        QString(cyrillicA), TextEncoding::Windows1252);
     EXPECT_FALSE(encoded.hasValue());
 }
 

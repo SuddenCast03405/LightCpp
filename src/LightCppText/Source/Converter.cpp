@@ -119,10 +119,19 @@ std::optional<QString> decodeToQString(
     switch (encoding) {
     // -- Unicode families: Qt built-ins ----------------------------------
     case TextEncoding::Utf8: {
-        // Invalid sequences are replaced with U+FFFD by Qt, matching the
-        // core module's default sanitize policy. (Detection validated the
-        // buffer before choosing UTF-8.)
-        return QString::fromUtf8(bytes);
+        // Strict: invalid sequences must fail the conversion, not silently
+        // become U+FFFD. The auto-detected path only lands here after the
+        // detector validated the buffer, so nothing changes for it — but a
+        // manual encoding override (readTextFileWithEncoding) bypasses that
+        // validation, and lenient decoding used to produce U+FFFD soup that
+        // a later Ctrl+S wrote back over the original bytes, destroying the
+        // file's real text.
+        QStringDecoder decoder(QStringConverter::Utf8);
+        QString decoded = decoder(bytes);
+        if (decoder.hasError()) {
+            return std::nullopt;
+        }
+        return decoded;
     }
     case TextEncoding::Utf16Le:
     case TextEncoding::Utf16Be:
@@ -253,15 +262,23 @@ ConvertResult encodeFromQString(const QString& text, TextEncoding encoding, bool
         }
         const wchar_t* src = reinterpret_cast<const wchar_t*>(text.constData());
         const int srcLen = text.size();
+        // WC_NO_BEST_FIT_CHARS: without it Windows silently substitutes
+        // look-alike characters ("best fit") for characters the code page
+        // cannot represent, and `usedDefault` is NOT set for those — the
+        // guard below would pass corrupted text through as a success.
+        // With the flag every unmappable character sets `usedDefault` and
+        // the conversion fails, which the caller reports to the user
+        // instead of destroying their text on disk.
+        constexpr DWORD encodeFlags = WC_NO_BEST_FIT_CHARS;
         const int size = ::WideCharToMultiByte(
-            *codePage, 0, src, srcLen, nullptr, 0, nullptr, nullptr);
+            *codePage, encodeFlags, src, srcLen, nullptr, 0, nullptr, nullptr);
         if (size <= 0) {
             return ConvertResult::failure(ConvertError::InvalidInput);
         }
         out.resize(size, '\0');
         BOOL usedDefault = FALSE;
         const int written = ::WideCharToMultiByte(
-            *codePage, 0, src, srcLen, out.data(), size,
+            *codePage, encodeFlags, src, srcLen, out.data(), size,
             nullptr, &usedDefault);
         // usedDefault = some character had to be substituted with the code
         // page's default char — the encoding cannot represent the text, so
