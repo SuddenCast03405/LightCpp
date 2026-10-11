@@ -32,3 +32,5 @@ coverage_html/
 # OS files
 Thumbs.db
 .DS_Store
+
+.tmp.txt
