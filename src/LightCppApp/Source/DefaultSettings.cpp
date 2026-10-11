@@ -2,7 +2,6 @@
 
 #include "LightCpp/App/DefaultSettings.hpp"
 
-#include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/App/ToolchainPaths.hpp"
 #include "LightCpp/Settings/SettingsJson.hpp"
 #include "LightCpp/Settings/SettingsStore.hpp"
@@ -38,8 +37,8 @@ QString existingPath(const QStringList& candidates)
 /// The bin directory of a toolchain shipped next to the IDE:
 /// <exe>/MinGW64, <exe>/Clang64, <exe>/MinGW32, <exe>/Clang32 — the first
 /// one that exists AND carries a compiler in its bin. Nothing else is
-/// identified: when none of the four exists, no GCC-family default
-/// toolchain is generated (a detected MSVC still is).
+/// identified: when none of the four exists, no default toolchain is
+/// generated at all (MSVC lives elsewhere and is never identified here).
 QString portableToolchainBin()
 {
     const QString exeDir = QCoreApplication::applicationDirPath();
@@ -87,18 +86,28 @@ QHash<QString, QString> toolchainBuildTools(const QString& cmake, const QString&
     return tools;
 }
 
-/// A toolchain document wired to one bin directory: gcc preferred over
-/// clang, gdb over lldb, mingw32-make over make; every tool that does not
-/// exist there stays unset.
+/// A toolchain document wired to one bin directory: every compiler and
+/// debugger found there is recorded under its own key ("gcc", "g++",
+/// "clang", "clang++", "gdb", "lldb") — the kit's compilerFamily picks
+/// what it needs, so nothing is dropped or merged. Build tools prefer
+/// mingw32-make over make; every tool that does not exist stays unset.
 Toolchain toolchainFromBin(const QString& bin, const QString& id,
                            const QString& name)
 {
     Toolchain out;
     out.id = id;
     out.name = name;
-    out.cCompiler = binTool(bin, {"gcc.exe", "clang.exe"});
-    out.cppCompiler = binTool(bin, {"g++.exe", "clang++.exe"});
-    out.debugger = binTool(bin, {"gdb.exe", "lldb.exe"});
+    const auto note = [&out](const char* key, const QString& path) {
+        if (!path.isEmpty()) {
+            out.compilers.insert(QLatin1String(key), path);
+        }
+    };
+    note("gcc", binTool(bin, {"gcc.exe"}));
+    note("g++", binTool(bin, {"g++.exe"}));
+    note("clang", binTool(bin, {"clang.exe"}));
+    note("clang++", binTool(bin, {"clang++.exe"}));
+    note("gdb", binTool(bin, {"gdb.exe"}));
+    note("lldb", binTool(bin, {"lldb.exe"}));
     out.clangd = binTool(bin, {"clangd.exe"});
     out.clangFormat = binTool(bin, {"clang-format.exe"});
     out.buildTools = toolchainBuildTools(
@@ -131,12 +140,13 @@ QList<KitBuildConfiguration> standardConfigurations(const QStringList& debugFlag
     return {debug, release};
 }
 
-/// The GNU kit for the MSYS2 UCRT64 toolchain (gcc/g++ or clang/clang++).
-/// The kit inherits every tool from the toolchain named by `toolchainId`;
-/// only its flags, standard and configurations are its own.
+/// A starter kit for one compiler family inside the toolchain: the kit
+/// inherits every tool from the toolchain named by `toolchainId`, and its
+/// compilerFamily picks gcc/g++, clang/clang++ — or nothing (else). Only
+/// its flags, standard and configurations are its own.
 Kit gnuKit(const QString& id, const QString& name, const QString& toolchainId,
-           bool isDefault, const QStringList& warningFlags,
-           const QString& cppStandard)
+           const QString& compilerFamily, bool isDefault,
+           const QStringList& warningFlags, const QString& cppStandard)
 {
     Kit kit;
     kit.id = id;
@@ -145,6 +155,7 @@ Kit gnuKit(const QString& id, const QString& name, const QString& toolchainId,
     kit.isDefault = isDefault;
     kit.inheritToolchain = true;
     kit.toolchainId = toolchainId;
+    kit.compilerFamily = compilerFamily;
     kit.cppStandard = cppStandard;
     kit.compileFlags = warningFlags;
     kit.linkFlags = warningFlags;
@@ -153,36 +164,6 @@ Kit gnuKit(const QString& id, const QString& name, const QString& toolchainId,
     kit.buildConfigurations = standardConfigurations(
         {QStringLiteral("-g"), QStringLiteral("-O0")},
         {QStringLiteral("-O2"), QStringLiteral("-DNDEBUG")}, cppStandard);
-    return kit;
-}
-
-Toolchain msvcToolchain(const LightCpp::App::Msvc::Toolchain& toolchain)
-{
-    Toolchain out;
-    out.id = QStringLiteral("msvc");
-    out.name = toolchain.label;
-    out.cCompiler = toolchain.clPath;
-    out.cppCompiler = toolchain.clPath;
-    return out;
-}
-
-Kit msvcKit(const QString& toolchainId)
-{
-    Kit kit;
-    kit.id = QStringLiteral("msvc");
-    kit.name = QStringLiteral("MSVC");
-    kit.enabled = true;
-    kit.isDefault = false;
-    kit.inheritToolchain = true;
-    kit.toolchainId = toolchainId;
-    // The MSVC compile path builds its own base line (/nologo /W4 /EHsc /MT)
-    // and takes the optimisation flags from the configuration below, like
-    // the flagsFor() table it replaces.
-    kit.cppStandard.clear();  // the compiler's own default
-    kit.buildConfigurations =
-        standardConfigurations({QStringLiteral("/Od")},
-                               {QStringLiteral("/O2"), QStringLiteral("/DNDEBUG")},
-                               QString());
     return kit;
 }
 
@@ -267,44 +248,37 @@ WriteResult ensureDefaultConfigFiles(const QString& dir)
         Toolchain primary = toolchainFromBin(portableBin, lower, dirName);
         if (primary.isValid()) {
             toolchains.append(primary);
-            const bool hasGcc = !primary.cCompiler.isEmpty()
-                                && !primary.cCompiler.contains(
-                                    QStringLiteral("clang"));
-            const bool hasClangCpp = !binTool(portableBin, {"clang++.exe"})
-                                          .isEmpty();
+            // One kit per compiler family the bin actually carries: the
+            // toolchain records every compiler it found, the kits select
+            // by compilerFamily — a "… Clang" kit compiles with clang
+            // because the family says so, not because a path was copied.
+            const bool hasGcc =
+                !primary.compilers.value(QStringLiteral("g++")).isEmpty();
+            const bool hasClang =
+                !primary.compilers.value(QStringLiteral("clang++")).isEmpty();
             if (hasGcc) {
-                kits.append(gnuKit(lower + QStringLiteral("-gcc"),
-                                   dirName + QStringLiteral(" GCC"),
-                                   primary.id, true,
-                                   {QStringLiteral("-Wall"),
-                                    QStringLiteral("-Wextra"),
-                                    QStringLiteral("-fdiagnostics-color=always")},
-                                   QStringLiteral("gnu++20")));
+                kits.append(gnuKit(
+                    lower + QStringLiteral("-gcc"),
+                    dirName + QStringLiteral(" GCC"), primary.id,
+                    QStringLiteral("gcc"), true,
+                    {QStringLiteral("-Wall"), QStringLiteral("-Wextra"),
+                     QStringLiteral("-fdiagnostics-color=always")},
+                    QStringLiteral("gnu++20")));
             }
-            if (hasClangCpp) {
-                // The Clang kit keeps inheriting the debugger/build tools
-                // from the toolchain, but names the clang compilers itself:
-                // inheritance is per-field, and a kit called "… Clang" that
-                // compiled with gcc would be a lie.
-                Kit clangKit = gnuKit(lower + QStringLiteral("-clang"),
-                                      dirName + QStringLiteral(" Clang"),
-                                      primary.id, !hasGcc,
-                                      {QStringLiteral("-Wall"),
-                                       QStringLiteral("-Wextra"),
-                                       QStringLiteral("-fcolor-diagnostics")},
-                                      QStringLiteral("c++20"));
-                clangKit.cCompiler = binTool(portableBin, {"clang.exe"});
-                clangKit.cppCompiler = binTool(portableBin, {"clang++.exe"});
-                kits.append(clangKit);
+            if (hasClang) {
+                kits.append(gnuKit(
+                    lower + QStringLiteral("-clang"),
+                    dirName + QStringLiteral(" Clang"), primary.id,
+                    QStringLiteral("llvm"), !hasGcc,
+                    {QStringLiteral("-Wall"), QStringLiteral("-Wextra"),
+                     QStringLiteral("-fcolor-diagnostics")},
+                    QStringLiteral("c++20")));
             }
         }
     }
-
-    const LightCpp::App::Msvc::Toolchain msvc = LightCpp::App::Msvc::detect();
-    if (msvc.isValid()) {
-        toolchains.append(msvcToolchain(msvc));
-        kits.append(msvcKit(msvcToolchain(msvc).id));
-    }
+    // MSVC lives outside the application directory and is deliberately not
+    // identified here: the starter only ever names toolchains shipped next
+    // to the executable.
 
     // --- defaults.json -------------------------------------------------------
     GlobalDefaults defaults;

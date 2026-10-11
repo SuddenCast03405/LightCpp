@@ -75,9 +75,13 @@ struct ToolchainToolSpec {
     const char* label;
 };
 const ToolchainToolSpec kToolchainToolSpecs[] = {
-    {"cCompiler", QT_TRANSLATE_NOOP("SettingsDialog", "C compiler")},
-    {"cppCompiler", QT_TRANSLATE_NOOP("SettingsDialog", "C++ compiler")},
-    {"debugger", QT_TRANSLATE_NOOP("SettingsDialog", "Debugger")},
+    {"gcc", QT_TRANSLATE_NOOP("SettingsDialog", "gcc")},
+    {"g++", QT_TRANSLATE_NOOP("SettingsDialog", "g++")},
+    {"clang", QT_TRANSLATE_NOOP("SettingsDialog", "clang")},
+    {"clang++", QT_TRANSLATE_NOOP("SettingsDialog", "clang++")},
+    {"cl", QT_TRANSLATE_NOOP("SettingsDialog", "cl (MSVC)")},
+    {"gdb", QT_TRANSLATE_NOOP("SettingsDialog", "gdb")},
+    {"lldb", QT_TRANSLATE_NOOP("SettingsDialog", "lldb")},
     {"clangd", QT_TRANSLATE_NOOP("SettingsDialog", "Clangd")},
     {"clangFormat", QT_TRANSLATE_NOOP("SettingsDialog", "Clang-Format")},
     {"cmake", QT_TRANSLATE_NOOP("SettingsDialog", "CMake")},
@@ -125,18 +129,17 @@ QString toolchainDisplayName(const Settings::Toolchain& toolchain)
     return SettingsDialog::tr("(unnamed toolchain)");
 }
 
-/// Read/write one of the nine tool paths by its spec key. Used by the
-/// form load/commit so each row needs no dedicated member variable pair.
+/// Read/write one of the tool paths by its spec key. Used by the form
+/// load/commit so each row needs no dedicated member variable pair.
+/// Compiler/debugger keys address the `compilers` map; the rest address
+/// their dedicated fields.
 QString toolchainPath(const Settings::Toolchain& toolchain, const QString& key)
 {
-    if (key == QLatin1String("cCompiler")) {
-        return toolchain.cCompiler;
-    }
-    if (key == QLatin1String("cppCompiler")) {
-        return toolchain.cppCompiler;
-    }
-    if (key == QLatin1String("debugger")) {
-        return toolchain.debugger;
+    if (key == QLatin1String("gcc") || key == QLatin1String("g++")
+        || key == QLatin1String("clang") || key == QLatin1String("clang++")
+        || key == QLatin1String("cl") || key == QLatin1String("gdb")
+        || key == QLatin1String("lldb")) {
+        return toolchain.compilers.value(key);
     }
     if (key == QLatin1String("clangd")) {
         return toolchain.clangd;
@@ -150,12 +153,15 @@ QString toolchainPath(const Settings::Toolchain& toolchain, const QString& key)
 void setToolchainPath(Settings::Toolchain* toolchain, const QString& key,
                       const QString& path)
 {
-    if (key == QLatin1String("cCompiler")) {
-        toolchain->cCompiler = path;
-    } else if (key == QLatin1String("cppCompiler")) {
-        toolchain->cppCompiler = path;
-    } else if (key == QLatin1String("debugger")) {
-        toolchain->debugger = path;
+    if (key == QLatin1String("gcc") || key == QLatin1String("g++")
+        || key == QLatin1String("clang") || key == QLatin1String("clang++")
+        || key == QLatin1String("cl") || key == QLatin1String("gdb")
+        || key == QLatin1String("lldb")) {
+        if (path.isEmpty()) {
+            toolchain->compilers.remove(key);
+        } else {
+            toolchain->compilers.insert(key, path);
+        }
     } else if (key == QLatin1String("clangd")) {
         toolchain->clangd = path;
     } else if (key == QLatin1String("clangFormat")) {
@@ -571,6 +577,28 @@ QWidget* SettingsDialog::buildKitsPage()
     // Switching the referenced toolchain re-resolves the inherited display
     // (only while the kit actually inherits).
     connect(kitToolchainId_, &QComboBox::currentTextChanged, this, [this](const QString&) {
+        if (kitInheritToolchain_->isChecked()) {
+            updateKitInheritanceUi();
+        }
+    });
+
+    // compilerFamily decides which toolchain compilers map onto the kit's
+    // C/C++ slots when inheriting: gcc -> gcc/g++, llvm -> clang/clang++,
+    // msvc -> cl. "else" inherits no compiler at all — the kit names its
+    // own.
+    kitCompilerFamily_ = new QComboBox(this);
+    kitCompilerFamily_->setObjectName(QStringLiteral("kit.compilerFamily"));
+    kitCompilerFamily_->addItem(tr("else (own compilers)"), QString());
+    kitCompilerFamily_->addItem(QStringLiteral("gcc"), QStringLiteral("gcc"));
+    kitCompilerFamily_->addItem(QStringLiteral("llvm"), QStringLiteral("llvm"));
+    kitCompilerFamily_->addItem(QStringLiteral("msvc"), QStringLiteral("msvc"));
+    kitCompilerFamily_->setToolTip(
+        tr("Which compiler driver family this kit builds with. While "
+           "inheriting, the matching compilers (gcc/g++, clang/clang++ or "
+           "cl) are taken from the toolchain; \"else\" inherits none and "
+           "the kit names its own."));
+    form->addRow(tr("Compiler family"), kitCompilerFamily_);
+    connect(kitCompilerFamily_, &QComboBox::currentIndexChanged, this, [this](int) {
         if (kitInheritToolchain_->isChecked()) {
             updateKitInheritanceUi();
         }
@@ -1553,6 +1581,7 @@ void SettingsDialog::loadKitForm(int kitIndex)
         kitIsDefault_->setChecked(false);
         kitInheritToolchain_->setChecked(false);
         kitToolchainId_->setCurrentText(QString());
+        kitCompilerFamily_->setCurrentIndex(0);
         for (QComboBox* combo : {kitCCompiler_, kitCppCompiler_, kitDebugger_,
                                  kitClangd_, kitClangFormat_, kitToolCmake_,
                                  kitToolNinja_, kitToolGnuMake_, kitToolMsbuild_,
@@ -1577,6 +1606,8 @@ void SettingsDialog::loadKitForm(int kitIndex)
     kitIsDefault_->setChecked(kit.isDefault);
     kitInheritToolchain_->setChecked(kit.inheritToolchain);
     kitToolchainId_->setCurrentText(kit.toolchainId);
+    const int familyIndex = kitCompilerFamily_->findData(kit.compilerFamily);
+    kitCompilerFamily_->setCurrentIndex(familyIndex < 0 ? 0 : familyIndex);
     kitCCompiler_->setCurrentText(kit.cCompiler);
     kitCppCompiler_->setCurrentText(kit.cppCompiler);
     kitDebugger_->setCurrentText(kit.debugger);
@@ -1621,6 +1652,7 @@ void SettingsDialog::commitKitForm()
     kit.isDefault = kitIsDefault_->isChecked();
     kit.inheritToolchain = kitInheritToolchain_->isChecked();
     kit.toolchainId = kitToolchainId_->currentText().trimmed();
+    kit.compilerFamily = kitCompilerFamily_->currentData().toString();
     // While inheriting, the tool widgets display the resolved toolchain
     // paths; committing them would freeze today's toolchain into the kit's
     // own fields and silently break the inheritance (non-empty kit fields
@@ -1862,6 +1894,33 @@ void SettingsDialog::updateKitSuggestions()
             }
         }
     }
+    // The kit's C/C++/debugger slots accept every compiler of a matching
+    // kind the toolchains carry: C slots list gcc/clang/cl, C++ slots
+    // g++/clang++/cl, debugger slots gdb/lldb.
+    QStringList cCompilers, cppCompilers, debuggers;
+    for (const Settings::Toolchain& toolchain : state(currentScope_).toolchains) {
+        for (const QString& key :
+             {QStringLiteral("gcc"), QStringLiteral("g++"),
+              QStringLiteral("clang"), QStringLiteral("clang++"),
+              QStringLiteral("cl"), QStringLiteral("gdb"),
+              QStringLiteral("lldb")}) {
+            const QString path = toolchain.compilers.value(key);
+            if (path.isEmpty()) {
+                continue;
+            }
+            if (key == QLatin1String("gcc") || key == QLatin1String("clang")
+                || key == QLatin1String("cl")) {
+                cCompilers.append(path);
+            }
+            if (key == QLatin1String("g++") || key == QLatin1String("clang++")
+                || key == QLatin1String("cl")) {
+                cppCompilers.append(path);
+            }
+            if (key == QLatin1String("gdb") || key == QLatin1String("lldb")) {
+                debuggers.append(path);
+            }
+        }
+    }
     const auto suggest = [](QComboBox* combo, const QStringList& items) {
         const QString current = combo->currentText();
         QSignalBlocker blocker(combo);
@@ -1869,9 +1928,9 @@ void SettingsDialog::updateKitSuggestions()
         combo->addItems(items);
         combo->setCurrentText(current);
     };
-    suggest(kitCCompiler_, byKey.value(QStringLiteral("cCompiler")));
-    suggest(kitCppCompiler_, byKey.value(QStringLiteral("cppCompiler")));
-    suggest(kitDebugger_, byKey.value(QStringLiteral("debugger")));
+    suggest(kitCCompiler_, cCompilers);
+    suggest(kitCppCompiler_, cppCompilers);
+    suggest(kitDebugger_, debuggers);
     suggest(kitClangd_, byKey.value(QStringLiteral("clangd")));
     suggest(kitClangFormat_, byKey.value(QStringLiteral("clangFormat")));
     suggest(kitToolCmake_, byKey.value(QStringLiteral("cmake")));
@@ -1953,16 +2012,46 @@ void SettingsDialog::applyKitInheritanceDisplay()
         // Nothing to inherit from: keep showing the kit's own values.
         return;
     }
-    // Mirror SettingsStore::applyToolchainInheritance — fields the kit names
-    // itself still win, so show the kit's snapshot value when non-empty.
+    // Mirror SettingsStore::applyToolchainInheritance — the kit's compiler
+    // family picks which toolchain compilers land in the C/C++ slots, and
+    // fields the kit names itself still win, so show the kit's snapshot
+    // value when non-empty.
     const auto show = [this](QComboBox* combo, const QString& inherited) {
         const QString own = kitToolFieldsBackup_.value(combo);
         QSignalBlocker blocker(combo);
         combo->setCurrentText(own.isEmpty() ? inherited : own);
     };
-    show(kitCCompiler_, toolchain->cCompiler);
-    show(kitCppCompiler_, toolchain->cppCompiler);
-    show(kitDebugger_, toolchain->debugger);
+    const QString family = kitCompilerFamily_->currentData().toString();
+    const QString empty;
+    const QString cCompiler =
+        family == QLatin1String("gcc")
+            ? toolchain->compilers.value(QStringLiteral("gcc"))
+        : family == QLatin1String("llvm")
+            ? toolchain->compilers.value(QStringLiteral("clang"))
+        : family == QLatin1String("msvc")
+            ? toolchain->compilers.value(QStringLiteral("cl"))
+            : empty;
+    const QString cppCompiler =
+        family == QLatin1String("gcc")
+            ? toolchain->compilers.value(QStringLiteral("g++"))
+        : family == QLatin1String("llvm")
+            ? toolchain->compilers.value(QStringLiteral("clang++"))
+        : family == QLatin1String("msvc")
+            ? toolchain->compilers.value(QStringLiteral("cl"))
+            : empty;
+    QString debugger;
+    if (family == QLatin1String("msvc")) {
+        debugger = toolchain->compilers.value(QStringLiteral("cdb"));
+    } else if (family == QLatin1String("gcc")
+               || family == QLatin1String("llvm")) {
+        debugger = toolchain->compilers.value(QStringLiteral("gdb"));
+        if (debugger.isEmpty()) {
+            debugger = toolchain->compilers.value(QStringLiteral("lldb"));
+        }
+    }
+    show(kitCCompiler_, cCompiler);
+    show(kitCppCompiler_, cppCompiler);
+    show(kitDebugger_, debugger);
     show(kitClangd_, toolchain->clangd);
     show(kitClangFormat_, toolchain->clangFormat);
     show(kitToolCmake_, toolchain->buildTools.value(QStringLiteral("cmake")));

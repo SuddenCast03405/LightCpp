@@ -34,18 +34,33 @@ struct Toolchain {
     QString id;
     QString name;
 
-    QString cCompiler;
-    QString cppCompiler;
-    QString debugger;      // gdb / lldb / ...
+    /// Every compiler/debugger executable recognized in this toolchain,
+    /// keyed by program name: "gcc", "g++", "clang", "clang++", "cl",
+    /// "gdb", "lldb", "cdb". A key that is missing (or empty) means the
+    /// tool is not part of this toolchain — a kit picks what its
+    /// compilerFamily needs instead of the toolchain nominating "the" one
+    /// compiler. A directory hosting both gcc and clang therefore carries
+    /// all four keys.
+    QHash<QString, QString> compilers;
     QString clangd;
     QString clangFormat;
     /// "cmake" | "ninja" | "gnuMake" | "msbuild" -> one path ("" = unset).
     QHash<QString, QString> buildTools;
 
-    /// A toolchain is usable when it is identified and names both compilers.
+    /// A toolchain is usable when it is identified and carries at least one
+    /// compiler or debugger.
     [[nodiscard]] bool isValid() const noexcept
     {
-        return !id.isEmpty() && !cCompiler.isEmpty() && !cppCompiler.isEmpty();
+        if (id.isEmpty()) {
+            return false;
+        }
+        for (auto it = compilers.constBegin(); it != compilers.constEnd();
+             ++it) {
+            if (!it.value().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
     }
 };
 
@@ -90,6 +105,16 @@ struct Kit {
     /// names explicitly wins over the toolchain.
     bool inheritToolchain = false;
     QString toolchainId;
+
+    /// Which compiler driver family this kit builds with:
+    ///   "gcc"  -> inherits gcc / g++ from the toolchain
+    ///   "llvm" -> inherits clang / clang++
+    ///   "msvc" -> inherits cl (both C and C++)
+    ///   ""     -> else: nothing is inherited; the kit names its own
+    ///             compilers outright (or is incomplete until it does).
+    /// The compilers below keep working as per-field overrides on top of
+    /// whatever the family resolves to.
+    QString compilerFamily;
 
     // Necessary (unless inherited from a toolchain)
     QString cCompiler;

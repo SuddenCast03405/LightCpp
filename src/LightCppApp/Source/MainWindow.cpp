@@ -722,16 +722,28 @@ QList<StartupPage::StartupCheckItem> MainWindow::buildStartupChecks() const
     using Item = StartupPage::StartupCheckItem;
     QList<Item> items;
 
-    // One row per toolchain: the C++ compiler is the one that matters, the
-    // C compiler is the fallback thing to name when there is nothing else.
+    // One row per toolchain: the C++ compiler (g++/clang++/cl) is the one
+    // that matters; any other compiler the toolchain carries names the
+    // row when there is nothing else.
     for (const LightCpp::Settings::Toolchain& toolchain : settings_->toolchains()) {
         Item item;
         item.label = tr("Toolchain %1").arg(toolchain.name.isEmpty()
                                                 ? toolchain.id
                                                 : toolchain.name);
-        item.detail = !toolchain.cppCompiler.isEmpty()
-                          ? toolchain.cppCompiler
-                          : toolchain.cCompiler;
+        QString detail = toolchain.compilers.value(QStringLiteral("g++"));
+        if (detail.isEmpty()) {
+            detail = toolchain.compilers.value(QStringLiteral("clang++"));
+        }
+        if (detail.isEmpty()) {
+            detail = toolchain.compilers.value(QStringLiteral("cl"));
+        }
+        if (detail.isEmpty()) {
+            detail = toolchain.compilers.value(QStringLiteral("gcc"));
+        }
+        if (detail.isEmpty()) {
+            detail = toolchain.compilers.value(QStringLiteral("clang"));
+        }
+        item.detail = detail;
         item.requiresFile = true;
         if (item.detail.isEmpty()) {
             item.requiresFile = false;

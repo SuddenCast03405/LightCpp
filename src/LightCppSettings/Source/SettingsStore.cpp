@@ -273,18 +273,50 @@ Preferences SettingsStore::preferences() const
     return out;
 }
 
-/// Fill the kit's empty tool fields from `toolchain`. The kit's own values
-/// always win, so inheritance is purely a fallback.
+/// Fill the kit's empty tool fields from `toolchain`. The kit's compiler
+/// family decides which toolchain compilers map onto the kit's C/C++
+/// slots; the kit's own values always win, so inheritance is purely a
+/// fallback. An unknown (or empty) family inherits no compiler at all —
+/// an "else" kit names its compilers outright.
 void applyToolchainInheritance(Kit& kit, const Toolchain& toolchain)
 {
-    if (kit.cCompiler.isEmpty()) {
-        kit.cCompiler = toolchain.cCompiler;
+    const QString family = kit.compilerFamily;
+    if (family == QLatin1String("gcc")) {
+        if (kit.cCompiler.isEmpty()) {
+            kit.cCompiler = toolchain.compilers.value(QStringLiteral("gcc"));
+        }
+        if (kit.cppCompiler.isEmpty()) {
+            kit.cppCompiler = toolchain.compilers.value(QStringLiteral("g++"));
+        }
+    } else if (family == QLatin1String("llvm")) {
+        if (kit.cCompiler.isEmpty()) {
+            kit.cCompiler = toolchain.compilers.value(QStringLiteral("clang"));
+        }
+        if (kit.cppCompiler.isEmpty()) {
+            kit.cppCompiler =
+                toolchain.compilers.value(QStringLiteral("clang++"));
+        }
+    } else if (family == QLatin1String("msvc")) {
+        // cl compiles both C and C++.
+        if (kit.cCompiler.isEmpty()) {
+            kit.cCompiler = toolchain.compilers.value(QStringLiteral("cl"));
+        }
+        if (kit.cppCompiler.isEmpty()) {
+            kit.cppCompiler = toolchain.compilers.value(QStringLiteral("cl"));
+        }
     }
-    if (kit.cppCompiler.isEmpty()) {
-        kit.cppCompiler = toolchain.cppCompiler;
-    }
+    // else: "else" family — no compiler inheritance.
+
     if (kit.debugger.isEmpty()) {
-        kit.debugger = toolchain.debugger;
+        if (family == QLatin1String("msvc")) {
+            kit.debugger = toolchain.compilers.value(QStringLiteral("cdb"));
+        } else {
+            // gcc/llvm kits debug with gdb when present, else lldb.
+            const QString gdb = toolchain.compilers.value(QStringLiteral("gdb"));
+            kit.debugger =
+                !gdb.isEmpty() ? gdb
+                               : toolchain.compilers.value(QStringLiteral("lldb"));
+        }
     }
     if (kit.clangd.isEmpty()) {
         kit.clangd = toolchain.clangd;

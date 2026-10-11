@@ -2,6 +2,7 @@
 
 #include "LightCpp/Settings/SettingsJson.hpp"
 
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonValue>
 
@@ -75,6 +76,13 @@ void readOptionalString(const QJsonObject& object, const char* key, QString& out
     if (value.isString()) {
         out = value.toString();
     }
+}
+
+/// A plain string field read into a local (legacy documents only).
+[[nodiscard]] QString readLegacyString(const QJsonObject& object, const char* key)
+{
+    const QJsonValue value = object.value(QLatin1String(key));
+    return value.isString() ? value.toString() : QString();
 }
 
 void readFontSpec(const QJsonObject& object, const char* key, FontSpec& out)
@@ -154,6 +162,11 @@ void writeBuildToolSingleMap(QJsonObject& object, const char* key,
     object.insert(QLatin1String(key), tools);
 }
 
+/// The fixed compiler/debugger keys a toolchain's `compilers` object can
+/// carry. Anything outside this set is ignored on read.
+constexpr const char* kCompilerKeys[] = {
+    "gcc", "g++", "clang", "clang++", "cl", "gdb", "lldb", "cdb"};
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -166,11 +179,15 @@ QJsonObject toJson(const Toolchain& toolchain)
     object.insert(QStringLiteral("type"), QStringLiteral("toolchain"));
     object.insert(QStringLiteral("id"), toolchain.id);
     object.insert(QStringLiteral("name"), toolchain.name);
-    object.insert(QStringLiteral("cCompiler"), toolchain.cCompiler);
-    object.insert(QStringLiteral("cppCompiler"), toolchain.cppCompiler);
-    object.insert(QStringLiteral("debugger"),
-                  toolchain.debugger.isEmpty() ? QJsonValue::Null
-                                               : QJsonValue(toolchain.debugger));
+    QJsonObject compilers;
+    for (const char* key : kCompilerKeys) {
+        const QString path =
+            toolchain.compilers.value(QLatin1String(key));
+        compilers.insert(QLatin1String(key),
+                         path.isEmpty() ? QJsonValue::Null
+                                        : QJsonValue(path));
+    }
+    object.insert(QStringLiteral("compilers"), compilers);
     object.insert(QStringLiteral("clangd"),
                   toolchain.clangd.isEmpty() ? QJsonValue::Null
                                              : QJsonValue(toolchain.clangd));
@@ -220,6 +237,10 @@ QJsonObject toJson(const Kit& kit)
     object.insert(QStringLiteral("toolchainId"),
                   kit.toolchainId.isEmpty() ? QJsonValue::Null
                                             : QJsonValue(kit.toolchainId));
+    object.insert(QStringLiteral("compilerFamily"),
+                  kit.compilerFamily.isEmpty()
+                      ? QJsonValue::Null
+                      : QJsonValue(kit.compilerFamily));
     object.insert(QStringLiteral("cCompiler"), kit.cCompiler);
     object.insert(QStringLiteral("cppCompiler"), kit.cppCompiler);
     object.insert(QStringLiteral("debugger"),
@@ -385,9 +406,51 @@ void fromJson(const QJsonObject& object, Toolchain& out)
 {
     readString(object, "id", out.id);
     readString(object, "name", out.name);
-    readString(object, "cCompiler", out.cCompiler);
-    readString(object, "cppCompiler", out.cppCompiler);
-    readOptionalString(object, "debugger", out.debugger);
+    const QJsonValue compilersValue = object.value(QLatin1String("compilers"));
+    if (compilersValue.isObject()) {
+        const QJsonObject compilers = compilersValue.toObject();
+        for (const char* key : kCompilerKeys) {
+            const QJsonValue value = compilers.value(QLatin1String(key));
+            if (value.isString() && !value.toString().isEmpty()) {
+                out.compilers.insert(QLatin1String(key), value.toString());
+            }
+        }
+    } else {
+        // Legacy document (pre-compilers map): the old single-compiler
+        // fields map onto the new keys by file name.
+        const QString c = readLegacyString(object, "cCompiler");
+        const QString cpp = readLegacyString(object, "cppCompiler");
+        const QString dbg = readLegacyString(object, "debugger");
+        auto legacyKey = [](const QString& path) -> QString {
+            const QString name = QFileInfo(path).fileName().toLower();
+            if (name.startsWith(QLatin1String("clang++"))) {
+                return QStringLiteral("clang++");
+            }
+            if (name.startsWith(QLatin1String("clang"))) {
+                return QStringLiteral("clang");
+            }
+            if (name == QLatin1String("cl.exe") || name == QLatin1String("cl")) {
+                return QStringLiteral("cl");
+            }
+            if (name == QLatin1String("g++.exe") || name == QLatin1String("g++")) {
+                return QStringLiteral("g++");
+            }
+            return QStringLiteral("gcc");
+        };
+        if (!c.isEmpty()) {
+            out.compilers.insert(legacyKey(c), c);
+        }
+        if (!cpp.isEmpty()) {
+            out.compilers.insert(legacyKey(cpp), cpp);
+        }
+        if (!dbg.isEmpty()) {
+            const QString name = QFileInfo(dbg).fileName().toLower();
+            out.compilers.insert(name.startsWith(QLatin1String("lldb"))
+                                     ? QStringLiteral("lldb")
+                                     : QStringLiteral("gdb"),
+                                 dbg);
+        }
+    }
     readOptionalString(object, "clangd", out.clangd);
     readOptionalString(object, "clangFormat", out.clangFormat);
     readBuildToolSingleMap(object, "buildTools", out.buildTools);
@@ -420,6 +483,7 @@ void fromJson(const QJsonObject& object, Kit& out)
     readBool(object, "isDefault", out.isDefault);
     readBool(object, "inheritToolchain", out.inheritToolchain);
     readOptionalString(object, "toolchainId", out.toolchainId);
+    readOptionalString(object, "compilerFamily", out.compilerFamily);
     readString(object, "cCompiler", out.cCompiler);
     readString(object, "cppCompiler", out.cppCompiler);
     readOptionalString(object, "debugger", out.debugger);

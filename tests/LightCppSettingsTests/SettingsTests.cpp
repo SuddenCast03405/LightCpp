@@ -135,9 +135,14 @@ QJsonObject exampleToolchainJson()
     toolchain.insert("type", "toolchain");
     toolchain.insert("id", "msys2-ucrt64");
     toolchain.insert("name", "MSYS2 UCRT64");
-    toolchain.insert("cCompiler", "E:/msys64/ucrt64/bin/gcc.exe");
-    toolchain.insert("cppCompiler", "E:/msys64/ucrt64/bin/g++.exe");
-    toolchain.insert("debugger", QJsonValue::Null);
+    toolchain.insert("compilers",
+                     QJsonObject{{"gcc", "E:/msys64/ucrt64/bin/gcc.exe"},
+                                 {"g++", "E:/msys64/ucrt64/bin/g++.exe"},
+                                 {"clang", QJsonValue::Null},
+                                 {"clang++", QJsonValue::Null},
+                                 {"cl", QJsonValue::Null},
+                                 {"gdb", QJsonValue::Null},
+                                 {"lldb", QJsonValue::Null}});
     toolchain.insert("clangd", "E:/msys64/ucrt64/bin/clangd.exe");
     toolchain.insert("clangFormat", "E:/msys64/ucrt64/bin/clang-format.exe");
     toolchain.insert("buildTools",
@@ -340,7 +345,13 @@ TEST(SettingsJson, ExampleToolchainAndDefaultsParse)
     fromJson(exampleToolchainJson(), toolchain);
     EXPECT_EQ(toolchain.id, "msys2-ucrt64");
     EXPECT_EQ(toolchain.name, "MSYS2 UCRT64");
-    EXPECT_EQ(toolchain.cCompiler, "E:/msys64/ucrt64/bin/gcc.exe");
+    EXPECT_EQ(toolchain.compilers.value("gcc"),
+              "E:/msys64/ucrt64/bin/gcc.exe");
+    EXPECT_EQ(toolchain.compilers.value("g++"),
+              "E:/msys64/ucrt64/bin/g++.exe");
+    // "clang": null must keep the key absent, not become garbage.
+    EXPECT_TRUE(toolchain.compilers.value("clang").isEmpty());
+    EXPECT_TRUE(toolchain.compilers.value("cl").isEmpty());
     EXPECT_EQ(toolchain.buildTools.value("gnuMake"),
               "E:/msys64/ucrt64/bin/mingw32-make.exe");
     EXPECT_TRUE(toolchain.isValid());
@@ -378,6 +389,7 @@ TEST(SettingsJson, KitToolchainInheritanceRoundTrips)
     QJsonObject kitJson = exampleGccKitJson();
     kitJson.insert("inheritToolchain", true);
     kitJson.insert("toolchainId", "msys2-ucrt64");
+    kitJson.insert("compilerFamily", "gcc");
     kitJson.insert("cCompiler", "");
     kitJson.insert("cppCompiler", "");
 
@@ -385,6 +397,7 @@ TEST(SettingsJson, KitToolchainInheritanceRoundTrips)
     fromJson(kitJson, kit);
     EXPECT_TRUE(kit.inheritToolchain);
     EXPECT_EQ(kit.toolchainId, "msys2-ucrt64");
+    EXPECT_EQ(kit.compilerFamily, "gcc");
 
     const Kit parsed = [&] {
         Kit k;
@@ -393,8 +406,64 @@ TEST(SettingsJson, KitToolchainInheritanceRoundTrips)
     }();
     EXPECT_EQ(parsed.inheritToolchain, kit.inheritToolchain);
     EXPECT_EQ(parsed.toolchainId, kit.toolchainId);
+    EXPECT_EQ(parsed.compilerFamily, kit.compilerFamily);
     EXPECT_TRUE(parsed.cCompiler.isEmpty());
     EXPECT_TRUE(parsed.cppCompiler.isEmpty());
+}
+
+TEST(SettingsJson, ToolchainCompilersRoundTrip)
+{
+    Toolchain toolchain;
+    fromJson(exampleToolchainJson(), toolchain);
+    const Toolchain parsed = [&] {
+        Toolchain t;
+        fromJson(toJson(toolchain), t);
+        return t;
+    }();
+    EXPECT_EQ(parsed.compilers.value("gcc"),
+              "E:/msys64/ucrt64/bin/gcc.exe");
+    EXPECT_EQ(parsed.compilers.value("g++"),
+              "E:/msys64/ucrt64/bin/g++.exe");
+    EXPECT_TRUE(parsed.compilers.value("clang").isEmpty());
+    EXPECT_TRUE(parsed.compilers.value("clang++").isEmpty());
+}
+
+TEST(SettingsJson, LegacyToolchainFieldsMapOntoCompilers)
+{
+    // A pre-compilers document: the old single-compiler fields land in the
+    // compilers map under the key their file name implies.
+    QJsonObject legacy = exampleToolchainJson();
+    legacy.remove("compilers");
+    legacy.insert("cCompiler", "E:/msys64/ucrt64/bin/gcc.exe");
+    legacy.insert("cppCompiler", "E:/msys64/ucrt64/bin/g++.exe");
+    legacy.insert("debugger", "E:/msys64/ucrt64/bin/gdb.exe");
+
+    Toolchain toolchain;
+    fromJson(legacy, toolchain);
+    EXPECT_EQ(toolchain.compilers.value("gcc"),
+              "E:/msys64/ucrt64/bin/gcc.exe");
+    EXPECT_EQ(toolchain.compilers.value("g++"),
+              "E:/msys64/ucrt64/bin/g++.exe");
+    EXPECT_EQ(toolchain.compilers.value("gdb"),
+              "E:/msys64/ucrt64/bin/gdb.exe");
+    EXPECT_TRUE(toolchain.isValid());
+}
+
+TEST(SettingsJson, LegacyClangToolchainFieldsMapByFileName)
+{
+    QJsonObject legacy;
+    legacy.insert("type", "toolchain");
+    legacy.insert("id", "clang64");
+    legacy.insert("cCompiler", "E:/msys64/clang64/bin/clang.exe");
+    legacy.insert("cppCompiler", "E:/msys64/clang64/bin/clang++.exe");
+
+    Toolchain toolchain;
+    fromJson(legacy, toolchain);
+    EXPECT_EQ(toolchain.compilers.value("clang"),
+              "E:/msys64/clang64/bin/clang.exe");
+    EXPECT_EQ(toolchain.compilers.value("clang++"),
+              "E:/msys64/clang64/bin/clang++.exe");
+    EXPECT_TRUE(toolchain.compilers.value("gcc").isEmpty());
 }
 
 TEST(SettingsJson, WrongTypesKeepDefaults)
@@ -849,11 +918,12 @@ TEST(SettingsStore, KitInheritsToolchainFields)
     writeJson(QDir(base.path()).filePath("toolchains.json"),
               toolchains);
 
-    // The kit names no tools of its own; everything comes from the
-    // toolchain it references.
+    // The kit names no tools of its own; its compilerFamily maps the
+    // toolchain's gcc/g++ onto the C/C++ slots.
     QJsonObject kitJson = exampleGccKitJson();
     kitJson.insert("inheritToolchain", true);
     kitJson.insert("toolchainId", "msys2-ucrt64");
+    kitJson.insert("compilerFamily", "gcc");
     kitJson.insert("cCompiler", "");
     kitJson.insert("cppCompiler", "");
     kitJson.insert("clangd", "");
@@ -881,6 +951,106 @@ TEST(SettingsStore, KitInheritsToolchainFields)
     ASSERT_TRUE(overridden.has_value());
     EXPECT_EQ(overridden->cppCompiler, "D:/custom/g++.exe");
     EXPECT_EQ(overridden->cCompiler, "E:/msys64/ucrt64/bin/gcc.exe");
+}
+
+TEST(SettingsStore, LlvmFamilyInheritsClangFromTheSameToolchain)
+{
+    QTemporaryDir base;
+    ASSERT_TRUE(base.isValid());
+
+    // One toolchain carrying both families: gcc/g++ plus clang/clang++.
+    QJsonObject compilers;
+    compilers.insert("gcc", "E:/msys64/ucrt64/bin/gcc.exe");
+    compilers.insert("g++", "E:/msys64/ucrt64/bin/g++.exe");
+    compilers.insert("clang", "E:/msys64/ucrt64/bin/clang.exe");
+    compilers.insert("clang++", "E:/msys64/ucrt64/bin/clang++.exe");
+    QJsonObject bothToolchain = exampleToolchainJson();
+    bothToolchain.insert("compilers", compilers);
+    QJsonArray toolchains;
+    toolchains.append(bothToolchain);
+    writeJson(QDir(base.path()).filePath("toolchains.json"), toolchains);
+
+    QJsonObject kitJson = exampleGccKitJson();
+    kitJson.insert("id", "mixed-clang");
+    kitJson.insert("inheritToolchain", true);
+    kitJson.insert("toolchainId", "msys2-ucrt64");
+    kitJson.insert("compilerFamily", "llvm");
+    kitJson.insert("cCompiler", "");
+    kitJson.insert("cppCompiler", "");
+    writeJson(QDir(base.path()).filePath("kits.json"), kitJson);
+
+    SettingsStore store;
+    store.setBaseDirectory(base.path());
+    EXPECT_TRUE(store.reload());
+    const std::optional<Kit> kit = store.kit("mixed-clang");
+    ASSERT_TRUE(kit.has_value());
+    // A "… Clang" kit compiles with clang — the family says so, even
+    // though the toolchain also carries gcc.
+    EXPECT_EQ(kit->cCompiler, "E:/msys64/ucrt64/bin/clang.exe");
+    EXPECT_EQ(kit->cppCompiler, "E:/msys64/ucrt64/bin/clang++.exe");
+}
+
+TEST(SettingsStore, ElseFamilyInheritsNoCompiler)
+{
+    QTemporaryDir base;
+    ASSERT_TRUE(base.isValid());
+
+    QJsonArray toolchains;
+    toolchains.append(exampleToolchainJson());
+    writeJson(QDir(base.path()).filePath("toolchains.json"), toolchains);
+
+    // No compilerFamily at all: "else" — nothing is inherited, the kit
+    // must name its own compilers (it does not here, so it stays invalid).
+    QJsonObject kitJson = exampleGccKitJson();
+    kitJson.insert("inheritToolchain", true);
+    kitJson.insert("toolchainId", "msys2-ucrt64");
+    kitJson.insert("cCompiler", "");
+    kitJson.insert("cppCompiler", "");
+    writeJson(QDir(base.path()).filePath("kits.json"), kitJson);
+
+    SettingsStore store;
+    store.setBaseDirectory(base.path());
+    EXPECT_TRUE(store.reload());
+    const std::optional<Kit> kit = store.kit("msys2-ucrt64-gcc");
+    ASSERT_TRUE(kit.has_value());
+    EXPECT_TRUE(kit->cCompiler.isEmpty());
+    EXPECT_TRUE(kit->cppCompiler.isEmpty());
+    EXPECT_FALSE(kit->isValid());
+}
+
+TEST(SettingsStore, MsvcFamilyInheritsClBothWays)
+{
+    QTemporaryDir base;
+    ASSERT_TRUE(base.isValid());
+
+    QJsonObject msvcToolchain = exampleToolchainJson();
+    msvcToolchain.insert("id", "msvc");
+    QJsonObject compilers;
+    compilers.insert("cl", "D:/VS/bin/cl.exe");
+    compilers.insert("cdb", "D:/VS/bin/cdb.exe");
+    msvcToolchain.insert("compilers", compilers);
+    QJsonArray toolchains;
+    toolchains.append(msvcToolchain);
+    writeJson(QDir(base.path()).filePath("toolchains.json"), toolchains);
+
+    QJsonObject kitJson = exampleGccKitJson();
+    kitJson.insert("id", "msvc-kit");
+    kitJson.insert("inheritToolchain", true);
+    kitJson.insert("toolchainId", "msvc");
+    kitJson.insert("compilerFamily", "msvc");
+    kitJson.insert("cCompiler", "");
+    kitJson.insert("cppCompiler", "");
+    writeJson(QDir(base.path()).filePath("kits.json"), kitJson);
+
+    SettingsStore store;
+    store.setBaseDirectory(base.path());
+    EXPECT_TRUE(store.reload());
+    const std::optional<Kit> kit = store.kit("msvc-kit");
+    ASSERT_TRUE(kit.has_value());
+    // cl compiles both C and C++; the debugger comes from cdb.
+    EXPECT_EQ(kit->cCompiler, "D:/VS/bin/cl.exe");
+    EXPECT_EQ(kit->cppCompiler, "D:/VS/bin/cl.exe");
+    EXPECT_EQ(kit->debugger, "D:/VS/bin/cdb.exe");
 }
 
 TEST(SettingsStore, InheritingKitWithUnknownToolchainIsNotUsable)
@@ -954,7 +1124,7 @@ TEST(SettingsStore, ToolchainOverlayMergesFieldWise)
     EXPECT_TRUE(store.reload());
     ASSERT_EQ(store.toolchains().size(), 1);
     EXPECT_EQ(store.toolchains()[0].name, "MSYS2 UCRT64 (patched)");
-    EXPECT_EQ(store.toolchains()[0].cCompiler,
+    EXPECT_EQ(store.toolchains()[0].compilers.value("gcc"),
               "E:/msys64/ucrt64/bin/gcc.exe");
 }
 

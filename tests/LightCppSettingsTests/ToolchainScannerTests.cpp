@@ -41,9 +41,9 @@ TEST(ToolchainScannerTests, RootHostingCompilerFillsRoles)
     const QList<Toolchain> found = scanForToolchains(root);
     ASSERT_EQ(found.size(), 1);
     EXPECT_EQ(found[0].name, QLatin1String("sdk"));
-    EXPECT_EQ(found[0].cCompiler, root + "/gcc.exe");
-    EXPECT_EQ(found[0].cppCompiler, root + "/g++.exe");
-    EXPECT_EQ(found[0].debugger, root + "/gdb.exe");
+    EXPECT_EQ(found[0].compilers.value("gcc"), root + "/gcc.exe");
+    EXPECT_EQ(found[0].compilers.value("g++"), root + "/g++.exe");
+    EXPECT_EQ(found[0].compilers.value("gdb"), root + "/gdb.exe");
     EXPECT_EQ(found[0].buildTools.value("cmake"), root + "/cmake.exe");
 }
 
@@ -58,8 +58,9 @@ TEST(ToolchainScannerTests, RecursesIntoSubdirectories)
     const QList<Toolchain> found = scanForToolchains(root);
     ASSERT_EQ(found.size(), 1);
     EXPECT_EQ(found[0].name, QLatin1String("bin"));
-    EXPECT_EQ(found[0].cCompiler, root + "/tools/nightly/bin/clang.exe");
-    EXPECT_EQ(found[0].cppCompiler,
+    EXPECT_EQ(found[0].compilers.value("clang"),
+              root + "/tools/nightly/bin/clang.exe");
+    EXPECT_EQ(found[0].compilers.value("clang++"),
               root + "/tools/nightly/bin/clang++.exe");
 }
 
@@ -89,7 +90,7 @@ TEST(ToolchainScannerTests, ExclusionNamesAreUserExtensibleAndCaseInsensitive)
     options.excludedDirectories.append("vendor");
     const QList<Toolchain> found = scanForToolchains(root, options);
     ASSERT_EQ(found.size(), 1);
-    EXPECT_EQ(found[0].cCompiler, root + "/bin/clang.exe");
+    EXPECT_EQ(found[0].compilers.value("clang"), root + "/bin/clang.exe");
 }
 
 TEST(ToolchainScannerTests, DepthLimitIsRespected)
@@ -108,7 +109,8 @@ TEST(ToolchainScannerTests, DepthLimitIsRespected)
     options.maxDepth = 6;
     const QList<Toolchain> found = scanForToolchains(root, options);
     ASSERT_EQ(found.size(), 1);
-    EXPECT_EQ(found[0].cCompiler, root + "/1/2/3/4/5/6/gcc.exe");
+    EXPECT_EQ(found[0].compilers.value("gcc"),
+              root + "/1/2/3/4/5/6/gcc.exe");
 }
 
 TEST(ToolchainScannerTests, MultipleDirectoriesProduceMultipleToolchains)
@@ -124,15 +126,15 @@ TEST(ToolchainScannerTests, MultipleDirectoriesProduceMultipleToolchains)
     ASSERT_EQ(found.size(), 2);
     // Walk order follows the directory listing; match by path, not index.
     for (const Toolchain& toolchain : found) {
-        if (toolchain.cppCompiler.endsWith("mingw32/bin/g++.exe")) {
+        if (toolchain.compilers.value("g++").endsWith("mingw32/bin/g++.exe")) {
             // A directory with only a C++ compiler still counts.
-            EXPECT_TRUE(toolchain.cCompiler.isEmpty());
+            EXPECT_TRUE(toolchain.compilers.value("gcc").isEmpty());
             EXPECT_TRUE(toolchain.name.isEmpty()
                         || toolchain.name == QLatin1String("bin"));
         } else {
-            EXPECT_EQ(toolchain.cCompiler,
+            EXPECT_EQ(toolchain.compilers.value("gcc"),
                       root + "/ucrt64/bin/gcc.exe");
-            EXPECT_EQ(toolchain.cppCompiler,
+            EXPECT_EQ(toolchain.compilers.value("g++"),
                       root + "/ucrt64/bin/g++.exe");
         }
     }
@@ -165,4 +167,28 @@ TEST(ToolchainScannerTests, WalkStopsBelowAToolchainDirectory)
 TEST(ToolchainScannerTests, NonExistentRootYieldsNothing)
 {
     EXPECT_TRUE(scanForToolchains("Z:/definitely/not/there").isEmpty());
+}
+
+TEST(ToolchainScannerTests, EveryCompilerFoundIsRecordedSeparately)
+{
+    // A bin hosting both families keeps all four compiler keys: the kit's
+    // compilerFamily picks what it needs.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString root = dir.filePath("mixed");
+    ASSERT_TRUE(touch(root + "/gcc.exe"));
+    ASSERT_TRUE(touch(root + "/g++.exe"));
+    ASSERT_TRUE(touch(root + "/clang.exe"));
+    ASSERT_TRUE(touch(root + "/clang++.exe"));
+    ASSERT_TRUE(touch(root + "/gdb.exe"));
+    ASSERT_TRUE(touch(root + "/lldb.exe"));
+
+    const QList<Toolchain> found = scanForToolchains(root);
+    ASSERT_EQ(found.size(), 1);
+    EXPECT_EQ(found[0].compilers.value("gcc"), root + "/gcc.exe");
+    EXPECT_EQ(found[0].compilers.value("g++"), root + "/g++.exe");
+    EXPECT_EQ(found[0].compilers.value("clang"), root + "/clang.exe");
+    EXPECT_EQ(found[0].compilers.value("clang++"), root + "/clang++.exe");
+    EXPECT_EQ(found[0].compilers.value("gdb"), root + "/gdb.exe");
+    EXPECT_EQ(found[0].compilers.value("lldb"), root + "/lldb.exe");
 }

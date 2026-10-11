@@ -8,16 +8,21 @@ namespace LightCpp::Settings {
 namespace {
 
 // Candidate file names per toolchain role. The first existing candidate
-// per role wins.
+// per role wins. Compiler/debugger roles fill the `compilers` map keyed
+// by program name; the remaining roles fill their dedicated fields.
 struct ScanSpec {
     const char* key;
     std::initializer_list<const char*> fileNames;
 };
 
 constexpr ScanSpec kScanSpecs[] = {
-    {"cCompiler", {"gcc.exe", "clang.exe", "cl.exe"}},
-    {"cppCompiler", {"g++.exe", "clang++.exe", "cl.exe"}},
-    {"debugger", {"gdb.exe", "lldb.exe"}},
+    {"gcc", {"gcc.exe"}},
+    {"g++", {"g++.exe"}},
+    {"clang", {"clang.exe"}},
+    {"clang++", {"clang++.exe"}},
+    {"cl", {"cl.exe"}},
+    {"gdb", {"gdb.exe"}},
+    {"lldb", {"lldb.exe"}},
     {"clangd", {"clangd.exe"}},
     {"clangFormat", {"clang-format.exe"}},
     {"cmake", {"cmake.exe"}},
@@ -26,16 +31,23 @@ constexpr ScanSpec kScanSpecs[] = {
     {"msbuild", {"MSBuild.exe"}},
 };
 
+constexpr const char* kCompilerRoleKeys[] = {
+    "gcc", "g++", "clang", "clang++", "cl", "gdb", "lldb"};
+
+[[nodiscard]] bool isCompilerRoleKey(const QString& key)
+{
+    for (const char* role : kCompilerRoleKeys) {
+        if (key == QLatin1String(role)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 QString toolPath(const Toolchain& toolchain, const QString& key)
 {
-    if (key == QLatin1String("cCompiler")) {
-        return toolchain.cCompiler;
-    }
-    if (key == QLatin1String("cppCompiler")) {
-        return toolchain.cppCompiler;
-    }
-    if (key == QLatin1String("debugger")) {
-        return toolchain.debugger;
+    if (isCompilerRoleKey(key)) {
+        return toolchain.compilers.value(key);
     }
     if (key == QLatin1String("clangd")) {
         return toolchain.clangd;
@@ -48,16 +60,12 @@ QString toolPath(const Toolchain& toolchain, const QString& key)
 
 void setToolPath(Toolchain* toolchain, const QString& key, const QString& path)
 {
-    if (key == QLatin1String("cCompiler")) {
-        toolchain->cCompiler = path;
-        return;
-    }
-    if (key == QLatin1String("cppCompiler")) {
-        toolchain->cppCompiler = path;
-        return;
-    }
-    if (key == QLatin1String("debugger")) {
-        toolchain->debugger = path;
+    if (isCompilerRoleKey(key)) {
+        if (path.isEmpty()) {
+            toolchain->compilers.remove(key);
+        } else {
+            toolchain->compilers.insert(key, path);
+        }
         return;
     }
     if (key == QLatin1String("clangd")) {
@@ -93,13 +101,6 @@ QStringList fillFromDirectory(const QString& dir, Toolchain* out)
             break;  // one hit per role is enough
         }
     }
-    // cl.exe compiles both C and C++.
-    if (filled.contains(QLatin1String("cCompiler"))
-        && out->cppCompiler.isEmpty()
-        && out->cCompiler.endsWith(QLatin1String("cl.exe"),
-                                   Qt::CaseInsensitive)) {
-        out->cppCompiler = out->cCompiler;
-    }
     return filled;
 }
 
@@ -120,8 +121,13 @@ void walk(const QString& dir, int depth, const ToolchainScanOptions& options,
 {
     Toolchain toolchain;
     const QStringList filled = fillFromDirectory(dir, &toolchain);
-    if (filled.contains(QLatin1String("cCompiler"))
-        || filled.contains(QLatin1String("cppCompiler"))) {
+    const bool hostsCompilers =
+        !toolchain.compilers.value(QStringLiteral("gcc")).isEmpty()
+        || !toolchain.compilers.value(QStringLiteral("g++")).isEmpty()
+        || !toolchain.compilers.value(QStringLiteral("clang")).isEmpty()
+        || !toolchain.compilers.value(QStringLiteral("clang++")).isEmpty()
+        || !toolchain.compilers.value(QStringLiteral("cl")).isEmpty();
+    if (hostsCompilers) {
         toolchain.name = QFileInfo(dir).fileName();
         if (toolchain.name.isEmpty()) {
             toolchain.name = dir;

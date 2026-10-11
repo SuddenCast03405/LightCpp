@@ -212,6 +212,7 @@ private:
     QCheckBox* kitIsDefault_ = nullptr;
     QCheckBox* kitInheritToolchain_ = nullptr;
     QComboBox* kitToolchainId_ = nullptr;
+    QComboBox* kitCompilerFamily_ = nullptr;  ///< gcc | llvm | msvc | else
     QWidget* kitToolsBox_ = nullptr;
     QComboBox* kitCCompiler_ = nullptr;
     QComboBox* kitCppCompiler_ = nullptr;
