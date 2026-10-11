@@ -7,6 +7,7 @@
 #include "LightCpp/Settings/SettingsJson.hpp"
 #include "LightCpp/Settings/SettingsStore.hpp"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -41,6 +42,44 @@ QString msys2Tool(const QString& name)
     return QFileInfo::exists(path) ? path : QString();
 }
 
+/// The bin directory of a toolchain shipped next to the IDE:
+/// <exe>/MinGW64, <exe>/Clang64, <exe>/MinGW32, <exe>/Clang32 — the first
+/// one that exists AND carries a compiler in its bin. Empty when none does,
+/// which leaves the fixed MSYS2 install as the default.
+QString portableToolchainBin()
+{
+    const QString exeDir = QCoreApplication::applicationDirPath();
+    for (const QString& name : {QStringLiteral("MinGW64"),
+                                QStringLiteral("Clang64"),
+                                QStringLiteral("MinGW32"),
+                                QStringLiteral("Clang32")}) {
+        const QString bin = QDir(exeDir).filePath(
+            name + QStringLiteral("/bin"));
+        const bool hasCompiler =
+            QFileInfo::exists(QDir(bin).filePath(QStringLiteral("g++.exe")))
+            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("gcc.exe")))
+            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("clang++.exe")))
+            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("clang.exe")));
+        if (hasCompiler) {
+            return bin;
+        }
+    }
+    return QString();
+}
+
+/// First existing executable among `names` inside `bin`, or empty.
+QString binTool(const QString& bin,
+                const std::initializer_list<const char*>& names)
+{
+    for (const char* name : names) {
+        const QString path = QDir(bin).filePath(QString::fromLatin1(name));
+        if (QFileInfo::exists(path)) {
+            return path;
+        }
+    }
+    return QString();
+}
+
 /// The kit's buildTools object: every tool that exists is named, the rest
 /// stay null — visible placeholders showing what a kit *can* name.
 QHash<QString, QString> toolchainBuildTools(const QString& cmake, const QString& ninja,
@@ -52,6 +91,26 @@ QHash<QString, QString> toolchainBuildTools(const QString& cmake, const QString&
     tools.insert(QStringLiteral("gnuMake"), gnuMake);
     tools.insert(QStringLiteral("msbuild"), QString());
     return tools;
+}
+
+/// A toolchain document wired to one bin directory: gcc preferred over
+/// clang, gdb over lldb, mingw32-make over make; every tool that does not
+/// exist there stays unset.
+Toolchain toolchainFromBin(const QString& bin, const QString& id,
+                           const QString& name)
+{
+    Toolchain out;
+    out.id = id;
+    out.name = name;
+    out.cCompiler = binTool(bin, {"gcc.exe", "clang.exe"});
+    out.cppCompiler = binTool(bin, {"g++.exe", "clang++.exe"});
+    out.debugger = binTool(bin, {"gdb.exe", "lldb.exe"});
+    out.clangd = binTool(bin, {"clangd.exe"});
+    out.clangFormat = binTool(bin, {"clang-format.exe"});
+    out.buildTools = toolchainBuildTools(
+        binTool(bin, {"cmake.exe"}), binTool(bin, {"ninja.exe"}),
+        binTool(bin, {"mingw32-make.exe", "make.exe"}));
+    return out;
 }
 
 /// The Debug/Release configuration pair every starter kit ships: inherit
@@ -191,80 +250,101 @@ WriteResult ensureDefaultConfigFiles(const QString& dir)
         return result;
     }
 
-    const QString clangd = msys2Tool(QStringLiteral("clangd.exe"));
-    const QString clangFormat = msys2Tool(QStringLiteral("clang-format.exe"));
+    // A toolchain shipped next to the IDE (MinGW64 / Clang64 / MinGW32 /
+    // Clang32 beside the executable) wins; the fixed MSYS2 install is the
+    // fallback. The services (clangd, clang-format) come from the portable
+    // bin when it carries them, otherwise from MSYS2 as before.
+    const QString portableBin = portableToolchainBin();
+    const QString clangd = !portableBin.isEmpty()
+        ? binTool(portableBin, {"clangd.exe"})
+        : QString();
+    const QString clangFormat = !portableBin.isEmpty()
+        ? binTool(portableBin, {"clang-format.exe"})
+        : QString();
+    const QString effectiveClangd =
+        !clangd.isEmpty() ? clangd : msys2Tool(QStringLiteral("clangd.exe"));
+    const QString effectiveClangFormat =
+        !clangFormat.isEmpty() ? clangFormat
+                               : msys2Tool(QStringLiteral("clang-format.exe"));
     const QString git = existingPath(
         {LightCpp::App::kGitPath,
          QStandardPaths::findExecutable(QStringLiteral("git"))});
 
     // --- toolchains.json (an array of per-toolchain documents) --------------
-    const QString gdb = msys2Tool(QStringLiteral("gdb.exe"));
-    Toolchain msys2;
-    msys2.id = QStringLiteral("msys2-ucrt64");
-    msys2.name = QStringLiteral("MSYS2 UCRT64");
-    for (const QString& c : {msys2Tool(QStringLiteral("gcc.exe")),
-                             msys2Tool(QStringLiteral("clang.exe"))}) {
-        if (!c.isEmpty()) {
-            if (msys2.cCompiler.isEmpty()) {
-                msys2.cCompiler = c;
-            }
-            if (!c.contains(QStringLiteral("clang"))) {
-                msys2.cCompiler = c;  // prefer gcc when it exists
-            }
-        }
-    }
-    for (const QString& cpp : {msys2Tool(QStringLiteral("g++.exe")),
-                               msys2Tool(QStringLiteral("clang++.exe"))}) {
-        if (!cpp.isEmpty()) {
-            if (msys2.cppCompiler.isEmpty()) {
-                msys2.cppCompiler = cpp;
-            }
-            if (!cpp.contains(QStringLiteral("clang"))) {
-                msys2.cppCompiler = cpp;  // prefer g++ when it exists
-            }
-        }
-    }
-    msys2.debugger = gdb;
-    msys2.clangd = clangd;
-    msys2.clangFormat = clangFormat;
-    msys2.buildTools = toolchainBuildTools(
-        msys2Tool(QStringLiteral("cmake.exe")),
-        msys2Tool(QStringLiteral("ninja.exe")),
-        msys2Tool(QStringLiteral("mingw32-make.exe")));
-
     QList<Toolchain> toolchains;
-    if (msys2.isValid()) {
-        toolchains.append(msys2);
+    QList<Kit> kits;
+    if (!portableBin.isEmpty()) {
+        const QString dirName =
+            QFileInfo(portableBin).dir().dirName();  // "MinGW64" etc.
+        const QString lower = dirName.toLower();
+        Toolchain primary = toolchainFromBin(portableBin, lower, dirName);
+        if (primary.isValid()) {
+            toolchains.append(primary);
+            const bool hasGcc = !primary.cCompiler.isEmpty()
+                                && !primary.cCompiler.contains(
+                                    QStringLiteral("clang"));
+            const bool hasClangCpp = !binTool(portableBin, {"clang++.exe"})
+                                          .isEmpty();
+            if (hasGcc) {
+                kits.append(gnuKit(lower + QStringLiteral("-gcc"),
+                                   dirName + QStringLiteral(" GCC"),
+                                   primary.id, true,
+                                   {QStringLiteral("-Wall"),
+                                    QStringLiteral("-Wextra"),
+                                    QStringLiteral("-fdiagnostics-color=always")},
+                                   QStringLiteral("gnu++20")));
+            }
+            if (hasClangCpp) {
+                kits.append(gnuKit(lower + QStringLiteral("-clang"),
+                                   dirName + QStringLiteral(" Clang"),
+                                   primary.id, !hasGcc,
+                                   {QStringLiteral("-Wall"),
+                                    QStringLiteral("-Wextra"),
+                                    QStringLiteral("-fcolor-diagnostics")},
+                                   QStringLiteral("c++20")));
+            }
+        }
+    } else {
+        const QString gdb = msys2Tool(QStringLiteral("gdb.exe"));
+        Toolchain msys2;
+        msys2.id = QStringLiteral("msys2-ucrt64");
+        msys2.name = QStringLiteral("MSYS2 UCRT64");
+        msys2.cCompiler = binTool(QDir(LightCpp::App::kMingwBin).path(),
+                                  {"gcc.exe", "clang.exe"});
+        msys2.cppCompiler = binTool(QDir(LightCpp::App::kMingwBin).path(),
+                                    {"g++.exe", "clang++.exe"});
+        msys2.debugger = gdb;
+        msys2.clangd = msys2Tool(QStringLiteral("clangd.exe"));
+        msys2.clangFormat = msys2Tool(QStringLiteral("clang-format.exe"));
+        msys2.buildTools = toolchainBuildTools(
+            msys2Tool(QStringLiteral("cmake.exe")),
+            msys2Tool(QStringLiteral("ninja.exe")),
+            msys2Tool(QStringLiteral("mingw32-make.exe")));
+        if (msys2.isValid()) {
+            toolchains.append(msys2);
+            kits.append(gnuKit(QStringLiteral("msys2-ucrt64-gcc"),
+                               QStringLiteral("MSYS2 UCRT64 GCC"),
+                               msys2.id, true,
+                               {QStringLiteral("-Wall"), QStringLiteral("-Wextra"),
+                                QStringLiteral("-fdiagnostics-color=always")},
+                               QStringLiteral("gnu++20")));
+            // A second, Clang-based kit as soon as clang++ exists — the pair
+            // is the usual MSYS2 install and shows how multiple kits coexist.
+            const QString clangCpp = msys2Tool(QStringLiteral("clang++.exe"));
+            if (!clangCpp.isEmpty()) {
+                kits.append(gnuKit(QStringLiteral("msys2-ucrt64-clang"),
+                                   QStringLiteral("MSYS2 UCRT64 Clang"),
+                                   msys2.id, false,
+                                   {QStringLiteral("-Wall"), QStringLiteral("-Wextra"),
+                                    QStringLiteral("-fcolor-diagnostics")},
+                                   QStringLiteral("c++20")));
+            }
+        }
     }
+
     const LightCpp::App::Msvc::Toolchain msvc = LightCpp::App::Msvc::detect();
     if (msvc.isValid()) {
         toolchains.append(msvcToolchain(msvc));
-    }
-
-    // --- kits.json -----------------------------------------------------------
-    // Kits inherit their tools from the toolchains above; nothing here
-    // names a compiler directly.
-    QList<Kit> kits;
-    if (msys2.isValid()) {
-        kits.append(gnuKit(QStringLiteral("msys2-ucrt64-gcc"),
-                           QStringLiteral("MSYS2 UCRT64 GCC"),
-                           msys2.id, true,
-                           {QStringLiteral("-Wall"), QStringLiteral("-Wextra"),
-                            QStringLiteral("-fdiagnostics-color=always")},
-                           QStringLiteral("gnu++20")));
-        // A second, Clang-based kit as soon as clang++ exists — the pair is
-        // the usual MSYS2 install and shows how multiple kits coexist.
-        const QString clangCpp = msys2Tool(QStringLiteral("clang++.exe"));
-        if (!clangCpp.isEmpty()) {
-            kits.append(gnuKit(QStringLiteral("msys2-ucrt64-clang"),
-                               QStringLiteral("MSYS2 UCRT64 Clang"),
-                               msys2.id, false,
-                               {QStringLiteral("-Wall"), QStringLiteral("-Wextra"),
-                                QStringLiteral("-fcolor-diagnostics")},
-                               QStringLiteral("c++20")));
-        }
-    }
-    if (msvc.isValid()) {
         kits.append(msvcKit(msvcToolchain(msvc).id));
     }
 
@@ -275,8 +355,8 @@ WriteResult ensureDefaultConfigFiles(const QString& dir)
     }
     defaults.defaultBuildConfiguration = QStringLiteral("Debug");
     defaults.gitPath = git;
-    defaults.clangdPath = clangd;
-    defaults.clangFormatPath = clangFormat;
+    defaults.clangdPath = effectiveClangd;
+    defaults.clangFormatPath = effectiveClangFormat;
 
     // Write what there is to write; skip files the user already has.
     const auto writeOnce = [&dir, &result](const QString& fileName,
