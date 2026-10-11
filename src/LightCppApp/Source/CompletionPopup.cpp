@@ -124,7 +124,15 @@ void CompletionPopup::present(const QList<LspCompletionItem>& items,
     if (screen) {
         const QRect g = screen->availableGeometry();
         if (pos.x() + width > g.right()) pos.setX(qMax(g.left(), g.right() - width));
-        if (pos.y() + height > g.bottom()) pos.setY(qMax(g.top(), pos.y() - height - 20));
+        if (pos.y() + height > g.bottom()) {
+            // Prefer flipping above the caret; when there is no room above
+            // either, dock to the bottom edge. Clamping to g.top() (the old
+            // behaviour) would tear the popup away from the cursor.
+            const int flipped = pos.y() - height - 20;
+            pos.setY(flipped >= g.top()
+                         ? flipped
+                         : qMax(g.top(), g.bottom() - height + 1));
+        }
     }
 
     setFixedSize(width, height);
@@ -150,6 +158,25 @@ void CompletionPopup::filterByPrefix(const QString& prefix)
         if (i >= items_.size()) break;
         const bool match = items_[i].label.startsWith(prefix, Qt::CaseInsensitive);
         it->setHidden(!match);
+    }
+    // present() sized the popup to the unfiltered item count, so a list
+    // filtered down from 12 rows to 4 would keep a large empty area. Recompute
+    // the geometry from the visible rows (the height can only shrink, so the
+    // popup never grows off-screen here; the width may shrink with the texts).
+    int visible = 0;
+    int maxText = 0;
+    const QFontMetrics fm = fontMetrics();
+    for (int i = 0; i < count(); ++i) {
+        QListWidgetItem* it = item(i);
+        if (it->isHidden()) {
+            continue;
+        }
+        ++visible;
+        maxText = qMax(maxText, fm.horizontalAdvance(it->text()));
+    }
+    if (visible > 0) {
+        const int rowH = qMax(20, fm.height() + 6);
+        setFixedSize(qMax(220, maxText + 40), rowH * qMin(visible, 12) + 6);
     }
     // Select the first visible item.
     for (int i = 0; i < count(); ++i) {

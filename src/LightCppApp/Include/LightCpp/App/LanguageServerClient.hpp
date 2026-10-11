@@ -47,6 +47,16 @@ struct LspCompletionItem {
     /// 5=Field, 6=Variable, 7=Class, 8=Interface, 9=Module, 10=Property,
     /// 11=Unit, 12=Value, 13=Enum, 14=Keyword, ...).
     int kind = 0;
+    /// The item's textEdit range (0-based LSP units, UTF-16 columns), when
+    /// the server sent one. When `hasTextEditRange` is true and the range
+    /// sits on the caret's line, the editor replaces exactly that range —
+    /// inserting only `newText` would leave the old prefix behind (e.g.
+    /// "#incl" + "ude <...>" would produce "#incl#inclu..." doubled text).
+    bool hasTextEditRange = false;
+    int rangeStartLine = 0;
+    int rangeStartColumn = 0;
+    int rangeEndLine = 0;
+    int rangeEndColumn = 0;
 };
 
 /// A source position returned by a "go to definition" answer.

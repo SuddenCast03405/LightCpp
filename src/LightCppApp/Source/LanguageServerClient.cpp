@@ -11,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcessEnvironment>
+#include <QSet>
 #include <QUrl>
 
 namespace LightCpp::App {
@@ -1040,12 +1041,25 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
             } else if (result.isObject()) {
                 rawItems = result.toObject().value("items").toArray();
             }
+            // clangd echoes the same candidate several times in
+            // preprocessor contexts (ifdef/include arrive twice and more).
+            // The label+kind+detail key folds those together without
+            // collapsing distinct overloads (their prototypes differ).
+            QSet<QString> seenItems;
             for (const QJsonValue& v : std::as_const(rawItems)) {
                 const QJsonObject item = v.toObject();
                 LspCompletionItem ci;
                 ci.label = item.value("label").toString();
                 ci.detail = item.value("detail").toString();
                 ci.kind = item.value("kind").toInt();
+                const QString dedupKey = ci.label + QLatin1Char('\x1F')
+                                         + QString::number(ci.kind)
+                                         + QLatin1Char('\x1F') + ci.detail;
+                if (!seenItems.contains(dedupKey)) {
+                    seenItems.insert(dedupKey);
+                } else {
+                    continue;
+                }
                 const QJsonValue doc = item.value("documentation");
                 if (doc.isString()) {
                     ci.documentation = doc.toString();
@@ -1061,6 +1075,23 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
                     const QString newText = textEdit.value("newText").toString();
                     if (!newText.isEmpty()) {
                         ci.insertText = newText;
+                    }
+                    // Keep the replace range: the editor must swap out the
+                    // exact span the server chose, not guess the prefix.
+                    const QJsonObject range =
+                        textEdit.value("range").toObject();
+                    if (!range.isEmpty()) {
+                        const QJsonObject start =
+                            range.value("start").toObject();
+                        const QJsonObject end = range.value("end").toObject();
+                        ci.hasTextEditRange = true;
+                        ci.rangeStartLine =
+                            start.value("line").toInt();
+                        ci.rangeStartColumn =
+                            start.value("character").toInt();
+                        ci.rangeEndLine = end.value("line").toInt();
+                        ci.rangeEndColumn =
+                            end.value("character").toInt();
                     }
                 }
                 items.append(ci);

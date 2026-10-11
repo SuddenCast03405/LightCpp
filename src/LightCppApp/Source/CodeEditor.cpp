@@ -728,7 +728,12 @@ void CodeEditor::repositionPopup()
             pos.setX(qMax(g.left(), g.right() - size.width()));
         }
         if (pos.y() + size.height() > g.bottom()) {
-            pos.setY(qMax(g.top(), pos.y() - size.height() - 20));
+            // Same rule as present(): flip above the caret, else dock to the
+            // bottom edge — never clamp to the top (the popup would detach).
+            const int flipped = pos.y() - size.height() - 20;
+            pos.setY(flipped >= g.top()
+                         ? flipped
+                         : qMax(g.top(), g.bottom() - size.height() + 1));
         }
     }
     popup_->move(pos);
@@ -1338,8 +1343,24 @@ const QHash<QString, QString>& CodeEditor::snippetTable()
 
 bool CodeEditor::expandSnippetAtCursor()
 {
+    // Programmatic edits bypass Qt's read-only protection, so the guard has
+    // to be explicit. A selection means "indent/replace deliberately" — a
+    // Tab must not silently eat it for a snippet.
+    if (isReadOnly() || textCursor().hasSelection()) {
+        return false;
+    }
+
     const QTextCursor c = textCursor();
     const QString before = c.block().text().left(c.positionInBlock());
+    const QString after = c.block().text().mid(c.positionInBlock());
+
+    // The trigger word must own its line: only leading whitespace before it
+    // and only trailing whitespace after it. Otherwise `int main` + Tab
+    // would expand into `int int main(...)`, and every `for`/`if` sitting
+    // inside other code (or a comment) would be fair game for replacement.
+    if (!after.trimmed().isEmpty()) {
+        return false;
+    }
 
     // The identifier immediately before the caret is the trigger word.
     static const QRegularExpression ident(
@@ -1358,7 +1379,7 @@ bool CodeEditor::expandSnippetAtCursor()
     if (wordStart > 0) {
         const QChar prev = before.at(wordStart - 1);
         if (prev == QLatin1Char('.') || prev == QLatin1Char(':')
-            || prev == QLatin1Char('>')) {
+            || prev == QLatin1Char('>') || !prev.isSpace()) {
             return false;
         }
     }
@@ -1395,11 +1416,15 @@ bool CodeEditor::expandSnippetAtCursor()
         caretOffset = expanded.size();  // no marker -> end of the snippet
     }
 
+    // One edit block: deleting the trigger and inserting the body is a
+    // single undo step, not two.
     QTextCursor edit = textCursor();
+    edit.beginEditBlock();
     edit.setPosition(c.position() - word.size());
     edit.setPosition(c.position(), QTextCursor::KeepAnchor);
     edit.removeSelectedText();
     edit.insertText(expanded);
+    edit.endEditBlock();
     edit.setPosition(edit.position() - expanded.size() + caretOffset);
     setTextCursor(edit);
     return true;
@@ -1573,33 +1598,48 @@ void CodeEditor::applyCompletionItem(const LightCpp::App::LspCompletionItem& ite
     const int blockPos = block.position();
     const int posInBlock = c.position() - blockPos;
 
-    // If the cursor is right after a trigger char (".", ":", ">"), do not
-    // treat the trigger as a partial identifier — leave it alone.
-    int i = posInBlock - 1;
-    bool replacePrefix = true;
-    if (i >= 0) {
-        const QChar prevCh = blockText.at(i);
-        if (prevCh == '.' || prevCh == ':' || prevCh == '>') {
-            // Insert after the trigger; no prefix to replace.
-            replacePrefix = false;
-        }
-    }
-    if (replacePrefix) {
-        // Otherwise: select the identifier chars before the cursor and replace.
-        while (i >= 0) {
-            const QChar ch = blockText.at(i);
-            if (ch.isLetterOrNumber() || ch == '_') {
-                --i;
-            } else {
-                break;
+    // The server's textEdit range wins when it names exactly the caret's
+    // line: it replaces the span the server chose (which may differ from the
+    // identifier heuristic below, e.g. "#incl" + "ude <...>"). A stale range
+    // (the answer computed before more typing) or a multi-line one falls
+    // back to the local prefix handling.
+    const QString insert = item.insertText.isEmpty() ? item.label : item.insertText;
+    if (item.hasTextEditRange && item.rangeStartLine == item.rangeEndLine
+        && item.rangeStartLine == block.blockNumber()) {
+        const int startCol = qBound(0, item.rangeStartColumn,
+                                    qMax(blockText.length() - 1, 0));
+        const int endCol = qBound(startCol, item.rangeEndColumn,
+                                  blockText.length());
+        c.setPosition(blockPos + startCol);
+        c.setPosition(blockPos + endCol, QTextCursor::KeepAnchor);
+    } else {
+        // If the cursor is right after a trigger char (".", ":", ">"), do not
+        // treat the trigger as a partial identifier — leave it alone.
+        int i = posInBlock - 1;
+        bool replacePrefix = true;
+        if (i >= 0) {
+            const QChar prevCh = blockText.at(i);
+            if (prevCh == '.' || prevCh == ':' || prevCh == '>') {
+                // Insert after the trigger; no prefix to replace.
+                replacePrefix = false;
             }
         }
-        const int wordStart = blockPos + i + 1;
-        c.setPosition(wordStart);
-        c.setPosition(blockPos + posInBlock, QTextCursor::KeepAnchor);
+        if (replacePrefix) {
+            // Otherwise: select the identifier chars before the cursor and replace.
+            while (i >= 0) {
+                const QChar ch = blockText.at(i);
+                if (ch.isLetterOrNumber() || ch == '_') {
+                    --i;
+                } else {
+                    break;
+                }
+            }
+            const int wordStart = blockPos + i + 1;
+            c.setPosition(wordStart);
+            c.setPosition(blockPos + posInBlock, QTextCursor::KeepAnchor);
+        }
     }
 
-    const QString insert = item.insertText.isEmpty() ? item.label : item.insertText;
     // A function/method/constructor completes with its call parentheses and
     // the caret parked between them, ready for the arguments. An insertion
     // that already carries "(" (snippets do) or an existing "(" right after
