@@ -7,6 +7,7 @@
 #include "LightCpp/App/ConsoleDecoder.hpp"
 #include "LightCpp/App/DefaultSettings.hpp"
 #include "LightCpp/App/FileExplorer.hpp"
+#include "LightCpp/App/FindBar.hpp"
 #include "LightCpp/App/GitClient.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
@@ -200,8 +201,19 @@ MainWindow::MainWindow(QWidget* parent)
 
     auto* mainSplitter = new QSplitter(Qt::Horizontal, this);
     mainSplitter->setChildrenCollapsible(false);  // panels can't be dragged shut
+
+    // The editor area wraps the tab pages plus the find/replace bar, so the
+    // bar can slide in under the tabs without moving the splitters.
+    auto* editorArea = new QWidget(this);
+    auto* editorLayout = new QVBoxLayout(editorArea);
+    editorLayout->setContentsMargins(0, 0, 0, 0);
+    editorLayout->setSpacing(0);
+    editorLayout->addWidget(tabWidget_);
+    findBar_ = new FindBar(editorArea);
+    editorLayout->addWidget(findBar_);
+
     mainSplitter->addWidget(sideTabs_);
-    mainSplitter->addWidget(tabWidget_);
+    mainSplitter->addWidget(editorArea);
     mainSplitter->setStretchFactor(0, 0);
     mainSplitter->setStretchFactor(1, 1);
     mainSplitter->setSizes({260, 1020});
@@ -442,6 +454,9 @@ MainWindow::MainWindow(QWidget* parent)
         // closing tabs — the git pane must follow the active file, or a
         // non-repository directory keeps showing the previous repo's branch.
         syncGitWorkingDirectory();
+        if (findBar_ != nullptr) {
+            findBar_->setEditor(currentEditor());
+        }
         if (auto* ed = currentEditor()) {
             statusLanguage_->setText(languageFromSuffix(ed->filePath()));
             statusFile_->setText(ed->filePath().isEmpty()
@@ -1795,6 +1810,37 @@ void MainWindow::createActions()
         }
     });
 
+    // --- find / replace ---------------------------------------------------
+    actFind_ = new QAction(tr("&Find..."), this);
+    actFind_->setShortcut(QKeySequence::Find);
+    actFind_->setStatusTip(tr("Search in the current file (regular expressions supported)"));
+    connect(actFind_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            findBar_->openFor(ed, false);
+        }
+    });
+
+    actFindNext_ = new QAction(tr("Find &Next"), this);
+    actFindNext_->setShortcut(QKeySequence::FindNext);  // F3
+    connect(actFindNext_, &QAction::triggered, this, [this] {
+        findBar_->findNext();
+    });
+
+    actFindPrev_ = new QAction(tr("Find &Previous"), this);
+    actFindPrev_->setShortcut(QKeySequence::FindPrevious);  // Shift+F3
+    connect(actFindPrev_, &QAction::triggered, this, [this] {
+        findBar_->findPrev();
+    });
+
+    actReplace_ = new QAction(tr("&Replace..."), this);
+    actReplace_->setShortcut(QKeySequence(QStringLiteral("Ctrl+H")));
+    actReplace_->setStatusTip(tr("Search and replace in the current file"));
+    connect(actReplace_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            findBar_->openFor(ed, true);
+        }
+    });
+
     // --- code formatting ------------------------------------------------
     actFormat_ = new QAction(tr("&Format Document"), this);
     actFormat_->setShortcuts({QKeySequence(QStringLiteral("Shift+Alt+F")),
@@ -1926,6 +1972,10 @@ void MainWindow::createActions()
         {actUnfold_, "actionUnfold"},
         {actFoldAll_, "actionFoldAll"},
         {actUnfoldAll_, "actionUnfoldAll"},
+        {actFind_, "actionFind"},
+        {actFindNext_, "actionFindNext"},
+        {actFindPrev_, "actionFindPrev"},
+        {actReplace_, "actionReplace"},
         {actFormat_, "actionFormat"},
         {actFormatFolder_, "actionFormatFolder"},
         {actFormatProject_, "actionFormatProject"},
@@ -1966,6 +2016,11 @@ void MainWindow::createMenuBar()
 
     auto* editMenu = menuBar()->addMenu(tr("&Edit"));
     editMenu->setObjectName(QStringLiteral("menuEdit"));
+    editMenu->addAction(actFind_);
+    editMenu->addAction(actFindNext_);
+    editMenu->addAction(actFindPrev_);
+    editMenu->addAction(actReplace_);
+    editMenu->addSeparator();
     editMenu->addAction(actFormat_);
     editMenu->addAction(actFormatFolder_);
     editMenu->addSeparator();

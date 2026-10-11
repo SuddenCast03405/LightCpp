@@ -31,6 +31,7 @@
 
 class CodeEditor;
 class FileExplorer;
+class FindBar;
 class OutputPanel;
 class QLabel;
 class QListWidget;
@@ -533,6 +534,8 @@ private:
     QPushButton* restartButton_ = nullptr;
     FileExplorer* fileExplorer_;
     OutputPanel* outputPanel_;
+    /// Find/replace bar docked under the editor tabs; hidden until Ctrl+F.
+    FindBar* findBar_ = nullptr;
     QComboBox* encodingCombo_;
     QLabel* statusCursor_;
     QLabel* statusLanguage_;
@@ -567,6 +570,10 @@ private:
     QAction* actUnfold_ = nullptr;         // expand the block around the caret
     QAction* actFoldAll_ = nullptr;
     QAction* actUnfoldAll_ = nullptr;
+    QAction* actFind_ = nullptr;           // open the find bar (Ctrl+F)
+    QAction* actFindNext_ = nullptr;       // F3
+    QAction* actFindPrev_ = nullptr;       // Shift+F3
+    QAction* actReplace_ = nullptr;        // open the bar in replace mode (Ctrl+H)
     QAction* actFormat_ = nullptr;         // clang-format the whole file
     QAction* actFormatFolder_ = nullptr;   // clang-format a folder
     QAction* actFormatProject_ = nullptr;  // clang-format the open project
