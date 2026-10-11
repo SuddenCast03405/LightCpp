@@ -14,7 +14,9 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QRegularExpression>
 #include <QScreen>
+#include <QStringList>
 #include <QTextBlock>
 #include <QResizeEvent>
 #include <QTimer>
@@ -1276,6 +1278,16 @@ void CodeEditor::keyPressEvent(QKeyEvent* event)
         }
     }
 
+    // Built-in snippet expansion: Tab after a trigger word ("for", "main",
+    // ...) replaces the word with the snippet body. Runs before the default
+    // Tab indent handling, and only when the completion popup is closed.
+    if (key == Qt::Key_Tab && !popupVisible) {
+        if (expandSnippetAtCursor()) {
+            completionIdleTimer_->stop();
+            return;
+        }
+    }
+
     // Auto-indent: a plain newline inherits the current line's indentation,
     // one level deeper when the line ends with `{` (and expands the
     // auto-inserted `{|}` pair into three lines). The completion popup
@@ -1287,6 +1299,110 @@ void CodeEditor::keyPressEvent(QKeyEvent* event)
     }
 
     QPlainTextEdit::keyPressEvent(event);
+}
+
+// ---------------------------------------------------------------------------
+// Built-in snippets
+// ---------------------------------------------------------------------------
+
+const QHash<QString, QString>& CodeEditor::snippetTable()
+{
+    // Trigger word -> body. A single `|` in the body marks where the caret
+    // ends up after the expansion (no marker = caret at the end).
+    static const QHash<QString, QString> table = {
+        {QStringLiteral("for"),
+         QStringLiteral("for (int i = 0; i < n; ++i) {\n|\n}")},
+        {QStringLiteral("while"),
+         QStringLiteral("while (|) {\n\n}")},
+        {QStringLiteral("do"),
+         QStringLiteral("do {\n\n} while (|);")},
+        {QStringLiteral("if"),
+         QStringLiteral("if (|) {\n\n}")},
+        {QStringLiteral("switch"),
+         QStringLiteral("switch (|) {\ncase 0:\nbreak;\ndefault:\nbreak;\n}")},
+        {QStringLiteral("try"),
+         QStringLiteral("try {\n\n} catch (const std::exception& e) {\n|\n}")},
+        {QStringLiteral("main"),
+         QStringLiteral("int main(int argc, char* argv[]) {\n|\nreturn 0;\n}")},
+        {QStringLiteral("class"),
+         QStringLiteral("class | {\npublic:\nprivate:\n};")},
+        {QStringLiteral("struct"),
+         QStringLiteral("struct | {\n\n};")},
+        {QStringLiteral("namespace"),
+         QStringLiteral("namespace | {\n\n}")},
+        {QStringLiteral("guard"),
+         QStringLiteral("#ifndef NAME_H\n#define NAME_H\n\n|\n\n#endif // NAME_H")},
+    };
+    return table;
+}
+
+bool CodeEditor::expandSnippetAtCursor()
+{
+    const QTextCursor c = textCursor();
+    const QString before = c.block().text().left(c.positionInBlock());
+
+    // The identifier immediately before the caret is the trigger word.
+    static const QRegularExpression ident(
+        QStringLiteral("[A-Za-z_][A-Za-z0-9_]*$"));
+    const QRegularExpressionMatch m = ident.match(before);
+    if (!m.hasMatch()) {
+        return false;
+    }
+    const QString word = m.captured();
+    const auto it = snippetTable().constFind(word);
+    if (it == snippetTable().constEnd()) {
+        return false;
+    }
+    // `x.for` / `a->b` territory: a member access, not a snippet.
+    const int wordStart = m.capturedStart();
+    if (wordStart > 0) {
+        const QChar prev = before.at(wordStart - 1);
+        if (prev == QLatin1Char('.') || prev == QLatin1Char(':')
+            || prev == QLatin1Char('>')) {
+            return false;
+        }
+    }
+
+    // The trigger line's leading whitespace indents every body line; the
+    // `|` marker is stripped and its final caret offset remembered.
+    int ws = 0;
+    while (ws < before.size() && before.at(ws).isSpace()) {
+        ++ws;
+    }
+    const QString indent = before.left(ws);
+
+    QString expanded;
+    int caretOffset = -1;
+    const QStringList lines = it.value().split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i) {
+        QString line = lines.at(i);
+        const int local = line.indexOf(QLatin1Char('|'));
+        if (local >= 0) {
+            line.remove(local, 1);
+        }
+        if (i > 0) {
+            expanded += QLatin1Char('\n');
+        }
+        if (!line.isEmpty()) {
+            expanded += indent;
+        }
+        if (local >= 0 && caretOffset < 0) {
+            caretOffset = expanded.size() + local;
+        }
+        expanded += line;
+    }
+    if (caretOffset < 0) {
+        caretOffset = expanded.size();  // no marker -> end of the snippet
+    }
+
+    QTextCursor edit = textCursor();
+    edit.setPosition(c.position() - word.size());
+    edit.setPosition(c.position(), QTextCursor::KeepAnchor);
+    edit.removeSelectedText();
+    edit.insertText(expanded);
+    edit.setPosition(edit.position() - expanded.size() + caretOffset);
+    setTextCursor(edit);
+    return true;
 }
 
 void CodeEditor::insertFromMimeData(const QMimeData* source)

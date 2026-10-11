@@ -271,6 +271,14 @@ private:
     /// `opener` is not an auto-paired character.
     [[nodiscard]] static QChar closingBracketFor(QChar opener);
     [[nodiscard]] static bool isClosingBracket(QChar ch);
+    // --- built-in snippets ------------------------------------------------
+    /// Tab on a trigger word ("for", "main", ...) replaces the word with the
+    /// snippet body; a single `|` in the body marks the final caret spot and
+    /// every body line inherits the trigger line's indentation. Returns true
+    /// when a snippet expanded.
+    bool expandSnippetAtCursor();
+    /// The built-in trigger word -> body table (with `|` caret markers).
+    [[nodiscard]] static const QHash<QString, QString>& snippetTable();
     [[nodiscard]] static bool isQuote(QChar ch);
     /// Character immediately before / after `cursor`, or a null QChar when
     /// the cursor sits at the very start or end of the document.

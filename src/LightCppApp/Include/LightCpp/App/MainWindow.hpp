@@ -33,6 +33,7 @@ class CodeEditor;
 class FileExplorer;
 class FindBar;
 class QFileSystemWatcher;
+class QHBoxLayout;
 class OutputPanel;
 class QLabel;
 class QListWidget;
@@ -570,6 +571,13 @@ private:
     QTabWidget* sideTabs_ = nullptr;
     /// Outline page: the active document's symbol tree (documentSymbol).
     QTreeWidget* outlineTree_ = nullptr;
+    /// Breadcrumb bar: the enclosing-symbol chain of the caret, one flat
+    /// button per scope level.
+    QWidget* breadcrumbBar_ = nullptr;
+    QHBoxLayout* breadcrumbLayout_ = nullptr;
+    /// Names of the last breadcrumb chain — rebuilding is skipped while the
+    /// chain is unchanged (cursor moves fire per keystroke).
+    QString breadcrumbKey_;
     QListWidget* pluginList_ = nullptr;
     /// The "this change needs a restart" banner above the plugin list plus
     /// its Restart IDE button. Shown only while a C++ plugin is disabled
@@ -735,6 +743,7 @@ private:
         QString detail;
         int kind = 0;
         int line = 0;
+        int endLine = 0;  // last line of the symbol's body (breadcrumb scope)
         int depth = 0;
     };
     /// Flattened symbols of the outline answer currently shown.
@@ -783,6 +792,12 @@ private:
     /// Edit > Quick Fix: request codeActions for the diagnostics around the
     /// cursor; the answer pops a menu of fixes at the caret.
     void requestQuickFix();
+
+    // --- breadcrumb ----------------------------------------------------------
+    /// Rebuild the clickable scope chain (enclosing symbols of the caret)
+    /// under the editor tabs. Hidden when there is no outline data. Skipped
+    /// entirely when the chain did not change since the last rebuild.
+    void updateBreadcrumb();
 
     /// Latest diagnostics per document, keyed by the editor's lint path
     /// (a virtual temp path for unsaved buffers). Feeds the Problems list.

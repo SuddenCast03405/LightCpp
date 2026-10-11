@@ -218,6 +218,15 @@ MainWindow::MainWindow(QWidget* parent)
     editorLayout->setContentsMargins(0, 0, 0, 0);
     editorLayout->setSpacing(0);
     editorLayout->addWidget(tabWidget_);
+    // Breadcrumb bar (hidden until an outline answer provides scopes).
+    breadcrumbBar_ = new QWidget(editorArea);
+    breadcrumbBar_->setObjectName(QStringLiteral("breadcrumbBar"));
+    breadcrumbLayout_ = new QHBoxLayout(breadcrumbBar_);
+    breadcrumbLayout_->setContentsMargins(6, 1, 6, 1);
+    breadcrumbLayout_->setSpacing(0);
+    breadcrumbLayout_->addStretch(1);
+    breadcrumbBar_->hide();
+    editorLayout->addWidget(breadcrumbBar_);
     findBar_ = new FindBar(editorArea);
     editorLayout->addWidget(findBar_);
 
@@ -3020,6 +3029,7 @@ void MainWindow::onCursorPositionChanged()
     const QString blockText = c.block().text().left(c.positionInBlock());
     col += blockText.count(u'\t') * 3;
     statusCursor_->setText(tr("Ln %1, Col %2").arg(line).arg(col));
+    updateBreadcrumb();
 }
 
 void MainWindow::onEncodingChanged(int index)
@@ -3318,6 +3328,7 @@ void MainWindow::applyOutlineSymbols(
             entry.detail = symbol.detail;
             entry.kind = symbol.kind;
             entry.line = symbol.line;
+            entry.endLine = symbol.endLine;
             entry.depth = depth;
             outlineEntries_.append(entry);
 
@@ -3329,6 +3340,7 @@ void MainWindow::applyOutlineSymbols(
         addSymbol(symbol, nullptr, 0);
     }
     outlineTree_->expandToDepth(0);
+    updateBreadcrumb();
 }
 
 void MainWindow::jumpToSymbolLine(int line)
@@ -3345,6 +3357,66 @@ void MainWindow::jumpToSymbolLine(int line)
     ed->setTextCursor(cursor);
     ed->centerCursor();
     ed->setFocus();
+}
+
+void MainWindow::updateBreadcrumb()
+{
+    CodeEditor* ed = currentEditor();
+    // The enclosing-symbol chain: every outline entry whose body spans the
+    // caret line, in document order (the flat list is depth-first, so outer
+    // scopes come first — exactly breadcrumb order).
+    QString key;
+    if (ed != nullptr && !outlineEntries_.isEmpty()) {
+        const int caretLine = ed->textCursor().blockNumber();
+        QList<const OutlineEntry*> chain;
+        for (const OutlineEntry& entry : outlineEntries_) {
+            if (entry.line <= caretLine && caretLine <= entry.endLine) {
+                chain.append(&entry);
+                key += entry.name + u'\x1F';
+            }
+        }
+        if (chain.size() > 5) {
+            chain = chain.mid(chain.size() - 5);  // innermost five scopes
+        }
+        if (!chain.isEmpty()) {
+            key = QStringLiteral("%1|%2").arg(ed->lintPath()).arg(key);
+            if (key == breadcrumbKey_) {
+                return;  // same scope chain — nothing to rebuild
+            }
+            breadcrumbKey_ = key;
+
+            while (breadcrumbLayout_->count() > 1) {
+                QLayoutItem* item = breadcrumbLayout_->takeAt(0);
+                if (item->widget() != nullptr) {
+                    item->widget()->deleteLater();
+                }
+                delete item;
+            }
+            for (int i = 0; i < chain.size(); ++i) {
+                if (i > 0) {
+                    auto* sep = new QLabel(QStringLiteral("\u203A"),
+                                           breadcrumbBar_);
+                    breadcrumbLayout_->insertWidget(
+                        breadcrumbLayout_->count() - 1, sep);
+                }
+                const OutlineEntry* entry = chain[i];
+                auto* button = new QPushButton(entry->name, breadcrumbBar_);
+                button->setFlat(true);
+                button->setCursor(Qt::PointingHandCursor);
+                button->setToolTip(entry->detail.isEmpty()
+                                       ? entry->name
+                                       : entry->detail);
+                connect(button, &QPushButton::clicked, this,
+                        [this, line = entry->line] { jumpToSymbolLine(line); });
+                breadcrumbLayout_->insertWidget(
+                    breadcrumbLayout_->count() - 1, button);
+            }
+            breadcrumbBar_->show();
+            return;
+        }
+    }
+    breadcrumbKey_.clear();
+    breadcrumbBar_->hide();
 }
 
 void MainWindow::showSymbolSearch()
