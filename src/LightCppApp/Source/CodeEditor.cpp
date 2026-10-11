@@ -23,6 +23,7 @@
 #include <QAbstractTextDocumentLayout>
 
 #include <utility>
+#include <algorithm>
 #include <vector>
 
 namespace {
@@ -387,6 +388,21 @@ void CodeEditor::updateExtraSelections()
         selections.append(sel);
     }
 
+    // Bookmarked lines: a soft blue full-width background, so a bookmark
+    // stays visible while scrolling even without looking at the gutter.
+    for (const int line : std::as_const(bookmarkLines_)) {
+        const QTextBlock block = document()->findBlockByNumber(line);
+        if (!block.isValid() || !block.isVisible()) {
+            continue;  // stale line after an edit
+        }
+        QTextEdit::ExtraSelection sel;
+        sel.format.setBackground(QColor(0x66, 0x99, 0xFF, 45));
+        sel.format.setProperty(QTextFormat::FullWidthSelection, true);
+        sel.cursor = QTextCursor(block);
+        sel.cursor.clearSelection();
+        selections.append(sel);
+    }
+
     // --- bracket match + same-symbol highlight ---------------------------
     // Both only make sense on a bare caret; with an active selection the
     // user is pointing at something already. The plain text is shared by
@@ -529,6 +545,62 @@ void CodeEditor::setBreakpointLines(const QSet<int>& lines)
     }
     breakpointLines_ = lines;
     updateExtraSelections();  // keeps the gutter repaint simple and central
+}
+
+// ---------------------------------------------------------------------------
+// Bookmarks
+// ---------------------------------------------------------------------------
+void CodeEditor::toggleBookmark()
+{
+    const int line = textCursor().blockNumber();
+    if (!bookmarkLines_.remove(line)) {
+        bookmarkLines_.insert(line);
+    }
+    updateExtraSelections();
+}
+
+void CodeEditor::nextBookmark()
+{
+    if (bookmarkLines_.isEmpty()) {
+        return;
+    }
+    QList<int> lines = bookmarkLines_.values();
+    std::sort(lines.begin(), lines.end());
+    const int current = textCursor().blockNumber();
+    // First bookmark strictly below the caret, wrapping to the top.
+    const auto it = std::upper_bound(lines.constBegin(), lines.constEnd(), current);
+    const int target = (it != lines.constEnd())
+                           ? *it
+                           : lines.first();
+    const QTextBlock block = document()->findBlockByNumber(target);
+    if (!block.isValid()) {
+        return;  // stale line after an edit; harmless
+    }
+    QTextCursor cursor(block);
+    setTextCursor(cursor);
+    centerCursor();
+}
+
+void CodeEditor::prevBookmark()
+{
+    if (bookmarkLines_.isEmpty()) {
+        return;
+    }
+    QList<int> lines = bookmarkLines_.values();
+    std::sort(lines.begin(), lines.end());
+    const int current = textCursor().blockNumber();
+    // First bookmark strictly above the caret, wrapping to the bottom.
+    const auto it = std::lower_bound(lines.constBegin(), lines.constEnd(), current);
+    const int target = (it != lines.constBegin())
+                           ? *std::prev(it)
+                           : lines.last();
+    const QTextBlock block = document()->findBlockByNumber(target);
+    if (!block.isValid()) {
+        return;
+    }
+    QTextCursor cursor(block);
+    setTextCursor(cursor);
+    centerCursor();
 }
 
 void CodeEditor::setDiagnostics(const QList<LightCpp::App::LspDiagnostic>& diagnostics)
@@ -1804,6 +1876,22 @@ void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event)
                 painter.setBrush(QColor(Qt::red));
                 painter.drawEllipse(2, top + qMax(0, int((bottom - top) / 2) - 4),
                                     8, 8);
+                painter.setBrush(Qt::NoBrush);
+            }
+
+            // Bookmark marker: a blue square beside/above the breakpoint
+            // dot in the same leftmost slot.
+            if (bookmarkLines_.contains(blockNumber)) {
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(0x33, 0x66, 0xCC));
+                if (breakpointLines_.contains(blockNumber)) {
+                    // Sharing the slot with a breakpoint: a smaller square
+                    // above the dot keeps both visible.
+                    painter.drawRect(3, top + 2, 6, 6);
+                } else {
+                    painter.drawRect(2, top + qMax(0, int((bottom - top) / 2) - 4),
+                                     8, 8);
+                }
                 painter.setBrush(Qt::NoBrush);
             }
 

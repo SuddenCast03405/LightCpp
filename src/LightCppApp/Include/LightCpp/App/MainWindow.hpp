@@ -630,6 +630,9 @@ private:
     QAction* actGotoDeclaration_ = nullptr;    // Edit > Go to Declaration (Ctrl+F12)
     QAction* actGotoImplementation_ = nullptr; // Edit > Go to Implementation (Ctrl+F11)
     QAction* actFindReferences_ = nullptr;     // Edit > Find References (Shift+F12)
+    QAction* actToggleBookmark_ = nullptr;     // Edit > Toggle Bookmark (Ctrl+F2)
+    QAction* actNextBookmark_ = nullptr;       // Edit > Next Bookmark (F2)
+    QAction* actPrevBookmark_ = nullptr;       // Edit > Previous Bookmark (Shift+F2)
     QAction* actFormat_ = nullptr;         // clang-format the whole file
     QAction* actFormatFolder_ = nullptr;   // clang-format a folder
     QAction* actFormatProject_ = nullptr;  // clang-format the open project

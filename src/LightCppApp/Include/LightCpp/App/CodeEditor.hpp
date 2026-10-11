@@ -149,6 +149,18 @@ public:
         return breakpointLines_;
     }
 
+    // --- bookmarks --------------------------------------------------------
+    /// Per-buffer bookmarks (0-based lines, like the breakpoints). Bookmarks
+    /// belong to the editor tab and are not persisted — they mark "come back
+    /// here while I work on this file", not project state.
+    void toggleBookmark();
+    void nextBookmark();
+    void prevBookmark();
+    [[nodiscard]] const QSet<int>& bookmarkLines() const noexcept
+    {
+        return bookmarkLines_;
+    }
+
 public slots:
     /// Show the completion popup with `items` at the editor cursor's
     /// global position. Hides the popup if the list is empty.
@@ -313,6 +325,7 @@ private:
     QString encodingLabel_;
     QList<LightCpp::App::LspDiagnostic> diagnostics_;
     QSet<int> breakpointLines_;  // 0-based lines with breakpoints (gutter dots)
+    QSet<int> bookmarkLines_;    // 0-based lines with bookmarks
 
     QList<LightCpp::Core::Fold::FoldRegion> foldRegions_;
     QList<FoldAnchor> folded_;

@@ -2116,6 +2116,36 @@ void MainWindow::createActions()
     connect(actFindReferences_, &QAction::triggered, this,
             [this] { requestNavigation(2); });
 
+    // --- bookmarks ----------------------------------------------------------
+    actToggleBookmark_ = new QAction(tr("&Toggle Bookmark"), this);
+    actToggleBookmark_->setShortcut(QKeySequence(QStringLiteral("Ctrl+F2")));
+    actToggleBookmark_->setStatusTip(
+        tr("Mark or unmark the current line (blue square in the gutter)"));
+    connect(actToggleBookmark_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->toggleBookmark();
+        }
+    });
+
+    actNextBookmark_ = new QAction(tr("&Next Bookmark"), this);
+    actNextBookmark_->setShortcut(QKeySequence(Qt::Key_F2));
+    actNextBookmark_->setStatusTip(tr("Jump to the next bookmark (wraps)"));
+    connect(actNextBookmark_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->nextBookmark();
+        }
+    });
+
+    actPrevBookmark_ = new QAction(tr("&Previous Bookmark"), this);
+    actPrevBookmark_->setShortcut(QKeySequence(QStringLiteral("Shift+F2")));
+    actPrevBookmark_->setStatusTip(
+        tr("Jump to the previous bookmark (wraps)"));
+    connect(actPrevBookmark_, &QAction::triggered, this, [this] {
+        if (CodeEditor* ed = currentEditor()) {
+            ed->prevBookmark();
+        }
+    });
+
     // Greyed out until an editor tab becomes current; the tab switch below
     // and the clipboard changes re-evaluate it.
     updateEditActions();
@@ -2267,6 +2297,9 @@ void MainWindow::createActions()
         {actGotoDeclaration_, "actionGotoDeclaration"},
         {actGotoImplementation_, "actionGotoImplementation"},
         {actFindReferences_, "actionFindReferences"},
+        {actToggleBookmark_, "actionToggleBookmark"},
+        {actNextBookmark_, "actionNextBookmark"},
+        {actPrevBookmark_, "actionPrevBookmark"},
         {actFormat_, "actionFormat"},
         {actFormatFolder_, "actionFormatFolder"},
         {actFormatProject_, "actionFormatProject"},
@@ -2326,6 +2359,10 @@ void MainWindow::createMenuBar()
     editMenu->addAction(actGotoDeclaration_);
     editMenu->addAction(actGotoImplementation_);
     editMenu->addAction(actFindReferences_);
+    editMenu->addSeparator();
+    editMenu->addAction(actToggleBookmark_);
+    editMenu->addAction(actNextBookmark_);
+    editMenu->addAction(actPrevBookmark_);
     editMenu->addSeparator();
     editMenu->addAction(actFormat_);
     editMenu->addAction(actFormatFolder_);
