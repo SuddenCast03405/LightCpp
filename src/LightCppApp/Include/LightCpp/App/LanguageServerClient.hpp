@@ -146,6 +146,22 @@ public:
     /// arrives asynchronously via definitionReady().
     int requestDefinition(const QString& filePath, int line, int column);
 
+    // --- declaration / implementation / references -------------------------
+
+    /// textDocument/declaration — where the symbol is declared (usually the
+    /// header prototype rather than the definition). Answer via
+    /// locationsReady().
+    int requestDeclaration(const QString& filePath, int line, int column);
+
+    /// textDocument/implementation — where the symbol is implemented
+    /// (vtable overrides, function bodies). Answer via locationsReady().
+    int requestImplementation(const QString& filePath, int line, int column);
+
+    /// textDocument/references — every usage of the symbol. Answer via
+    /// locationsReady().
+    int requestReferences(const QString& filePath, int line, int column,
+                          bool includeDeclaration = true);
+
     // --- URI helpers (LSP uses file:// URIs with percent encoding) ---
 
     [[nodiscard]] static QString toFileUri(const QString& filePath);
@@ -168,6 +184,13 @@ signals:
     /// requested position, e.g. the caret was on whitespace or a keyword).
     void definitionReady(int requestId, const QString& filePath,
                          const LspLocation& location);
+
+    /// Declaration/implementation/references response arrived. The list may
+    /// be empty (nothing found at that position). For declaration and
+    /// implementation clangd usually returns one location; references can
+    /// return hundreds — cap them at the call site if needed.
+    void locationsReady(int requestId, const QString& filePath,
+                        const QList<LspLocation>& locations);
 
     /// The initialize handshake completed; documents can now be opened.
     void serverStarted();
@@ -199,6 +222,9 @@ private:
     QMap<QString, int> documentVersions_;  // fileUri -> last version sent
     QMap<int, QString> completionRequests_;  // requestId -> fileUri
     QMap<int, QString> definitionRequests_;  // requestId -> fileUri
+    QMap<int, QString> declarationRequests_;      // requestId -> fileUri
+    QMap<int, QString> implementationRequests_;   // requestId -> fileUri
+    QMap<int, QString> referencesRequests_;       // requestId -> fileUri
     bool initialized_ = false;          // handshake done
     bool everInitialized_ = false;      // handshake completed at least once —
                                         // separates "exited during start-up"

@@ -10,6 +10,7 @@
 #include "LightCpp/App/FindBar.hpp"
 #include "LightCpp/App/GitClient.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
+#include "LightCpp/App/LspLocationsDialog.hpp"
 #include "LightCpp/App/ProjectSearchDialog.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/LibClangCompleter.hpp"
@@ -370,6 +371,52 @@ MainWindow::MainWindow(QWidget* parent)
             return;
         }
         jumpToLocation(location.filePath, location.line, location.column);
+    });
+    connect(lsp_, &LightCpp::App::LanguageServerClient::locationsReady,
+            this, [this](int requestId, const QString& filePath,
+                         const QList<LightCpp::App::LspLocation>& locations) {
+        Q_UNUSED(filePath)
+        if (!navigationKinds_.contains(requestId)) {
+            return;
+        }
+        const int kind = navigationKinds_.take(requestId);
+        // Only the newest navigation request may move anything (same rule
+        // as latestDefinitionId_).
+        if (requestId != latestLocationRequestId_) {
+            return;
+        }
+        if (locations.isEmpty()) {
+            appendLanguageServerLog(
+                tr("Nothing found at that position."));
+            return;
+        }
+        // A single declaration/implementation target jumps right away;
+        // references (or several targets) get the result list.
+        if (kind != 2 && locations.size() == 1) {
+            jumpToLocation(locations.first().filePath,
+                           locations.first().line,
+                           locations.first().column);
+            return;
+        }
+        const QString title =
+            kind == 0 ? tr("Go to Declaration")
+                      : kind == 1 ? tr("Go to Implementation")
+                                  : tr("Find References");
+        auto* dialog = new LspLocationsDialog(title, locations, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        connect(dialog, &LspLocationsDialog::locationActivated,
+                this, [this](const QString& path, int line1based) {
+            if (openFileInTab(path) != nullptr) {
+                // Dialog lines are 1-based; gotoLine() is 0-based.
+                gotoLine(line1based - 1);
+                if (CodeEditor* ed = currentEditor()) {
+                    ed->setFocus();
+                }
+            }
+        });
+        dialog->show();
+        dialog->raise();
+        dialog->activateWindow();
     });
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverFailed,
             this, [this](const QString& message) {
@@ -2036,6 +2083,39 @@ void MainWindow::createActions()
     connect(actSearchInProject_, &QAction::triggered,
             this, &MainWindow::onSearchInProject);
 
+    // --- switch header / source -------------------------------------------
+    actSwitchHeaderSource_ = new QAction(tr("Switch &Header/Source"), this);
+    actSwitchHeaderSource_->setShortcut(QKeySequence(QStringLiteral("Alt+O")));
+    actSwitchHeaderSource_->setStatusTip(
+        tr("Open the header or source that pairs with the active file "
+           "(same basename, .cpp/.cc/.cxx/.c <-> .h/.hh/.hpp/.hxx, next to "
+           "the file first)"));
+    connect(actSwitchHeaderSource_, &QAction::triggered,
+            this, &MainWindow::onSwitchHeaderSource);
+
+    // --- navigation: declaration / implementation / references ------------
+    actGotoDeclaration_ = new QAction(tr("Go to &Declaration"), this);
+    actGotoDeclaration_->setShortcut(QKeySequence(QStringLiteral("Ctrl+F12")));
+    actGotoDeclaration_->setStatusTip(
+        tr("Jump to the declaration of the symbol at the cursor (clangd)"));
+    connect(actGotoDeclaration_, &QAction::triggered, this,
+            [this] { requestNavigation(0); });
+
+    actGotoImplementation_ = new QAction(tr("Go to &Implementation"), this);
+    actGotoImplementation_->setShortcut(
+        QKeySequence(QStringLiteral("Ctrl+F11")));
+    actGotoImplementation_->setStatusTip(
+        tr("Jump to the implementation of the symbol at the cursor (clangd)"));
+    connect(actGotoImplementation_, &QAction::triggered, this,
+            [this] { requestNavigation(1); });
+
+    actFindReferences_ = new QAction(tr("Find &References"), this);
+    actFindReferences_->setShortcut(QKeySequence(QStringLiteral("Shift+F12")));
+    actFindReferences_->setStatusTip(
+        tr("List every usage of the symbol at the cursor (clangd)"));
+    connect(actFindReferences_, &QAction::triggered, this,
+            [this] { requestNavigation(2); });
+
     // Greyed out until an editor tab becomes current; the tab switch below
     // and the clipboard changes re-evaluate it.
     updateEditActions();
@@ -2183,6 +2263,10 @@ void MainWindow::createActions()
         {actCopy_, "actionCopy"},
         {actPaste_, "actionPaste"},
         {actSearchInProject_, "actionSearchInProject"},
+        {actSwitchHeaderSource_, "actionSwitchHeaderSource"},
+        {actGotoDeclaration_, "actionGotoDeclaration"},
+        {actGotoImplementation_, "actionGotoImplementation"},
+        {actFindReferences_, "actionFindReferences"},
         {actFormat_, "actionFormat"},
         {actFormatFolder_, "actionFormatFolder"},
         {actFormatProject_, "actionFormatProject"},
@@ -2236,6 +2320,12 @@ void MainWindow::createMenuBar()
     editMenu->addAction(actReplace_);
     editMenu->addSeparator();
     editMenu->addAction(actSearchInProject_);
+    editMenu->addSeparator();
+    editMenu->addAction(actSwitchHeaderSource_);
+    editMenu->addSeparator();
+    editMenu->addAction(actGotoDeclaration_);
+    editMenu->addAction(actGotoImplementation_);
+    editMenu->addAction(actFindReferences_);
     editMenu->addSeparator();
     editMenu->addAction(actFormat_);
     editMenu->addAction(actFormatFolder_);
@@ -2888,6 +2978,103 @@ void MainWindow::onSearchInProject()
     dialog->activateWindow();
 }
 
+void MainWindow::onSwitchHeaderSource()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || ed->filePath().isEmpty()) {
+        return;
+    }
+    const QFileInfo info(ed->filePath());
+    const QString ext = info.suffix().toLower();
+
+    // The two extension families and their translation table. A .h pairs
+    // with either kind of source; a .c prefers C sources but still falls
+    // back to C++ ones.
+    static const QStringList headerExts = {
+        QStringLiteral("h"), QStringLiteral("hh"), QStringLiteral("hpp"),
+        QStringLiteral("hxx")};
+    static const QStringList sourceExts = {
+        QStringLiteral("cpp"), QStringLiteral("cc"), QStringLiteral("cxx"),
+        QStringLiteral("c++"), QStringLiteral("c")};
+
+    QStringList targets;
+    if (ext == QLatin1String("h") || ext == QLatin1String("hh")
+        || ext == QLatin1String("hpp") || ext == QLatin1String("hxx")) {
+        targets = sourceExts;
+    } else if (ext == QLatin1String("c")) {
+        targets = {QStringLiteral("h"), QStringLiteral("hh"),
+                   QStringLiteral("hpp"), QStringLiteral("hxx"),
+                   QStringLiteral("cpp"), QStringLiteral("cc"),
+                   QStringLiteral("cxx"), QStringLiteral("c++")};
+    } else if (sourceExts.contains(ext)) {
+        targets = headerExts;
+    } else {
+        outputPanel_->appendBuildOutput(
+            tr("Switch Header/Source: %1 is neither a C/C++ header nor a "
+               "source file.").arg(info.fileName()));
+        return;
+    }
+
+    // Same directory first — the overwhelmingly common layout and instant
+    // to check (a handful of stat calls, not a tree walk).
+    const QDir dir = info.absoluteDir();
+    const QString base = info.completeBaseName();
+    for (const QString& targetExt : targets) {
+        const QString candidate = dir.filePath(base + u'.' + targetExt);
+        if (QFileInfo::exists(candidate)) {
+            openFileInTab(candidate);
+            return;
+        }
+    }
+    outputPanel_->appendBuildOutput(
+        tr("Switch Header/Source: no %1 next to %2.")
+            .arg(targets.join(QStringLiteral("/")), info.fileName()));
+}
+
+void MainWindow::requestNavigation(int kind)
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || !lsp_->isRunning()) {
+        return;
+    }
+    const QString lintPath = ed->lintPath();
+    if (lintPath.isEmpty() || !isCppLikeFile(lintPath)) {
+        return;
+    }
+    // Navigation answers lean on clangd's index: same gates as Ctrl+Click
+    // go-to-definition.
+    if (!clangdNavigationEnabled_
+        || fileExceeds(lintPath, largeFileParseMB_)
+        || fileExceeds(lintPath, largeFileIndexMB_)) {
+        return;
+    }
+    // Push the current text first (lint didChange is debounced), then ask.
+    lsp_->changeDocument(lintPath, ed->toPlainText());
+    const int line = ed->textCursor().blockNumber();
+    // columnNumber() counts UTF-16 code units within the block — exactly
+    // what LSP positions use.
+    const int column = ed->textCursor().columnNumber();
+
+    int reqId = 0;
+    switch (kind) {
+    case 0:
+        reqId = lsp_->requestDeclaration(lintPath, line, column);
+        break;
+    case 1:
+        reqId = lsp_->requestImplementation(lintPath, line, column);
+        break;
+    case 2:
+        reqId = lsp_->requestReferences(lintPath, line, column);
+        break;
+    default:
+        return;
+    }
+    if (reqId > 0) {
+        latestLocationRequestId_ = reqId;
+        navigationKinds_[reqId] = kind;
+    }
+}
+
 QString MainWindow::tabTitleFor(const CodeEditor* editor) const
 {
     const int index = tabWidget_->indexOf(editor);
@@ -3303,6 +3490,9 @@ void MainWindow::onSyntaxCheckToggled(bool enabled)
         // Clear all diagnostic markers and any pending completion popups.
         pendingCompletions_.clear();
         pendingDefinitions_.clear();
+        // In-flight declaration/implementation/references answers are dead
+        // with the server: drop them so a stale response is never applied.
+        navigationKinds_.clear();
         for (int i = 0; i < tabWidget_->count(); ++i) {
             if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
                 ed->setDiagnostics({});

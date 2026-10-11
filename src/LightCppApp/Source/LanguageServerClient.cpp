@@ -398,6 +398,9 @@ void LanguageServerClient::stop()
     documentVersions_.clear();
     completionRequests_.clear();
     definitionRequests_.clear();
+    declarationRequests_.clear();
+    implementationRequests_.clear();
+    referencesRequests_.clear();
 }
 
 bool LanguageServerClient::isRunning() const
@@ -600,6 +603,98 @@ int LanguageServerClient::requestDefinition(const QString& filePath, int line,
 }
 
 // ---------------------------------------------------------------------------
+// Declaration / implementation / references
+// ---------------------------------------------------------------------------
+
+int LanguageServerClient::requestDeclaration(const QString& filePath,
+                                             int line, int column)
+{
+    if (process_ == nullptr || !initialized_
+        || !documentVersions_.contains(toFileUri(filePath))) {
+        return 0;
+    }
+    const int id = nextRequestId_++;
+    declarationRequests_.insert(id, filePath);
+
+    QJsonObject position;
+    position.insert("line", line);
+    position.insert("character", column);
+    QJsonObject textDocument;
+    textDocument.insert("uri", toFileUri(filePath));
+    QJsonObject params;
+    params.insert("textDocument", textDocument);
+    params.insert("position", position);
+
+    QJsonObject request;
+    request.insert("jsonrpc", "2.0");
+    request.insert("id", id);
+    request.insert("method", "textDocument/declaration");
+    request.insert("params", params);
+    sendJsonRpc(request);
+    return id;
+}
+
+int LanguageServerClient::requestImplementation(const QString& filePath,
+                                                int line, int column)
+{
+    if (process_ == nullptr || !initialized_
+        || !documentVersions_.contains(toFileUri(filePath))) {
+        return 0;
+    }
+    const int id = nextRequestId_++;
+    implementationRequests_.insert(id, filePath);
+
+    QJsonObject position;
+    position.insert("line", line);
+    position.insert("character", column);
+    QJsonObject textDocument;
+    textDocument.insert("uri", toFileUri(filePath));
+    QJsonObject params;
+    params.insert("textDocument", textDocument);
+    params.insert("position", position);
+
+    QJsonObject request;
+    request.insert("jsonrpc", "2.0");
+    request.insert("id", id);
+    request.insert("method", "textDocument/implementation");
+    request.insert("params", params);
+    sendJsonRpc(request);
+    return id;
+}
+
+int LanguageServerClient::requestReferences(const QString& filePath, int line,
+                                            int column,
+                                            bool includeDeclaration)
+{
+    if (process_ == nullptr || !initialized_
+        || !documentVersions_.contains(toFileUri(filePath))) {
+        return 0;
+    }
+    const int id = nextRequestId_++;
+    referencesRequests_.insert(id, filePath);
+
+    QJsonObject position;
+    position.insert("line", line);
+    position.insert("character", column);
+    QJsonObject textDocument;
+    textDocument.insert("uri", toFileUri(filePath));
+    QJsonObject context;
+    context.insert("includeDeclaration", includeDeclaration);
+    QJsonObject params;
+    params.insert("textDocument", textDocument);
+    params.insert("position", position);
+    params.insert("context", context);
+
+    QJsonObject request;
+    request.insert("jsonrpc", "2.0");
+    request.insert("id", id);
+    request.insert("method", "textDocument/references");
+    request.insert("params", params);
+    sendJsonRpc(request);
+    return id;
+}
+
+// ---------------------------------------------------------------------------
 // URI helpers
 // ---------------------------------------------------------------------------
 
@@ -756,6 +851,41 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
                 }
             }
             emit definitionReady(id, filePath, location);
+            return;
+        }
+        const QString* locationOwner = nullptr;
+        if (declarationRequests_.contains(id)) {
+            locationOwner = &declarationRequests_[id];
+        } else if (implementationRequests_.contains(id)) {
+            locationOwner = &implementationRequests_[id];
+        } else if (referencesRequests_.contains(id)) {
+            locationOwner = &referencesRequests_[id];
+        }
+        if (locationOwner != nullptr) {
+            const QString filePath = *locationOwner;
+            declarationRequests_.remove(id);
+            implementationRequests_.remove(id);
+            referencesRequests_.remove(id);
+            // Declaration/implementation: Location | Location[] | LocationLink[]
+            // | null. References: Location[] | null.
+            QList<LspLocation> locations;
+            const QJsonValue result = message.value("result");
+            if (result.isObject()) {
+                LspLocation location;
+                if (parseLocation(result.toObject(), location)) {
+                    locations.append(location);
+                }
+            } else if (result.isArray()) {
+                const QJsonArray arr = result.toArray();
+                locations.reserve(arr.size());
+                for (const QJsonValue& v : arr) {
+                    LspLocation location;
+                    if (parseLocation(v.toObject(), location)) {
+                        locations.append(location);
+                    }
+                }
+            }
+            emit locationsReady(id, filePath, locations);
             return;
         }
         return;

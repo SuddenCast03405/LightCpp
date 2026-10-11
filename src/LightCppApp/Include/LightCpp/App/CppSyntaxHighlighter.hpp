@@ -35,6 +35,12 @@ private:
     QList<Rule> rules_;
     QList<WordClass> wordClasses_;
 
+    /// TODO / FIXME / XXX / HACK markers, applied AFTER the comment rules
+    /// so they stay visible inside comments (the comments would otherwise
+    /// paint right over them — rules_ runs before the comment passes).
+    QRegularExpression todoRule_;
+    QTextCharFormat todoFormat_;
+
     QTextCharFormat keywordFormat_;
     QTextCharFormat typeFormat_;
     QTextCharFormat stringFormat_;

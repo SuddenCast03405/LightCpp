@@ -15,6 +15,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/GitClient.hpp
     Include/LightCpp/App/LanguageServerClient.hpp
     Include/LightCpp/App/LibClangCompleter.hpp
+    Include/LightCpp/App/LspLocationsDialog.hpp
     Include/LightCpp/App/MsvcToolchain.hpp
     Include/LightCpp/App/OutputPanel.hpp
     Include/LightCpp/App/MainWindow.hpp
@@ -36,6 +37,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/GitClient.cpp
     Source/LanguageServerClient.cpp
     Source/LibClangCompleter.cpp
+    Source/LspLocationsDialog.cpp
     Source/MsvcToolchain.cpp
     Source/OutputPanel.cpp
     Source/MainWindow.cpp

@@ -196,6 +196,13 @@ private slots:
     /// and show the hits in a modeless dialog; activating a hit opens the
     /// file at that line.
     void onSearchInProject();
+    /// Edit > Switch Header/Source: open the header (or source) that pairs
+    /// with the active file — same basename, the matching extension family,
+    /// looked up next to the file first.
+    void onSwitchHeaderSource();
+    /// Shared request builder for the three navigation menu actions:
+    /// 0 = go to declaration, 1 = go to implementation, 2 = find references.
+    void requestNavigation(int kind);
     // --- git ---------------------------------------------------------------
     void onGitRefresh();
     void onGitStageAll();
@@ -619,6 +626,10 @@ private:
     QAction* actCopy_ = nullptr;           // Edit > Copy (Ctrl+C)
     QAction* actPaste_ = nullptr;          // Edit > Paste (Ctrl+V)
     QAction* actSearchInProject_ = nullptr; // Edit > Search in Project (Ctrl+Shift+F)
+    QAction* actSwitchHeaderSource_ = nullptr; // Edit > Switch Header/Source (Alt+O)
+    QAction* actGotoDeclaration_ = nullptr;    // Edit > Go to Declaration (Ctrl+F12)
+    QAction* actGotoImplementation_ = nullptr; // Edit > Go to Implementation (Ctrl+F11)
+    QAction* actFindReferences_ = nullptr;     // Edit > Find References (Shift+F12)
     QAction* actFormat_ = nullptr;         // clang-format the whole file
     QAction* actFormatFolder_ = nullptr;   // clang-format a folder
     QAction* actFormatProject_ = nullptr;  // clang-format the open project
@@ -698,6 +709,12 @@ private:
     /// an earlier Ctrl+Click must not yank the view away from wherever the
     /// user has navigated since.
     int latestDefinitionId_ = 0;
+
+    /// Outstanding declaration/implementation/references requests:
+    /// request id -> kind (0 = declaration, 1 = implementation,
+    /// 2 = references), plus the newest request id for staleness guarding.
+    QMap<int, int> navigationKinds_;
+    int latestLocationRequestId_ = 0;
 
     /// Latest diagnostics per document, keyed by the editor's lint path
     /// (a virtual temp path for unsaved buffers). Feeds the Problems list.

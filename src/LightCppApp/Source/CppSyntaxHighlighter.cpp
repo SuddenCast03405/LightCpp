@@ -149,6 +149,17 @@ CppSyntaxHighlighter::CppSyntaxHighlighter(QTextDocument* parent)
     r.pattern = QRegularExpression(QStringLiteral(R"('(?:[^'\\]|\\.)*')"));
     r.format = stringFormat_;
     rules_.append(r);
+
+    // TODO / FIXME / XXX / HACK markers. Applied separately at the END of
+    // highlightBlock (after the comment passes) so they stay orange inside
+    // comments — rules_ itself runs before the comments would paint over it.
+    // \S boundary on both sides keeps it a marker token, not part of a word.
+    todoRule_ = QRegularExpression(
+        QStringLiteral(R"(\b(TODO|FIXME|XXX|HACK)\b)"));
+    todoFormat_.setForeground(QColor(0xC8, 0x64, 0x00));  // dark orange
+    QFont todoFont;
+    todoFont.setBold(true);
+    todoFormat_.setFont(todoFont);
 }
 
 CppSyntaxHighlighter::~CppSyntaxHighlighter() = default;
@@ -211,5 +222,12 @@ void CppSyntaxHighlighter::highlightBlock(const QString& text)
             setFormat(i, text.length() - i, commentFormat_);
             break;
         }
+    }
+
+    // TODO/FIXME markers last, so they punch through the comment colours.
+    auto todoIt = todoRule_.globalMatch(text);
+    while (todoIt.hasNext()) {
+        const QRegularExpressionMatch m = todoIt.next();
+        setFormat(m.capturedStart(), m.capturedLength(), todoFormat_);
     }
 }
