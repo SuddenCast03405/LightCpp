@@ -6,6 +6,9 @@
 #include <QTextCharFormat>
 #include <QTextCursor>
 
+#include <string>
+#include <vector>
+
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/Core/FoldModel.hpp"
 
@@ -348,6 +351,20 @@ private:
     /// The hidden line numbers currently applied to the document. Compared
     /// against the wanted set so a relayout only happens when it must.
     QSet<int> hiddenLines_;
+
+    /// Cached plain text for the bracket/symbol extra selections, keyed by
+    /// the document revision. Cursor moves used to copy the whole document
+    /// and re-encode it to UTF-8 on EVERY keystroke/arrow press; with the
+    /// cache the copies happen once per edit, and pure cursor movement costs
+    /// nothing. `selectionCharToByte_` maps QString indices to UTF-8 byte
+    /// offsets (size+1 entries), so the byte positions the Core scanners
+    /// return can be turned back into document positions — on non-ASCII
+    /// text the two number spaces are NOT the same, and using bytes as
+    /// positions drew the highlights in the wrong columns.
+    int selectionTextRevision_ = -1;
+    QString selectionText_;
+    std::string selectionTextBytes_;
+    std::vector<int> selectionCharToByte_;
 
     friend class LineNumberArea;
 };

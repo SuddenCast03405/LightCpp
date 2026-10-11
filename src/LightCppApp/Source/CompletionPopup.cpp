@@ -148,7 +148,8 @@ void CompletionPopup::dismiss()
     items_.clear();
     clear();
     hide();
-    emit dismissed();
+    // No explicit `emit dismissed()` here: hide() triggers hideEvent(), which
+    // is the single emitter — otherwise every close fired the signal twice.
 }
 
 void CompletionPopup::filterByPrefix(const QString& prefix)

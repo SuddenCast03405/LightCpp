@@ -407,43 +407,93 @@ void CodeEditor::updateExtraSelections()
 
     // --- bracket match + same-symbol highlight ---------------------------
     // Both only make sense on a bare caret; with an active selection the
-    // user is pointing at something already. The plain text is shared by
-    // the two scans: one toPlainText() per caret move is the price.
+    // user is pointing at something already. The plain text and its UTF-8
+    // byte image are cached per document revision: they used to be rebuilt
+    // (two whole-document copies) on every single cursor move.
     const QTextCursor caret = textCursor();
     if (!caret.hasSelection()) {
-        const QString plain = toPlainText();
-        const std::string text = plain.toStdString();
+        const int revision = document()->revision();
+        if (selectionTextRevision_ != revision) {
+            selectionText_ = toPlainText();
+            const QByteArray utf8 = selectionText_.toUtf8();
+            selectionTextBytes_.assign(utf8.constData(),
+                                       utf8.constData() + utf8.size());
+            // Char index -> UTF-8 byte offset. Surrogate halves each advance
+            // the byte counter by 2 (a non-BMP pair encodes to 4 bytes), so
+            // the map stays monotonic and every char index lands on a
+            // boundary.
+            selectionCharToByte_.clear();
+            selectionCharToByte_.reserve(selectionText_.size() + 1);
+            selectionCharToByte_.push_back(0);
+            int byte = 0;
+            for (const QChar c : selectionText_) {
+                const char16_t u = c.unicode();
+                byte += u < 0x80   ? 1
+                        : u < 0x800 ? 2
+                        : u >= 0xD800 && u <= 0xDFFF
+                            ? 2  // half of a surrogate pair
+                            : 3;
+                selectionCharToByte_.push_back(byte);
+            }
+            selectionTextRevision_ = revision;
+        }
+        const QString& plain = selectionText_;
+        const std::string& text = selectionTextBytes_;
+        // Byte positions from the Core scanners are UTF-8 offsets — they are
+        // only equal to document positions for pure ASCII. Convert via the
+        // map (the scanners return ASCII boundaries, so an exact entry
+        // always exists); -1 means "outside the document", skip that hit.
+        const auto charForByte = [this](int byteOffset) -> int {
+            if (byteOffset < 0
+                || byteOffset > int(selectionTextBytes_.size())) {
+                return -1;
+            }
+            const auto it = std::lower_bound(
+                selectionCharToByte_.begin(), selectionCharToByte_.end(),
+                byteOffset);
+            if (it == selectionCharToByte_.end() || *it != byteOffset) {
+                return -1;
+            }
+            return int(it - selectionCharToByte_.begin());
+        };
 
         // The bracket at the caret, or the one just left of it — either way
         // the match gets an outline box on both ends.
         const int pos = caret.position();
-        std::size_t bracketIndex = std::size_t(qMax(pos, 0));
-        bool atBracket = false;
-        if (bracketIndex < std::size_t(plain.size())
-            && LightCpp::Core::Brackets::isBracket(
-                   plain.at(int(bracketIndex)).toLatin1())) {
-            atBracket = true;
-        } else if (bracketIndex > 0
-                   && LightCpp::Core::Brackets::isBracket(
-                          plain.at(int(bracketIndex) - 1).toLatin1())) {
-            --bracketIndex;
-            atBracket = true;
-        }
-        if (atBracket) {
-            const auto match = LightCpp::Core::Brackets::matchBracket(
-                text, bracketIndex);
-            if (match.has_value()) {
-                QColor edge = palette().color(QPalette::Text);
-                edge.setAlpha(160);
-                for (const std::size_t index : {bracketIndex, *match}) {
-                    QTextCursor one(document());
-                    one.setPosition(int(index));
-                    one.setPosition(int(index) + 1, QTextCursor::KeepAnchor);
-                    QTextEdit::ExtraSelection sel;
-                    sel.format.setProperty(QTextFormat::OutlinePen,
-                                           QPen(edge, 1));
-                    sel.cursor = one;
-                    selections.append(sel);
+        if (pos >= 0 && pos <= plain.size()) {
+            int bracketByte = selectionCharToByte_[pos];
+            bool atBracket = false;
+            if (bracketByte < int(text.size())
+                && LightCpp::Core::Brackets::isBracket(
+                       text[std::size_t(bracketByte)])) {
+                atBracket = true;
+            } else if (bracketByte > 0
+                       && LightCpp::Core::Brackets::isBracket(
+                              text[std::size_t(bracketByte) - 1])) {
+                --bracketByte;
+                atBracket = true;
+            }
+            if (atBracket) {
+                const auto match = LightCpp::Core::Brackets::matchBracket(
+                    text, std::size_t(bracketByte));
+                if (match.has_value()) {
+                    const int openChar = charForByte(bracketByte);
+                    const int closeChar = charForByte(int(*match));
+                    if (openChar >= 0 && closeChar >= 0) {
+                        QColor edge = palette().color(QPalette::Text);
+                        edge.setAlpha(160);
+                        for (const int index : {openChar, closeChar}) {
+                            QTextCursor one(document());
+                            one.setPosition(index);
+                            one.setPosition(index + 1,
+                                            QTextCursor::KeepAnchor);
+                            QTextEdit::ExtraSelection sel;
+                            sel.format.setProperty(QTextFormat::OutlinePen,
+                                                   QPen(edge, 1));
+                            sel.cursor = one;
+                            selections.append(sel);
+                        }
+                    }
                 }
             }
         }
@@ -468,9 +518,14 @@ void CodeEditor::updateExtraSelections()
                 text, word.toStdString(), kWordHighlightMaxHits);
             QColor tint(0xFF, 0xD8, 0x66, 70);  // soft amber, both themes
             for (const auto& [start, end] : hits) {
+                const int startChar = charForByte(int(start));
+                const int endChar = charForByte(int(end));
+                if (startChar < 0 || endChar < 0) {
+                    continue;
+                }
                 QTextCursor hit(document());
-                hit.setPosition(int(start));
-                hit.setPosition(int(end), QTextCursor::KeepAnchor);
+                hit.setPosition(startChar);
+                hit.setPosition(endChar, QTextCursor::KeepAnchor);
                 QTextEdit::ExtraSelection sel;
                 sel.format.setBackground(tint);
                 sel.cursor = hit;

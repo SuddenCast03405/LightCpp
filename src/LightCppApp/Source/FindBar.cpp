@@ -321,6 +321,19 @@ void FindBar::replaceAll()
             entry.text = replaceEdit_->text();
         }
         plan.append(entry);
+        if (entry.length == 0) {
+            // A regex that matches the empty string ("x*", "a|"): the scan
+            // must move forward or this same spot is collected again and
+            // again until the cap — then the apply pass inserts the
+            // replacement there thousands of times and the document blows
+            // up. Replace the empty match once and step over one character.
+            const int next = it.selectionEnd() + 1;
+            if (next > editor_->document()->characterCount() - 1) {
+                break;
+            }
+            it.setPosition(next);
+            continue;
+        }
         it.setPosition(it.selectionEnd());
     }
     if (plan.isEmpty()) {
