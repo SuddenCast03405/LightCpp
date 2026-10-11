@@ -1,8 +1,10 @@
 # LightCppCore: core logic library (Qt-free by design, spec 4.1/4.4).
 
 add_library(LightCppCore STATIC
+    Source/BracketMatch.cpp
     Source/FoldModel.cpp
     Source/Utf8File.cpp
+    Source/WordOccurrences.cpp
 )
 
 add_library(LightCpp::Core ALIAS LightCppCore)
