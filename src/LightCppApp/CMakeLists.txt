@@ -18,6 +18,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/MsvcToolchain.hpp
     Include/LightCpp/App/OutputPanel.hpp
     Include/LightCpp/App/MainWindow.hpp
+    Include/LightCpp/App/ProjectSearchDialog.hpp
     Include/LightCpp/App/SettingsDialog.hpp
     Include/LightCpp/App/StartupPage.hpp
     Include/LightCpp/App/ToolchainHeaders.hpp
@@ -38,6 +39,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/MsvcToolchain.cpp
     Source/OutputPanel.cpp
     Source/MainWindow.cpp
+    Source/ProjectSearchDialog.cpp
     Source/SettingsDialog.cpp
     Source/StartupPage.cpp
 )

@@ -191,6 +191,11 @@ private slots:
     /// Open a folder: show it in the Explorer, and if a project descriptor
     /// sits directly inside it, open that project too.
     void openFolder(const QString& dir);
+    /// Edit > Search in Project: scan the Explorer root (or the active
+    /// file's folder, or a folder the user picks) in a background thread
+    /// and show the hits in a modeless dialog; activating a hit opens the
+    /// file at that line.
+    void onSearchInProject();
     // --- git ---------------------------------------------------------------
     void onGitRefresh();
     void onGitStageAll();
@@ -613,6 +618,7 @@ private:
     QAction* actCut_ = nullptr;            // Edit > Cut (Ctrl+X)
     QAction* actCopy_ = nullptr;           // Edit > Copy (Ctrl+C)
     QAction* actPaste_ = nullptr;          // Edit > Paste (Ctrl+V)
+    QAction* actSearchInProject_ = nullptr; // Edit > Search in Project (Ctrl+Shift+F)
     QAction* actFormat_ = nullptr;         // clang-format the whole file
     QAction* actFormatFolder_ = nullptr;   // clang-format a folder
     QAction* actFormatProject_ = nullptr;  // clang-format the open project

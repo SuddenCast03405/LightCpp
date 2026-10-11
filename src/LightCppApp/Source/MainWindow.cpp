@@ -10,6 +10,7 @@
 #include "LightCpp/App/FindBar.hpp"
 #include "LightCpp/App/GitClient.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
+#include "LightCpp/App/ProjectSearchDialog.hpp"
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/LibClangCompleter.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
@@ -2026,6 +2027,15 @@ void MainWindow::createActions()
         tabWidget_->addAction(clipboardAction);
     }
 
+    // --- search in project ------------------------------------------------
+    actSearchInProject_ = new QAction(tr("Search in &Project..."), this);
+    actSearchInProject_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+F")));
+    actSearchInProject_->setStatusTip(
+        tr("Search every text file under the Explorer root (background "
+           "thread; double-click a hit to open it at that line)"));
+    connect(actSearchInProject_, &QAction::triggered,
+            this, &MainWindow::onSearchInProject);
+
     // Greyed out until an editor tab becomes current; the tab switch below
     // and the clipboard changes re-evaluate it.
     updateEditActions();
@@ -2172,6 +2182,7 @@ void MainWindow::createActions()
         {actCut_, "actionCut"},
         {actCopy_, "actionCopy"},
         {actPaste_, "actionPaste"},
+        {actSearchInProject_, "actionSearchInProject"},
         {actFormat_, "actionFormat"},
         {actFormatFolder_, "actionFormatFolder"},
         {actFormatProject_, "actionFormatProject"},
@@ -2223,6 +2234,8 @@ void MainWindow::createMenuBar()
     editMenu->addAction(actFindNext_);
     editMenu->addAction(actFindPrev_);
     editMenu->addAction(actReplace_);
+    editMenu->addSeparator();
+    editMenu->addAction(actSearchInProject_);
     editMenu->addSeparator();
     editMenu->addAction(actFormat_);
     editMenu->addAction(actFormatFolder_);
@@ -2837,6 +2850,42 @@ void MainWindow::updateEditActions()
     // Paste also needs something on the clipboard.
     actPaste_->setEnabled(hasEditor
                           && !QGuiApplication::clipboard()->text().isEmpty());
+}
+
+void MainWindow::onSearchInProject()
+{
+    // The search scope is the Explorer root when one is open, else the
+    // active file's folder. With neither, ask once — no silent global scan.
+    QString root = fileExplorer_->rootPath();
+    if (root.isEmpty()) {
+        if (CodeEditor* ed = currentEditor();
+            ed != nullptr && !ed->filePath().isEmpty()) {
+            root = QFileInfo(ed->filePath()).absolutePath();
+        }
+    }
+    if (root.isEmpty()) {
+        root = QFileDialog::getExistingDirectory(
+            this, tr("Choose the Folder to Search In"), QString());
+        if (root.isEmpty()) {
+            return;
+        }
+    }
+
+    auto* dialog = new ProjectSearchDialog(root, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &ProjectSearchDialog::resultActivated,
+            this, [this](const QString& path, int line) {
+        CodeEditor* ed = openFileInTab(path);
+        if (ed == nullptr) {
+            return;
+        }
+        // gotoLine() takes a 0-based block number; search hits are 1-based.
+        gotoLine(line - 1);
+        ed->setFocus();
+    });
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
 }
 
 QString MainWindow::tabTitleFor(const CodeEditor* editor) const
