@@ -47,7 +47,9 @@
 #include <QFileDialog>
 #include <QDir>
 #include <QDirIterator>
+#include <QDateTime>
 #include <QFileInfo>
+#include <QFileSystemWatcher>
 #include <QHash>
 #include <QHBoxLayout>
 #include <QMenu>
@@ -247,6 +249,11 @@ MainWindow::MainWindow(QWidget* parent)
     autoSaveTimer_->setInterval(30 * 1000);
     connect(autoSaveTimer_, &QTimer::timeout,
             this, &MainWindow::onAutoSaveTimeout);
+    // External file changes: unmodified buffers reload, modified ones get a
+    // note instead of losing the user's edits.
+    fileWatcher_ = new QFileSystemWatcher(this);
+    connect(fileWatcher_, &QFileSystemWatcher::fileChanged,
+            this, &MainWindow::onWatchedFileChanged);
     // The server's own log (stderr + window/logMessage) goes to its own
     // channel, so it never drowns out compiler output. The channel follows
     // the configured backend: Clangd Output, ccls Output or libclang Output.
@@ -2433,6 +2440,14 @@ bool MainWindow::saveEditorToDisk(CodeEditor* ed)
     if (QFile f(path); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         f.write(*payload);
         f.close();
+        // Our own write will fire fileChanged within milliseconds; the
+        // timestamp marks it as ours so the watcher does not reload.
+        selfWriteMs_.insert(path, QDateTime::currentMSecsSinceEpoch());
+        // QFileSystemWatcher silently drops files that were deleted while
+        // watched, so a save-as-new-file (or a recreate) needs a re-add.
+        if (!fileWatcher_->files().contains(path)) {
+            fileWatcher_->addPath(path);
+        }
         ed->setModified(false);
         const int idx = tabWidget_->indexOf(ed);
         if (idx >= 0) {
@@ -2534,6 +2549,7 @@ void MainWindow::onCloseTab(int index)
         if (diagnosticsByFile_.remove(lintPath) > 0) {
             rebuildProblems();
         }
+        watchEditorFile(ed, false);
     }
     tabWidget_->removeTab(index);
 }
@@ -2758,6 +2774,14 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
     editor->setFilePath(path);
     editor->loadUtf8(content.utf8);
 
+    // A file the user cannot write opens read-only: editing it would only
+    // produce a save error later, so the editor says so up front.
+    const QFileInfo openedInfo(path);
+    if (openedInfo.exists() && !openedInfo.isWritable()) {
+        editor->setReadOnly(true);
+        outputPanel_->appendBuildOutput(tr("Read-only: %1").arg(path));
+    }
+
     setEncodingInfo(editor, toName(content.encoding));
     statusFile_->setText(path);
     statusLanguage_->setText(languageFromSuffix(path));
@@ -2782,6 +2806,8 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
                                QString::fromUtf8(content.utf8));
         }
     }
+
+    watchEditorFile(editor, true);
 
     return editor;
 }
@@ -2817,6 +2843,94 @@ void MainWindow::reloadWithEncoding(LightCpp::Text::TextEncoding encoding)
         tr("Reloaded: %1  [%2]")
             .arg(ed->filePath())
             .arg(toName(encoding)));
+}
+
+void MainWindow::watchEditorFile(CodeEditor* ed, bool watch)
+{
+    if (ed == nullptr || ed->filePath().isEmpty()) {
+        return;
+    }
+    const QString absolute = QFileInfo(ed->filePath()).absoluteFilePath();
+    if (watch) {
+        if (!fileWatcher_->files().contains(absolute)) {
+            fileWatcher_->addPath(absolute);
+        }
+    } else {
+        fileWatcher_->removePath(absolute);
+    }
+}
+
+void MainWindow::reloadEditorFromDisk(CodeEditor* ed)
+{
+    using namespace LightCpp::Text;
+    const TextFileResult result = readDetectedTextFile(ed->filePath());
+    if (!result.hasValue()) {
+        outputPanel_->appendBuildOutput(
+            tr("Reload failed for %1: %2")
+                .arg(ed->filePath(), toString(result.error())));
+        return;
+    }
+    const TextFileContent& content = result.value();
+    // loadUtf8 replaces the text but the fold rebuild re-attaches the
+    // collapsed regions by index + header text, so folds survive a reload.
+    ed->loadUtf8(content.utf8);
+    setEncodingInfo(ed, toName(content.encoding));
+    // The file may have become writable (or read-only) outside the IDE.
+    ed->setReadOnly(!QFileInfo(ed->filePath()).isWritable());
+    if (lsp_->isRunning() && isCppLikeFile(ed->lintPath())
+        && !fileExceeds(ed->filePath(), largeFileParseMB_)) {
+        lsp_->openDocument(ed->lintPath(), languageIdForFile(ed->lintPath()),
+                           QString::fromUtf8(content.utf8));
+    }
+    outputPanel_->appendBuildOutput(
+        tr("Reloaded (changed on disk): %1").arg(ed->filePath()));
+}
+
+void MainWindow::onWatchedFileChanged(const QString& path)
+{
+    CodeEditor* ed = nullptr;
+    for (int i = 0; i < tabWidget_->count(); ++i) {
+        auto* candidate = qobject_cast<CodeEditor*>(tabWidget_->widget(i));
+        if (candidate != nullptr
+            && QFileInfo(candidate->filePath()).absoluteFilePath()
+                   == QFileInfo(path).absoluteFilePath()) {
+            ed = candidate;
+            break;
+        }
+    }
+    if (ed == nullptr) {
+        // Nobody has this file open; stop watching it.
+        fileWatcher_->removePath(path);
+        return;
+    }
+
+    // A write from this process fires the same signal. Within the window it
+    // is ours: skip, and make sure the path is still watched.
+    if (const qint64 writtenAt = selfWriteMs_.value(path, 0);
+        writtenAt != 0
+        && QDateTime::currentMSecsSinceEpoch() - writtenAt < 750) {
+        return;
+    }
+    selfWriteMs_.remove(path);
+
+    if (!QFileInfo::exists(path)) {
+        outputPanel_->appendBuildOutput(
+            tr("File deleted on disk: %1").arg(path));
+        return;
+    }
+
+    if (ed->isModified()) {
+        // Do not touch the buffer — the user has unsaved work. Just say so.
+        outputPanel_->appendBuildOutput(
+            tr("File changed on disk with unsaved changes in the editor: %1")
+                .arg(path));
+    } else {
+        reloadEditorFromDisk(ed);
+    }
+    // A deleted-then-recreated file is dropped from the watch list.
+    if (QFileInfo::exists(path) && !fileWatcher_->files().contains(path)) {
+        fileWatcher_->addPath(path);
+    }
 }
 
 void MainWindow::updateEncodingCombo(CodeEditor* editor)

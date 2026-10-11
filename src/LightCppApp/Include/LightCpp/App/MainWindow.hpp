@@ -32,6 +32,7 @@
 class CodeEditor;
 class FileExplorer;
 class FindBar;
+class QFileSystemWatcher;
 class OutputPanel;
 class QLabel;
 class QListWidget;
@@ -94,6 +95,9 @@ private slots:
     /// Auto-save tick: every modified, already-named buffer goes back to
     /// disk without any prompting.
     void onAutoSaveTimeout();
+    /// A watched file changed (or vanished) on disk. Unmodified buffers
+    /// reload silently; buffers with unsaved changes only get a note.
+    void onWatchedFileChanged(const QString& path);
     void onCloseTab(int index);
     void onFileActivated(const QString& path);
     void onCursorPositionChanged();
@@ -307,6 +311,10 @@ private:
     [[nodiscard]] std::optional<QByteArray> encodedSavePayload(CodeEditor* editor);
     /// Disk-write half of saving, shared by Ctrl+S and the auto-save timer.
     [[nodiscard]] bool saveEditorToDisk(CodeEditor* editor);
+    /// Start/stop watching `ed`'s file for external changes.
+    void watchEditorFile(CodeEditor* ed, bool watch);
+    /// Re-read `ed`'s file from disk (detected encoding), keeping folds.
+    void reloadEditorFromDisk(CodeEditor* ed);
     /// Push the editor's current text to the language server (debounced).
     void scheduleLint(CodeEditor* editor);
     /// Show `filePath` at (line, column): focus the tab that already holds it
@@ -749,6 +757,11 @@ private:
     bool editorsShowIndentGuides_ = false;
     /// general.autoSave — the tick writes every modified named buffer.
     QTimer* autoSaveTimer_ = nullptr;
+    /// Watches every open editor's file for changes made outside the IDE.
+    QFileSystemWatcher* fileWatcher_ = nullptr;
+    /// When our own save fired a fileChanged, the event within this window
+    /// (ms since the write) is ours and must not reload the buffer.
+    QHash<QString, qint64> selfWriteMs_;
     /// files.encoding default for new buffers (canonical encoding name).
     QString defaultEncodingName_ = QStringLiteral("UTF-8");
     /// files.lineEnding resolved for this platform: "LF" or "CRLF".
