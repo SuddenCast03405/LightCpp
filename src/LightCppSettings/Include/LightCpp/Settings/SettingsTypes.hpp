@@ -218,6 +218,13 @@ struct Preferences {
     /// indented line.
     bool showIndentGuides = false;
 
+    /// general.autoSave — periodically write every modified, already-named
+    /// buffer back to disk. Untitled buffers are never auto-saved (there is
+    /// no path to write to and prompting would defeat the purpose).
+    bool autoSave = false;
+    /// general.autoSaveSeconds — the auto-save period in seconds.
+    int autoSaveSeconds = 30;
+
     /// When true (default), the start-up page checks every toolchain and
     /// enabled kit when it opens (compiler files exist, kit toolchain
     /// references resolve) and shows the progress inline.

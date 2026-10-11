@@ -827,6 +827,22 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
            "enabled kit when it opens (compiler files exist, kit "
            "toolchain references resolve) and shows the progress inline."));
     generalForm->addRow(QStringLiteral(), checkToolchainsAtStartup_);
+    autoSave_ =
+        makeCheck(QStringLiteral("prefs.general.autoSave"),
+                  tr("Auto-save modified files"));
+    autoSave_->setToolTip(
+        tr("Periodically write every modified buffer that already has a "
+           "file name back to disk. Untitled buffers are not touched."));
+    generalForm->addRow(QStringLiteral(), autoSave_);
+    autoSaveSeconds_ = new QSpinBox(this);
+    autoSaveSeconds_->setRange(5, 3600);
+    autoSaveSeconds_->setSuffix(QStringLiteral(" s"));
+    autoSaveSeconds_->setValue(30);
+    connect(autoSaveSeconds_, &QSpinBox::valueChanged, this,
+            [this](int) { markDirty(); });
+    autoSave_->setToolTip(autoSave_->toolTip()
+                          + tr("\nThe save period in seconds."));
+    generalForm->addRow(tr("Auto-save period"), autoSaveSeconds_);
     runOutputMode_ = makeCombo(QStringLiteral("prefs.run.output"), false);
     runOutputMode_->addItem(tr("Program Output"), QStringLiteral("program"));
     runOutputMode_->addItem(tr("Console Pauser"), QStringLiteral("consolePauser"));
@@ -2035,6 +2051,8 @@ void SettingsDialog::loadPreferencesPage(const Settings::Preferences& prefs)
     checkCompilersAtStartup_->setChecked(prefs.checkCompilersAtStartup);
     showStartupPage_->setChecked(prefs.showStartupPage);
     checkToolchainsAtStartup_->setChecked(prefs.checkToolchainsAtStartup);
+    autoSave_->setChecked(prefs.autoSave);
+    autoSaveSeconds_->setValue(qBound(5, prefs.autoSaveSeconds, 3600));
     // Fill the editable terminal table from the settings. The guard keeps
     // itemChanged from treating this as a user edit; ids ride in the name
     // item's UserRole so the selection survives a reload.
@@ -2100,6 +2118,8 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->checkCompilersAtStartup = checkCompilersAtStartup_->isChecked();
     prefs->showStartupPage = showStartupPage_->isChecked();
     prefs->checkToolchainsAtStartup = checkToolchainsAtStartup_->isChecked();
+    prefs->autoSave = autoSave_->isChecked();
+    prefs->autoSaveSeconds = autoSaveSeconds_->value();
     // recentFiles is not edited here: it is carried through from the loaded
     // state, so saving the dialog never wipes the list.
     prefs->programOutput = runOutputMode_->currentData().toString();

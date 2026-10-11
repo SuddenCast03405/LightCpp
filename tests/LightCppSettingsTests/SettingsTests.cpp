@@ -305,6 +305,35 @@ TEST(SettingsJson, EditorDisplayFlagsReadAndRoundTrip)
     EXPECT_FALSE(back.showIndentGuides);
 }
 
+TEST(SettingsJson, AutoSaveReadsAndRoundTrips)
+{
+    // Absent -> off with the default period.
+    Preferences prefs;
+    fromJson(examplePreferencesJson(), prefs);
+    EXPECT_FALSE(prefs.autoSave);
+    EXPECT_EQ(prefs.autoSaveSeconds, 30);
+
+    // Present -> parsed, and an insane period is clamped into 5..3600.
+    QJsonObject on = examplePreferencesJson();
+    QJsonObject general = on.value("general").toObject();
+    general.insert("autoSave", true);
+    general.insert("autoSaveSeconds", 99999);
+    on.insert("general", general);
+    Preferences enabled;
+    fromJson(on, enabled);
+    EXPECT_TRUE(enabled.autoSave);
+    EXPECT_EQ(enabled.autoSaveSeconds, 3600);
+
+    // Round trip.
+    Preferences written;
+    written.autoSave = true;
+    written.autoSaveSeconds = 45;
+    Preferences back;
+    fromJson(toJson(written), back);
+    EXPECT_TRUE(back.autoSave);
+    EXPECT_EQ(back.autoSaveSeconds, 45);
+}
+
 TEST(SettingsJson, ExampleToolchainAndDefaultsParse)
 {
     Toolchain toolchain;

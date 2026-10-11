@@ -265,6 +265,8 @@ private:
     QCheckBox* checkCompilersAtStartup_ = nullptr;
     QCheckBox* showStartupPage_ = nullptr;
     QCheckBox* checkToolchainsAtStartup_ = nullptr;
+    QCheckBox* autoSave_ = nullptr;
+    QSpinBox* autoSaveSeconds_ = nullptr;
     /// run.output: Program Output (captured) vs Console Pauser (external).
     QComboBox* runOutputMode_ = nullptr;
     /// Editable terminal list (Name / Command / Embedded); Program Output

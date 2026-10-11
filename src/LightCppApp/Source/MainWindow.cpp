@@ -242,6 +242,11 @@ MainWindow::MainWindow(QWidget* parent)
     lintDebounceTimer_->setInterval(kLintDebounceMs);
     connect(lintDebounceTimer_, &QTimer::timeout,
             this, &MainWindow::onLintTimerTimeout);
+    // Auto-save ticks only when the setting turns it on (applyPreferences).
+    autoSaveTimer_ = new QTimer(this);
+    autoSaveTimer_->setInterval(30 * 1000);
+    connect(autoSaveTimer_, &QTimer::timeout,
+            this, &MainWindow::onAutoSaveTimeout);
     // The server's own log (stderr + window/logMessage) goes to its own
     // channel, so it never drowns out compiler output. The channel follows
     // the configured backend: Clangd Output, ccls Output or libclang Output.
@@ -2407,9 +2412,22 @@ void MainWindow::onSaveFile()
         ed->setFilePath(path);
     }
 
+    if (!saveEditorToDisk(ed)) {
+        QMessageBox::warning(this, tr("Save Error"),
+                             tr("Cannot write to %1").arg(path));
+    }
+}
+
+/// The disk-write half of saving, without any user interaction: encodes the
+/// buffer, writes it, syncs the language server and the problem list. Used
+/// by Ctrl+S and by the auto-save timer alike; returns false when the
+/// payload cannot be produced or the file cannot be written.
+bool MainWindow::saveEditorToDisk(CodeEditor* ed)
+{
+    const QString path = ed->filePath();
     const std::optional<QByteArray> payload = encodedSavePayload(ed);
     if (!payload.has_value()) {
-        return;
+        return false;
     }
 
     if (QFile f(path); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -2451,9 +2469,27 @@ void MainWindow::onSaveFile()
         if (formatOnSave_ && clangFormatEnabled_ && isCppLikeFile(path)) {
             onFormatDocument();
         }
-    } else {
-        QMessageBox::warning(this, tr("Save Error"),
-                             tr("Cannot write to %1").arg(path));
+        return true;
+    }
+    return false;
+}
+
+void MainWindow::onAutoSaveTimeout()
+{
+    // Silent pass over the open buffers: anything modified with a real file
+    // name goes back to disk. Untitled buffers stay untouched (no path, and
+    // prompting for one would defeat the point of auto-save), read-only
+    // editors cannot be written anyway.
+    for (int i = 0; i < tabWidget_->count(); ++i) {
+        auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i));
+        if (ed == nullptr || !ed->isModified() || ed->isReadOnly()
+            || ed->filePath().isEmpty()) {
+            continue;
+        }
+        if (saveEditorToDisk(ed)) {
+            outputPanel_->appendBuildOutput(
+                tr("Auto-saved: %1").arg(ed->filePath()));
+        }
     }
 }
 
@@ -5530,6 +5566,13 @@ void MainWindow::applyPreferences()
     largeFileHighlightMB_ = prefs.largeFile.syntaxHighlightDisabledAboveMB;
     largeFileIndexMB_ = prefs.largeFile.indexDisabledAboveMB;
     largeFileParseMB_ = prefs.largeFile.parseDisabledAboveMB;
+
+    // --- auto save ---------------------------------------------------------
+    if (prefs.autoSave && prefs.autoSaveSeconds > 0) {
+        autoSaveTimer_->start(qBound(5, prefs.autoSaveSeconds, 3600) * 1000);
+    } else {
+        autoSaveTimer_->stop();
+    }
 
     // --- language service: clangd ----------------------------------------
     clangdEnabledByDefault_ = prefs.clangd.enabledByDefault;

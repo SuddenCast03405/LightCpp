@@ -295,6 +295,8 @@ QJsonObject toJson(const Preferences& prefs)
     general.insert(QStringLiteral("showStartupPage"), prefs.showStartupPage);
     general.insert(QStringLiteral("checkToolchainsAtStartup"),
                    prefs.checkToolchainsAtStartup);
+    general.insert(QStringLiteral("autoSave"), prefs.autoSave);
+    general.insert(QStringLiteral("autoSaveSeconds"), prefs.autoSaveSeconds);
     general.insert(QStringLiteral("recentFiles"),
                    fromStringList(prefs.recentFiles));
     object.insert(QStringLiteral("general"), general);
@@ -494,6 +496,13 @@ void fromJson(const QJsonObject& object, Preferences& out)
         readBool(general, "showStartupPage", out.showStartupPage);
         readBool(general, "checkToolchainsAtStartup",
                  out.checkToolchainsAtStartup);
+        readBool(general, "autoSave", out.autoSave);
+        if (const auto seconds = general.value(QLatin1String("autoSaveSeconds"));
+            seconds.isDouble()) {
+            const int v = int(seconds.toDouble());
+            // Clamp instead of trusting: 5 s to 1 h keeps the timer sane.
+            out.autoSaveSeconds = qBound(5, v, 3600);
+        }
         readStringList(general, "recentFiles", out.recentFiles);
     }
 

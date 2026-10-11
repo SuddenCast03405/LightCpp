@@ -91,6 +91,9 @@ private slots:
     void onOpenFile();
     void onSaveFile();
     void onSaveAll();
+    /// Auto-save tick: every modified, already-named buffer goes back to
+    /// disk without any prompting.
+    void onAutoSaveTimeout();
     void onCloseTab(int index);
     void onFileActivated(const QString& path);
     void onCursorPositionChanged();
@@ -302,6 +305,8 @@ private:
     /// message) when the encoding cannot represent the text — the caller
     /// must not write a half-converted file in that case.
     [[nodiscard]] std::optional<QByteArray> encodedSavePayload(CodeEditor* editor);
+    /// Disk-write half of saving, shared by Ctrl+S and the auto-save timer.
+    [[nodiscard]] bool saveEditorToDisk(CodeEditor* editor);
     /// Push the editor's current text to the language server (debounced).
     void scheduleLint(CodeEditor* editor);
     /// Show `filePath` at (line, column): focus the tab that already holds it
@@ -742,6 +747,8 @@ private:
     /// editor created later as well as to the open ones.
     bool editorsShowWhitespaces_ = false;
     bool editorsShowIndentGuides_ = false;
+    /// general.autoSave — the tick writes every modified named buffer.
+    QTimer* autoSaveTimer_ = nullptr;
     /// files.encoding default for new buffers (canonical encoding name).
     QString defaultEncodingName_ = QStringLiteral("UTF-8");
     /// files.lineEnding resolved for this platform: "LF" or "CRLF".
