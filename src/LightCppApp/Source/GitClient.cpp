@@ -201,7 +201,13 @@ void GitClient::startNext()
     process_->setProcessEnvironment(env);
     process_->setWorkingDirectory(workingDirectory_.isEmpty() ? QDir::currentPath()
                                                               : workingDirectory_);
-    process_->start(toolPath(), current_.arguments);
+    // Non-ASCII file names arrive quoted in octal escapes ("\346\265\213…")
+    // unless quotepath is off; the parser and the log pane want the real
+    // names (the output is decoded as UTF-8 further up).
+    process_->start(toolPath(),
+                    QStringList{QStringLiteral("-c"),
+                                QStringLiteral("core.quotepath=false")}
+                        + current_.arguments);
     watchdog_->start();
 }
 
