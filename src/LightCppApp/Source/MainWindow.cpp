@@ -30,6 +30,7 @@
 #include "LightCpp/Project/FolderContents.hpp"
 
 #include <algorithm>
+#include <functional>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -82,6 +83,7 @@
 #include <QTextCursor>
 #include <QTimer>
 #include <QToolBar>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 // Required so QVariant can carry a TextEncoding in QComboBox item data.
@@ -276,6 +278,7 @@ MainWindow::MainWindow(QWidget* parent)
                 }
             }
         }
+        requestOutline();  // the active tab gets its outline right away
     });
     connect(lsp_, &LightCpp::App::LanguageServerClient::diagnosticsReady,
             this, [this](const QString& filePath,
@@ -426,6 +429,15 @@ MainWindow::MainWindow(QWidget* parent)
         }
         showSignatureHelp(help);
     });
+    connect(lsp_,
+            &LightCpp::App::LanguageServerClient::documentSymbolsReady,
+            this, [this](int requestId, const QString& filePath,
+                         const QList<LightCpp::App::LspSymbol>& symbols) {
+        if (requestId != latestOutlineRequestId_) {
+            return;  // a newer request is already in flight
+        }
+        applyOutlineSymbols(filePath, symbols);
+    });
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverFailed,
             this, [this](const QString& message) {
         appendServerProcessLog(tr("language server error: %1").arg(message));
@@ -534,6 +546,7 @@ MainWindow::MainWindow(QWidget* parent)
             updateEncodingCombo(ed);
             updateEolCombo(ed);
             onCursorPositionChanged();
+            requestOutline();  // outline follows the active tab
         } else {
             statusLanguage_->clear();
             statusFile_->clear();
@@ -2124,6 +2137,13 @@ void MainWindow::createActions()
     connect(actFindReferences_, &QAction::triggered, this,
             [this] { requestNavigation(2); });
 
+    actGoToSymbol_ = new QAction(tr("Go to &Symbol in File"), this);
+    actGoToSymbol_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+O")));
+    actGoToSymbol_->setStatusTip(
+        tr("Filter the symbols of the current document (clangd)"));
+    connect(actGoToSymbol_, &QAction::triggered, this,
+            [this] { showSymbolSearch(); });
+
     // --- bookmarks ----------------------------------------------------------
     actToggleBookmark_ = new QAction(tr("&Toggle Bookmark"), this);
     actToggleBookmark_->setShortcut(QKeySequence(QStringLiteral("Ctrl+F2")));
@@ -2305,6 +2325,7 @@ void MainWindow::createActions()
         {actGotoDeclaration_, "actionGotoDeclaration"},
         {actGotoImplementation_, "actionGotoImplementation"},
         {actFindReferences_, "actionFindReferences"},
+        {actGoToSymbol_, "actionGoToSymbol"},
         {actToggleBookmark_, "actionToggleBookmark"},
         {actNextBookmark_, "actionNextBookmark"},
         {actPrevBookmark_, "actionPrevBookmark"},
@@ -2367,6 +2388,7 @@ void MainWindow::createMenuBar()
     editMenu->addAction(actGotoDeclaration_);
     editMenu->addAction(actGotoImplementation_);
     editMenu->addAction(actFindReferences_);
+    editMenu->addAction(actGoToSymbol_);
     editMenu->addSeparator();
     editMenu->addAction(actToggleBookmark_);
     editMenu->addAction(actNextBookmark_);
@@ -3149,6 +3171,199 @@ void MainWindow::showSignatureHelp(
         html = help.label.toHtmlEscaped();
     }
     ed->showSignatureHelp(html);
+}
+
+// ---------------------------------------------------------------------------
+// Outline / document symbols
+// ---------------------------------------------------------------------------
+
+QWidget* MainWindow::createOutlinePanel()
+{
+    outlineTree_ = new QTreeWidget(this);
+    outlineTree_->setObjectName(QStringLiteral("outlineTree"));
+    outlineTree_->setColumnCount(1);
+    outlineTree_->setHeaderHidden(true);
+    outlineTree_->setUniformRowHeights(true);
+    outlineTree_->setMinimumWidth(140);
+    outlineTree_->setContextMenuPolicy(Qt::NoContextMenu);
+    // A palette placeholder while nothing has been parsed yet.
+    outlineTree_->setWordWrap(false);
+
+    // Single click jumps (VSCode jumps on click in its outline).
+    connect(outlineTree_, &QTreeWidget::itemClicked,
+            this, [this](QTreeWidgetItem* item, int) {
+        if (item != nullptr) {
+            jumpToSymbolLine(item->data(0, Qt::UserRole).toInt());
+        }
+    });
+
+    auto* box = new QWidget(this);
+    auto* layout = new QVBoxLayout(box);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(outlineTree_);
+    return box;
+}
+
+void MainWindow::requestOutline()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || !lsp_->isRunning()) {
+        return;
+    }
+    const QString lintPath = ed->lintPath();
+    if (lintPath.isEmpty() || !isCppLikeFile(lintPath)) {
+        return;
+    }
+    // Push the buffer first: the lint didChange is debounced, so a fresh
+    // edit would otherwise produce a stale outline.
+    lsp_->changeDocument(lintPath, ed->toPlainText());
+    const int reqId = lsp_->requestDocumentSymbols(lintPath);
+    if (reqId > 0) {
+        latestOutlineRequestId_ = reqId;
+    }
+}
+
+void MainWindow::applyOutlineSymbols(
+    const QString& filePath,
+    const QList<LightCpp::App::LspSymbol>& symbols)
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || ed->lintPath() != filePath) {
+        return;  // the answer describes a tab that is no longer active
+    }
+
+    outlineTree_->clear();
+    outlineEntries_.clear();
+
+    // Walk the (possibly nested) symbol list, building tree items and the
+    // flattened cache used by the Ctrl+Shift+O dialog in one pass. Top-level
+    // symbols hang off the tree's invisible root item.
+    std::function<void(const LightCpp::App::LspSymbol&, QTreeWidgetItem*, int)>
+        addSymbol = [&](const LightCpp::App::LspSymbol& symbol,
+                        QTreeWidgetItem* parent, int depth) {
+            auto* item = new QTreeWidgetItem(
+                parent != nullptr ? parent
+                                  : outlineTree_->invisibleRootItem());
+            QString label = symbol.name;
+            if (!symbol.detail.isEmpty()) {
+                label += QStringLiteral("  ");
+                label += symbol.detail.left(80);
+            }
+            item->setText(0, label);
+            item->setToolTip(0, symbol.detail.isEmpty() ? symbol.name
+                                                        : symbol.detail);
+            item->setData(0, Qt::UserRole, symbol.line);
+
+            OutlineEntry entry;
+            entry.name = symbol.name;
+            entry.detail = symbol.detail;
+            entry.kind = symbol.kind;
+            entry.line = symbol.line;
+            entry.depth = depth;
+            outlineEntries_.append(entry);
+
+            for (const LightCpp::App::LspSymbol& child : symbol.children) {
+                addSymbol(child, item, depth + 1);
+            }
+        };
+    for (const LightCpp::App::LspSymbol& symbol : symbols) {
+        addSymbol(symbol, nullptr, 0);
+    }
+    outlineTree_->expandToDepth(0);
+}
+
+void MainWindow::jumpToSymbolLine(int line)
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || line < 0) {
+        return;
+    }
+    const QTextBlock block = ed->document()->findBlockByNumber(line);
+    if (!block.isValid()) {
+        return;
+    }
+    QTextCursor cursor(block);
+    ed->setTextCursor(cursor);
+    ed->centerCursor();
+    ed->setFocus();
+}
+
+void MainWindow::showSymbolSearch()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr) {
+        return;
+    }
+    if (outlineEntries_.isEmpty()) {
+        // Nothing cached yet (server down, non-C++ file, or the answer has
+        // not arrived): ask once and let the user retry in a moment.
+        requestOutline();
+    }
+
+    auto* dialog = new QDialog(this);
+    dialog->setWindowTitle(tr("Go to Symbol in File"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    auto* layout = new QVBoxLayout(dialog);
+
+    auto* filterEdit = new QLineEdit(dialog);
+    filterEdit->setPlaceholderText(
+        tr("Filter symbols (Enter jumps, Esc closes)"));
+    layout->addWidget(filterEdit);
+
+    auto* list = new QListWidget(dialog);
+    list->setUniformItemSizes(true);
+    layout->addWidget(list, 1);
+
+    for (const OutlineEntry& entry : outlineEntries_) {
+        QString label = entry.name;
+        if (!entry.detail.isEmpty()) {
+            label += QStringLiteral("  ") + entry.detail.left(80);
+        }
+        auto* item = new QListWidgetItem(label, list);
+        item->setData(Qt::UserRole, entry.line);
+    }
+    if (list->count() > 0) {
+        list->setCurrentRow(0);
+    }
+
+    auto jumpFrom = [this, dialog, list](QListWidgetItem* item) {
+        if (item == nullptr) {
+            return;
+        }
+        jumpToSymbolLine(item->data(Qt::UserRole).toInt());
+        dialog->close();
+    };
+    connect(list, &QListWidget::itemActivated, this,
+            [jumpFrom](QListWidgetItem* item) { jumpFrom(item); });
+    connect(list, &QListWidget::itemClicked, this,
+            [jumpFrom](QListWidgetItem* item) { jumpFrom(item); });
+
+    connect(filterEdit, &QLineEdit::textChanged, this,
+            [list](const QString& text) {
+                const QString needle = text.trimmed();
+                for (int i = 0; i < list->count(); ++i) {
+                    QListWidgetItem* item = list->item(i);
+                    item->setHidden(!needle.isEmpty()
+                                    && !item->text().contains(
+                                        needle, Qt::CaseInsensitive));
+                }
+                // Keep a visible row selected: first unhidden item.
+                for (int i = 0; i < list->count(); ++i) {
+                    if (!list->item(i)->isHidden()) {
+                        list->setCurrentRow(i);
+                        break;
+                    }
+                }
+            });
+    connect(filterEdit, &QLineEdit::returnPressed, this, [list, jumpFrom]() {
+        jumpFrom(list->currentItem());
+    });
+
+    dialog->resize(560, 420);
+    filterEdit->setFocus();
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
 }
 
 QString MainWindow::tabTitleFor(const CodeEditor* editor) const
@@ -4874,6 +5089,9 @@ void MainWindow::onLintTimerTimeout()
         return;
     }
     lsp_->changeDocument(lintPath, ed->toPlainText());
+    // The buffer just changed on the server side — refresh the outline in
+    // the same round trip (cheap; clangd reuses the parsed AST).
+    requestOutline();
 }
 
 void MainWindow::scheduleLint(CodeEditor* editor)

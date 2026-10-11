@@ -71,6 +71,23 @@ struct LspSignatureHelp {
     int paramEnd = -1;
 };
 
+/// One symbol from a textDocument/documentSymbol answer, flattened to what
+/// navigation needs. `line`/`column` (0-based LSP units) point at the
+/// symbol's identifier (selectionRange); `endLine` bounds the whole symbol
+/// (range end) — the outline/breadcrumb logic uses it to decide whether the
+/// caret sits "inside" a symbol. Children are nested as the server sent
+/// them (DocumentSymbol shape); a SymbolInformation answer yields a flat
+/// list with empty children.
+struct LspSymbol {
+    QString name;
+    QString detail;  // e.g. the prototype for functions
+    int kind = 0;    // LSP SymbolKind (1=File..26=...; 12=Function, 6=Method)
+    int line = 0;
+    int column = 0;
+    int endLine = 0;
+    QList<LspSymbol> children;
+};
+
 class LanguageServerClient : public QObject {
     Q_OBJECT
 public:
@@ -176,6 +193,10 @@ public:
     /// requested after `(` or `,`. Answer via signatureHelpReady().
     int requestSignatureHelp(const QString& filePath, int line, int column);
 
+    /// textDocument/documentSymbol — every symbol of the document, as a
+    /// (possibly nested) list. Answer via documentSymbolsReady().
+    int requestDocumentSymbols(const QString& filePath);
+
     // --- URI helpers (LSP uses file:// URIs with percent encoding) ---
 
     [[nodiscard]] static QString toFileUri(const QString& filePath);
@@ -209,6 +230,11 @@ signals:
     /// Signature help response arrived. An empty label means no call
     /// context at that position (hide whatever is showing).
     void signatureHelpReady(int requestId, const LspSignatureHelp& help);
+
+    /// Document symbol response arrived. The list may be empty (no symbols,
+    /// or the file is not a parseable language).
+    void documentSymbolsReady(int requestId, const QString& filePath,
+                              const QList<LspSymbol>& symbols);
 
     /// The initialize handshake completed; documents can now be opened.
     void serverStarted();
@@ -244,6 +270,7 @@ private:
     QMap<int, QString> implementationRequests_;   // requestId -> fileUri
     QMap<int, QString> referencesRequests_;       // requestId -> fileUri
     QMap<int, QString> signatureHelpRequests_;    // requestId -> fileUri
+    QMap<int, QString> documentSymbolRequests_;   // requestId -> fileUri
     bool initialized_ = false;          // handshake done
     bool everInitialized_ = false;      // handshake completed at least once —
                                         // separates "exited during start-up"

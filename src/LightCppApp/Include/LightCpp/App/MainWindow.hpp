@@ -568,6 +568,8 @@ private:
     /// Explorer (the former sidebar), a Git placeholder and the plugin
     /// management panel.
     QTabWidget* sideTabs_ = nullptr;
+    /// Outline page: the active document's symbol tree (documentSymbol).
+    QTreeWidget* outlineTree_ = nullptr;
     QListWidget* pluginList_ = nullptr;
     /// The "this change needs a restart" banner above the plugin list plus
     /// its Restart IDE button. Shown only while a C++ plugin is disabled
@@ -630,6 +632,7 @@ private:
     QAction* actGotoDeclaration_ = nullptr;    // Edit > Go to Declaration (Ctrl+F12)
     QAction* actGotoImplementation_ = nullptr; // Edit > Go to Implementation (Ctrl+F11)
     QAction* actFindReferences_ = nullptr;     // Edit > Find References (Shift+F12)
+    QAction* actGoToSymbol_ = nullptr;         // Edit > Go to Symbol in File (Ctrl+Shift+O)
     QAction* actToggleBookmark_ = nullptr;     // Edit > Toggle Bookmark (Ctrl+F2)
     QAction* actNextBookmark_ = nullptr;       // Edit > Next Bookmark (F2)
     QAction* actPrevBookmark_ = nullptr;       // Edit > Previous Bookmark (Shift+F2)
@@ -721,11 +724,43 @@ private:
     /// The newest in-flight signature-help request id; older answers are
     /// stale and dropped (same guard as latestCompletionId_).
     int latestSignatureHelpId_ = 0;
+    /// The newest in-flight documentSymbol request id (staleness guard).
+    int latestOutlineRequestId_ = 0;
+    /// One flattened outline entry — the tree walked into a list so the
+    /// Ctrl+Shift+O dialog can filter it without touching the tree widget.
+    struct OutlineEntry {
+        QString name;
+        QString detail;
+        int kind = 0;
+        int line = 0;
+        int depth = 0;
+    };
+    /// Flattened symbols of the outline answer currently shown.
+    QList<OutlineEntry> outlineEntries_;
     /// Format one signature-help answer into rich text for the tooltip:
     /// the label HTML-escaped with the active parameter bolded. (A plain
     /// private method, not a slot — MOC would demand a metatype for the
     /// parameter here.)
     void showSignatureHelp(const LightCpp::App::LspSignatureHelp& help);
+
+    // --- outline / document symbols -----------------------------------------
+    /// Build the "Outline" page (a symbol tree for the active editor) and
+    /// add it to the side bar. Called once from the constructor.
+    QWidget* createOutlinePanel();
+    /// Ask clangd for the active editor's symbol tree. No-op for
+    /// non-C/C++-like files, unsaved-less paths or a stopped server.
+    void requestOutline();
+    /// Rebuild the outline tree and the flattened symbol cache from one
+    /// documentSymbol answer — but only if it is the newest request AND
+    /// still describes the active editor's document.
+    void applyOutlineSymbols(const QString& filePath,
+                             const QList<LightCpp::App::LspSymbol>& symbols);
+    /// Move the active editor's cursor to a 0-based symbol line, scroll it
+    /// into view and give it focus.
+    void jumpToSymbolLine(int line);
+    /// Ctrl+Shift+O: a small dialog filtering the flattened symbol list of
+    /// the active document; picking an entry jumps to it.
+    void showSymbolSearch();
 
     /// Latest diagnostics per document, keyed by the editor's lint path
     /// (a virtual temp path for unsaved buffers). Feeds the Problems list.

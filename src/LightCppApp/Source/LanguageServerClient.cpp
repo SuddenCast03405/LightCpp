@@ -78,6 +78,53 @@ bool parseLocation(const QJsonObject& object, LspLocation& out)
     return true;
 }
 
+/// Parse one DocumentSymbol object (hierarchical shape) into an LspSymbol.
+/// selectionRange's start is the jump target; range's end bounds the symbol.
+bool parseDocumentSymbol(const QJsonObject& object, LspSymbol& out)
+{
+    const QString name = object.value("name").toString();
+    if (name.isEmpty()) {
+        return false;
+    }
+    out.name = name;
+    out.detail = object.value("detail").toString();
+    out.kind = object.value("kind").toInt(0);
+    const QJsonObject range = object.value("range").toObject();
+    const QJsonObject selection = object.value("selectionRange").toObject();
+    const QJsonObject selectionStart =
+        (selection.isEmpty() ? range : selection).value("start").toObject();
+    out.line = selectionStart.value("line").toInt();
+    out.column = selectionStart.value("character").toInt();
+    out.endLine = range.value("end").toObject().value("line").toInt();
+    const QJsonArray children = object.value("children").toArray();
+    for (const QJsonValue& v : children) {
+        LspSymbol child;
+        if (parseDocumentSymbol(v.toObject(), child)) {
+            out.children.append(child);
+        }
+    }
+    return true;
+}
+
+/// Parse one SymbolInformation object (flat shape) into an LspSymbol.
+bool parseSymbolInformation(const QJsonObject& object, LspSymbol& out)
+{
+    const QString name = object.value("name").toString();
+    if (name.isEmpty()) {
+        return false;
+    }
+    out.name = name;
+    out.kind = object.value("kind").toInt(0);
+    out.detail = object.value("containerName").toString();
+    const QJsonObject location = object.value("location").toObject();
+    const QJsonObject range = location.value("range").toObject();
+    const QJsonObject start = range.value("start").toObject();
+    out.line = start.value("line").toInt();
+    out.column = start.value("character").toInt();
+    out.endLine = range.value("end").toObject().value("line").toInt();
+    return true;
+}
+
 /// Directory holding the generated clangd flags file. Under the temp
 /// directory on purpose: nothing about this is the user's project, and their
 /// source tree must not be littered with build-system leftovers.
@@ -402,6 +449,7 @@ void LanguageServerClient::stop()
     implementationRequests_.clear();
     referencesRequests_.clear();
     signatureHelpRequests_.clear();
+    documentSymbolRequests_.clear();
 }
 
 bool LanguageServerClient::isRunning() const
@@ -723,6 +771,29 @@ int LanguageServerClient::requestSignatureHelp(const QString& filePath,
     return id;
 }
 
+int LanguageServerClient::requestDocumentSymbols(const QString& filePath)
+{
+    if (process_ == nullptr || !initialized_
+        || !documentVersions_.contains(toFileUri(filePath))) {
+        return 0;
+    }
+    const int id = nextRequestId_++;
+    documentSymbolRequests_.insert(id, filePath);
+
+    QJsonObject textDocument;
+    textDocument.insert("uri", toFileUri(filePath));
+    QJsonObject params;
+    params.insert("textDocument", textDocument);
+
+    QJsonObject request;
+    request.insert("jsonrpc", "2.0");
+    request.insert("id", id);
+    request.insert("method", "textDocument/documentSymbol");
+    request.insert("params", params);
+    sendJsonRpc(request);
+    return id;
+}
+
 // ---------------------------------------------------------------------------
 // URI helpers
 // ---------------------------------------------------------------------------
@@ -960,6 +1031,29 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
                 }
             }
             emit signatureHelpReady(id, help);
+            return;
+        }
+        if (documentSymbolRequests_.contains(id)) {
+            const QString filePath = documentSymbolRequests_.take(id);
+            // result: DocumentSymbol[] (hierarchical) | SymbolInformation[]
+            // (flat) | null — both parsed into LspSymbol trees.
+            QList<LspSymbol> symbols;
+            const QJsonValue result = message.value("result");
+            if (result.isArray()) {
+                const QJsonArray arr = result.toArray();
+                for (const QJsonValue& v : arr) {
+                    LspSymbol symbol;
+                    const QJsonObject obj = v.toObject();
+                    // DocumentSymbol has `range`; SymbolInformation has
+                    // `location`. Probe both, prefer the hierarchical shape.
+                    if (obj.contains("range")
+                        ? parseDocumentSymbol(obj, symbol)
+                        : parseSymbolInformation(obj, symbol)) {
+                        symbols.append(symbol);
+                    }
+                }
+            }
+            emit documentSymbolsReady(id, filePath, symbols);
             return;
         }
         return;
