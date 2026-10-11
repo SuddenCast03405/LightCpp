@@ -310,16 +310,20 @@ private:
     /// `bottom` are the header line's vertical extent in gutter coordinates.
     void paintFoldMarker(QPainter* painter, int top, int bottom, int regionIndex);
 
-    /// A collapsed region, remembered as "the Nth foldable range" rather than
-    /// by line number. An edit above it shifts every line but leaves its
-    /// ordinal untouched, which is what keeps a fold attached to its block
-    /// while the text moves. `headerText` pins it to the actual construct: if
-    /// the Nth range now starts with different text, the fold described
-    /// something that is gone and is dropped instead of jumping to a
-    /// look-alike.
+    /// A collapsed region. `headerCursor` is parked on the header line and
+    /// rides every edit (QTextCursor positions adjust as the document
+    /// changes), so its block number keeps pointing at that same construct
+    /// even when lines are added or removed above — which is what the
+    /// previous "Nth foldable range" ordinal could not do: one insertion
+    /// above shifted every ordinal and silently dropped the fold.
+    /// `regionIndex` is re-derived on each rebuild; `headerText` is the
+    /// safety net: if the line the cursor lands on now opens different
+    /// text, the fold described something that is gone and is dropped
+    /// instead of jumping to a look-alike.
     struct FoldAnchor {
         int regionIndex = 0;
         QString headerText;
+        QTextCursor headerCursor;
     };
 
     LineNumberArea* lineNumberArea_;

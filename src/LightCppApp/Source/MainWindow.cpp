@@ -672,6 +672,7 @@ MainWindow::MainWindow(QWidget* parent)
     // anything consumes it: fonts, gates and the Kit combo below all read
     // the loaded state, and applyPreferences() also points the language
     // server at the configured clangd.
+    defaultAppFont_ = QApplication::font();  // before any preference touches it
     loadSettings();
 
     // Apply the loaded preferences (fonts, gates, paths, shortcuts) and fill
@@ -1329,8 +1330,43 @@ void MainWindow::onPluginUninstall(const QString& relPath)
 void MainWindow::loadPlugins()
 {
     pluginManager_ = new LightCpp::Plugin::PluginManager(this);
-    const QString pluginDir =
+    QString pluginDir =
         QCoreApplication::applicationDirPath() + QStringLiteral("/plugins");
+    if (!QFileInfo::exists(pluginDir)) {
+        // Build-tree layout: the raw exe sits deep inside the build directory
+        // (.../src/LightCppApp), while the plugin dlls land in
+        // <build>/plugins — only the staged dist/ copy gets a plugins/
+        // directory next to the executable. Walking up a bounded number of
+        // levels, and only accepting a directory that actually holds plugin
+        // dlls, keeps a build-tree binary working instead of silently
+        // starting with no plugins. The check also keeps an unrelated
+        // ancestor "plugins" folder (an IDE's, a browser's) from hijacking.
+        QDir probe = QDir(QCoreApplication::applicationDirPath());
+        for (int up = 0; up < 4; ++up) {
+            if (!probe.cdUp()) {
+                break;
+            }
+            const QString candidate = probe.filePath(QStringLiteral("plugins"));
+            const QDir candidateDir(candidate);
+            if (candidateDir.exists()
+                && !candidateDir.entryList(
+                       QStringList{QStringLiteral("*Plugin*.dll")},
+                       QDir::Files).isEmpty()) {
+                pluginDir = candidate;
+                outputPanel_->appendPluginOutput(
+                    tr("No plugins directory next to the executable — using "
+                       "the build tree one: %1")
+                        .arg(QDir::toNativeSeparators(pluginDir)));
+                break;
+            }
+        }
+    }
+    if (!QFileInfo::exists(pluginDir)) {
+        outputPanel_->appendPluginOutput(
+            tr("Plugin directory does not exist: %1 — shared-library and "
+               "Lua plugins are unavailable.")
+                .arg(QDir::toNativeSeparators(pluginDir)));
+    }
     outputPanel_->appendPluginOutput(
         tr("Plugin directory: %1")
             .arg(QDir::toNativeSeparators(pluginDir)));
@@ -6820,6 +6856,11 @@ void MainWindow::applyPreferences()
         QFont font(prefs.toolbarFont.family);
         font.setPointSizeF(prefs.toolbarFont.size);
         QApplication::setFont(font);
+    } else {
+        // "(built-in default)": putting the captured application font back
+        // is the only way a previously chosen toolbar font un-applies —
+        // QApplication keeps the last setFont otherwise.
+        QApplication::setFont(defaultAppFont_);
     }
     if (prefs.editorFont.isValid()) {
         QFont font(prefs.editorFont.family);
@@ -6831,11 +6872,23 @@ void MainWindow::applyPreferences()
                 ed->setEditorFont(font);
             }
         }
+    } else {
+        // An empty QFont has no explicit settings, so setFont() falls back
+        // to the inherited application font — the built-in default. Without
+        // this branch the previously chosen editor font stayed until restart.
+        editorFont_ = QFont();
+        for (int i = 0; i < tabWidget_->count(); ++i) {
+            if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
+                ed->setEditorFont(editorFont_);
+            }
+        }
     }
     if (prefs.outputFont.isValid()) {
         QFont font(prefs.outputFont.family);
         font.setPointSizeF(prefs.outputFont.size);
         outputPanel_->setOutputFont(font);
+    } else {
+        outputPanel_->setOutputFont(QFont());
     }
 
     // --- files ----------------------------------------------------------

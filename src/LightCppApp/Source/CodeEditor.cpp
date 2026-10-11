@@ -328,7 +328,10 @@ void CodeEditor::updateLineNumberAreaWidth(int)
 
 void CodeEditor::updateLineNumberArea(const QRect& rect, int dy)
 {
-    if (dy > 0) {
+    // Both scroll directions: deleting lines above the viewport produces a
+    // negative dy, and repainting just the changed band then leaves stale
+    // line numbers below it — the gutter briefly shows pre-delete numbering.
+    if (dy != 0) {
         lineNumberArea_->scroll(0, dy);
     } else {
         lineNumberArea_->update(0, rect.y(), lineNumberArea_->width(), rect.height());
@@ -1742,21 +1745,35 @@ void CodeEditor::rebuildFoldRegions()
         next.append(region);
     }
 
-    // Re-attach the folds that are currently collapsed. A fold is remembered
-    // as an ordinal position, so an edit above it moves every line without
-    // disturbing the fold. The header text is the safety net: if that slot now
-    // opens something else, the fold it described is gone and is dropped
-    // rather than snapping onto an unrelated block.
+    // Re-attach the folds that are currently collapsed. The primary key is
+    // the anchor's header cursor, whose position adjusts through every edit
+    // — its current block number is the header line wherever the text has
+    // moved to. The header text is the safety net: if that line now opens
+    // something else, the fold it described is gone and is dropped rather
+    // than snapping onto an unrelated block.
     QList<FoldAnchor> kept;
-    for (const FoldAnchor& anchor : std::as_const(folded_)) {
-        if (anchor.regionIndex < 0 || anchor.regionIndex >= next.size()) {
+    for (FoldAnchor& anchor : folded_) {
+        int matched = -1;
+        if (anchor.headerCursor.isNull()
+            || !anchor.headerCursor.block().isValid()) {
             continue;
         }
-        const QTextBlock block = document()->findBlockByNumber(
-            int(next.at(anchor.regionIndex).startLine));
-        if (!block.isValid() || block.text() != anchor.headerText) {
+        const int headerLine = anchor.headerCursor.blockNumber();
+        const QTextBlock headerBlock =
+            document()->findBlockByNumber(headerLine);
+        if (!headerBlock.isValid() || headerBlock.text() != anchor.headerText) {
             continue;
         }
+        for (qsizetype i = 0; i < next.size(); ++i) {
+            if (int(next.at(i).startLine) == headerLine) {
+                matched = int(i);
+                break;
+            }
+        }
+        if (matched < 0) {
+            continue;
+        }
+        anchor.regionIndex = matched;
         kept.append(anchor);
     }
 
@@ -1833,6 +1850,7 @@ void CodeEditor::setFolded(int regionIndex, bool folded)
         FoldAnchor anchor;
         anchor.regionIndex = regionIndex;
         anchor.headerText = header.isValid() ? header.text() : QString();
+        anchor.headerCursor = QTextCursor(header);
         folded_.append(anchor);
     } else {
         for (qsizetype i = 0; i < folded_.size(); ++i) {
@@ -1926,6 +1944,7 @@ void CodeEditor::foldAll()
         FoldAnchor anchor;
         anchor.regionIndex = int(i);
         anchor.headerText = header.isValid() ? header.text() : QString();
+        anchor.headerCursor = QTextCursor(header);
         anchors.append(anchor);
         for (std::size_t line = region.startLine + 1; line <= region.endLine; ++line) {
             hidden.insert(int(line));

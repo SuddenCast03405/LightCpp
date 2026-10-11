@@ -342,10 +342,10 @@ void OutputPanel::showChannel(Channel channel)
 void OutputPanel::setOutputFont(const QFont& font)
 {
     // The four log channels plus the Problems tree — everything the output
-    // area renders. An empty family would reset the widgets to the
-    // application font, which is why invalid fonts are rejected by the
-    // caller (and defensively here).
-    if (font.family().isEmpty() || font.pointSizeF() <= 0) {
+    // area renders. An empty family means "reset to the application font"
+    // (the built-in default), which is what the caller sends when the user
+    // un-picks a custom output font; a named font must carry a size.
+    if (!font.family().isEmpty() && font.pointSizeF() <= 0) {
         return;
     }
     serverLog_->setFont(font);

@@ -903,6 +903,10 @@ private:
     QString lineEndingForSaving_ = QStringLiteral("CRLF");
     /// fonts.editor, when the settings name one; applied to new tabs too.
     QFont editorFont_;
+    /// The application font as it was before any preference touched it —
+    /// what "(built-in default)" restores when the user un-picks a custom
+    /// toolbar font. Captured before the first applyPreferences() runs.
+    QFont defaultAppFont_;
     /// One log line per oversized file+feature, not one per keystroke.
     QSet<QString> largeFileNoted_;
 
