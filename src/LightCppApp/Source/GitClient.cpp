@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
+#include <QTimer>
 
 namespace LightCpp::App {
 
@@ -33,10 +34,33 @@ bool GitClient::isAvailable()
 GitClient::GitClient(QObject* parent)
     : QObject(parent)
 {
+    // One watchdog for the whole queue, restarted per command: a git that
+    // never exits (stale index.lock held by a crashed process, a credential
+    // prompt that escaped GIT_TERMINAL_PROMPT=0) would otherwise wedge the
+    // queue — and every future status refresh — until the IDE restarts.
+    watchdog_ = new QTimer(this);
+    watchdog_->setSingleShot(true);
+    watchdog_->setInterval(60 * 1000);
+    connect(watchdog_, &QTimer::timeout, this, [this] {
+        if (process_ == nullptr || process_->state() == QProcess::NotRunning) {
+            return;
+        }
+        const QString title = current_.title;
+        current_ = Job{};
+        process_->kill();
+        emit commandFinished(
+            title,
+            QStringLiteral("git did not exit within 60 s and was killed"),
+            -1);
+        startNext();
+    });
 }
 
 GitClient::~GitClient()
 {
+    if (watchdog_ != nullptr) {
+        watchdog_->stop();
+    }
     if (process_ == nullptr) {
         return;
     }
@@ -113,9 +137,16 @@ void GitClient::startNext()
                 QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                 this, [this](int code, QProcess::ExitStatus status) {
             if (process_ == nullptr) return;
+            watchdog_->stop();
             const QString title = current_.title;
             const bool feedsStatus = current_.feedsStatus;
             current_ = Job{};
+            if (title.isEmpty()) {
+                // The watchdog already reported this job as timed out; the
+                // kill's own finished signal has nothing left to report.
+                startNext();
+                return;
+            }
 
             const QString stdoutText = QString::fromUtf8(process_->readAllStandardOutput());
             const QString stderrText = QString::fromUtf8(process_->readAllStandardError());
@@ -145,6 +176,7 @@ void GitClient::startNext()
             if (process_->error() != QProcess::FailedToStart) {
                 return;
             }
+            watchdog_->stop();
             const QString title = current_.title;
             current_ = Job{};
             emit commandFinished(title, process_->errorString(), -1);
@@ -170,6 +202,7 @@ void GitClient::startNext()
     process_->setWorkingDirectory(workingDirectory_.isEmpty() ? QDir::currentPath()
                                                               : workingDirectory_);
     process_->start(toolPath(), current_.arguments);
+    watchdog_->start();
 }
 
 }  // namespace LightCpp::App

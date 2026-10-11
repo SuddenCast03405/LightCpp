@@ -5,6 +5,7 @@
 #include <QProcess>
 #include <QString>
 #include <QStringList>
+#include <QTimer>
 
 #include "LightCpp/Project/GitStatus.hpp"
 
@@ -80,6 +81,10 @@ private:
     QString workingDirectory_;
     /// The git executable to use; empty = the compiled-in default.
     QString toolPathOverride_;
+    /// Kills a command that produces no exit for a long time (a stale index
+    /// lock, a hung network fetch): without it one wedged git stalls the
+    /// queue — and every later status refresh — forever.
+    QTimer* watchdog_ = nullptr;
 };
 
 }  // namespace LightCpp::App
