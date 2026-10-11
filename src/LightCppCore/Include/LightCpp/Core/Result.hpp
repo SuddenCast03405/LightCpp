@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cassert>
 #include <optional>
 #include <utility>
 
@@ -22,9 +23,23 @@ public:
     [[nodiscard]] bool hasValue() const noexcept { return value_.has_value(); }
     [[nodiscard]] explicit operator bool() const noexcept { return hasValue(); }
 
-    [[nodiscard]] const T& value() const& noexcept { return *value_; }
-    [[nodiscard]] T& value() & noexcept { return *value_; }
-    [[nodiscard]] T takeValue() noexcept { return std::move(*value_); }
+    // Reading the value of a failure is a caller bug: an assert now, instead
+    // of silently dereferencing an empty optional (UB) in release builds.
+    [[nodiscard]] const T& value() const& noexcept
+    {
+        assert(hasValue());
+        return *value_;
+    }
+    [[nodiscard]] T& value() & noexcept
+    {
+        assert(hasValue());
+        return *value_;
+    }
+    [[nodiscard]] T takeValue() noexcept
+    {
+        assert(hasValue());
+        return std::move(*value_);
+    }
 
     [[nodiscard]] E error() const noexcept { return error_; }
 

@@ -50,15 +50,17 @@ TEST(BuildConfiguration, GnuReleaseOptimisesAndDefinesNdebug)
               QStringList({QStringLiteral("-O2"), QStringLiteral("-DNDEBUG")}));
 }
 
-TEST(BuildConfiguration, MsvcDebugTurnsOptimisationOffWithoutADebugDatabase)
+TEST(BuildConfiguration, MsvcDebugTurnsOptimisationOffAndEmitsPdb)
 {
     const QStringList flags = flagsFor(BuildConfiguration::Debug, CompilerFamily::Msvc);
-    EXPECT_EQ(flags, QStringList({QStringLiteral("/Od")}));
+    EXPECT_EQ(flags, QStringList({QStringLiteral("/Od"), QStringLiteral("/Zi")}));
 
-    // Deliberate: /Zi would drop a multi-megabyte .pdb next to the user's
-    // source, and this build path is "compile it and run it", not "attach a
-    // debugger". Pinned here so nobody "fixes" it back.
-    EXPECT_FALSE(flags.join(QLatin1Char(' ')).contains(QStringLiteral("/Zi")));
+    // Deliberate: the IDE offers cdb debugging on MSVC kits, and cdb can
+    // only hit breakpoints with a PDB — a Debug build without /Zi starts a
+    // debugger that shows nothing. (Historically /Zi was pinned OFF here;
+    // the audit flipped the contract, and /Z7 alone does not help because
+    // the linker still writes the .pdb.)
+    EXPECT_TRUE(flags.join(QLatin1Char(' ')).contains(QStringLiteral("/Zi")));
     EXPECT_FALSE(flags.join(QLatin1Char(' ')).contains(QStringLiteral("/Z7")));
 }
 

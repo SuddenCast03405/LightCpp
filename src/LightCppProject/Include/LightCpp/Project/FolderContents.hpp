@@ -38,8 +38,10 @@ struct ProjectFile {
 /// *folder* has named the root they want, and quietly climbing out of it would
 /// open something they did not ask for.
 ///
-/// A CMakeLists.txt wins over a `.dev` when both are present, matching
-/// openProjectFile()'s own precedence.
+/// A CMakeLists.txt wins over any other descriptor when both are present;
+/// among the remaining formats (vcxproj > vcproj > dsw > dsp > dev) the
+/// format decides first and the file name only breaks ties within one
+/// format — matching openProjectFile()'s own precedence.
 [[nodiscard]] std::optional<ProjectFile> projectFileIn(const QString& dir);
 
 }  // namespace LightCpp::Project

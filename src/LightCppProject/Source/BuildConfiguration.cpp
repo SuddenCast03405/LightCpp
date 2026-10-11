@@ -4,9 +4,11 @@ namespace LightCpp::Project {
 
 QString toString(BuildConfiguration config)
 {
-    return config == BuildConfiguration::Release
-               ? QStringLiteral("Release")
-               : QStringLiteral("Debug");
+    switch (config) {
+    case BuildConfiguration::Debug: return QStringLiteral("Debug");
+    case BuildConfiguration::Release: return QStringLiteral("Release");
+    }
+    return QStringLiteral("Debug");
 }
 
 std::optional<BuildConfiguration> buildConfigurationFromName(QStringView name)
@@ -26,9 +28,11 @@ QStringList flagsFor(BuildConfiguration config, CompilerFamily family)
     if (family == CompilerFamily::Msvc) {
         // /Od is cl's default anyway, but saying it keeps the two
         // configurations visibly symmetric — and makes the debug build
-        // immune to a user-supplied optimisation flag.
+        // immune to a user-supplied optimisation flag. /Zi produces the
+        // PDB cdb needs: without it "debug" on an MSVC kit starts a
+        // debugger that can hit no breakpoints and show no source.
         return release ? QStringList{QStringLiteral("/O2"), QStringLiteral("/DNDEBUG")}
-                       : QStringList{QStringLiteral("/Od")};
+                       : QStringList{QStringLiteral("/Od"), QStringLiteral("/Zi")};
     }
     return release ? QStringList{QStringLiteral("-O2"), QStringLiteral("-DNDEBUG")}
                    : QStringList{QStringLiteral("-g")};

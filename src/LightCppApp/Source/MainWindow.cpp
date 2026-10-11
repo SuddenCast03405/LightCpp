@@ -2319,7 +2319,10 @@ void MainWindow::createActions()
 
     // --- project actions -------------------------------------------------
     actOpenProject_ = new QAction(tr("Open Pro&ject..."), this);
-    actOpenProject_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+O")));
+    // Ctrl+Alt+O, not Ctrl+Shift+O: that one belongs to Go to Symbol in File
+    // (the VSCode convention), and two actions sharing a shortcut is an
+    // ambiguous-trigger lottery.
+    actOpenProject_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Alt+O")));
     actOpenProject_->setStatusTip(
         tr("Open a CMakeLists.txt or a Dev-C++ .dev project"));
     connect(actOpenProject_, &QAction::triggered, this, &MainWindow::onOpenProject);
@@ -5641,8 +5644,9 @@ void MainWindow::onCompileCurrentFile()
             args << QStringLiteral("/TP");
         }
         // The kit's own Debug/Release definitions when it has any, else the
-        // built-in table: Debug is /Od alone (no /Zi — this path compiles and
-        // runs, it does not debug), Release adds /O2 /DNDEBUG.
+        // built-in table: Debug is /Od /Zi (/Zi gives cdb its PDB — without
+        // it MSVC debugging starts but hits nothing), Release adds /O2
+        // /DNDEBUG.
         bool kitDefinesConfig = false;
         for (const LightCpp::Settings::KitBuildConfiguration& config :
              kit->buildConfigurations) {

@@ -9,11 +9,12 @@ namespace {
 
 const QString kCmakeLists = QStringLiteral("CMakeLists.txt");
 
-/// The `.dev` file to prefer when a directory holds several.
+/// The `.dev`-family file to prefer when a directory holds several.
 ///
-/// A directory with more than one project descriptor is rare, and picking by
-/// name is at least predictable — a directory listing order would make which
-/// project opens depend on the filesystem.
+/// Format priority first (the suffixes list is ordered), alphabetical second
+/// within one format: `a.dev` + `b.vcxproj` must open the VS project — which
+/// format wins must not depend on the file the alphabet happens to rank
+/// first.
 std::optional<ProjectFile> firstDescriptorFile(const QDir& dir)
 {
     // Every non-CMake format the project plugins currently claim. CMake is
@@ -25,9 +26,12 @@ std::optional<ProjectFile> firstDescriptorFile(const QDir& dir)
     };
     const QStringList names =
         dir.entryList(QDir::Files | QDir::Readable, QDir::Name | QDir::IgnoreCase);
-    for (const QString& name : names) {
-        if (suffixes.contains(QFileInfo(name).suffix().toLower())) {
-            return ProjectFile{dir.absoluteFilePath(name), false};
+    for (const QString& suffix : suffixes) {
+        for (const QString& name : names) {
+            if (QFileInfo(name).suffix().compare(suffix, Qt::CaseInsensitive)
+                == 0) {
+                return ProjectFile{dir.absoluteFilePath(name), false};
+            }
         }
     }
     return std::nullopt;

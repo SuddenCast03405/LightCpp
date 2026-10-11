@@ -132,6 +132,33 @@ TEST(FolderContents, SeveralDevFilesAreChosenPredictably)
     EXPECT_EQ(QFileInfo(found->filePath).fileName(), QStringLiteral("alpha.dev"));
 }
 
+TEST(FolderContents, FormatPriorityBeatsFileNameOrder)
+{
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    // Alphabetically "a.dev" wins, but the vcxproj format outranks .dev —
+    // which project opens must not depend on the file name's first letter.
+    writeFile(temp.path(), QStringLiteral("a.dev"), devContent());
+    writeFile(temp.path(), QStringLiteral("b.vcxproj"));
+
+    const auto found = projectFileIn(temp.path());
+    ASSERT_TRUE(found.has_value());
+    EXPECT_FALSE(found->isCMake);
+    EXPECT_EQ(QFileInfo(found->filePath).fileName(), QStringLiteral("b.vcxproj"));
+}
+
+TEST(FolderContents, FileNameBreaksTiesWithinOneFormat)
+{
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    writeFile(temp.path(), QStringLiteral("zulu.vcxproj"));
+    writeFile(temp.path(), QStringLiteral("alpha.vcxproj"));
+
+    const auto found = projectFileIn(temp.path());
+    ASSERT_TRUE(found.has_value());
+    EXPECT_EQ(QFileInfo(found->filePath).fileName(), QStringLiteral("alpha.vcxproj"));
+}
+
 TEST(FolderContents, AnOrdinaryDirectoryHasNoProject)
 {
     QTemporaryDir temp;
