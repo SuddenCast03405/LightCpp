@@ -200,6 +200,83 @@ void CodeEditor::setLongLinesWrap(bool wrap)
     applyFoldState();
 }
 
+void CodeEditor::setShowWhitespaces(bool show)
+{
+    if (showWhitespaces_ == show) {
+        return;
+    }
+    showWhitespaces_ = show;
+    QTextOption option = document()->defaultTextOption();
+    if (show) {
+        option.setFlags(option.flags() | QTextOption::ShowTabsAndSpaces);
+    } else {
+        option.setFlags(option.flags() & ~QTextOption::ShowTabsAndSpaces);
+    }
+    document()->setDefaultTextOption(option);
+}
+
+void CodeEditor::setShowIndentGuides(bool show)
+{
+    if (showIndentGuides_ == show) {
+        return;
+    }
+    showIndentGuides_ = show;
+    viewport()->update();
+}
+
+void CodeEditor::paintEvent(QPaintEvent* event)
+{
+    QPlainTextEdit::paintEvent(event);
+    if (!showIndentGuides_) {
+        return;
+    }
+
+    // A muted vertical line at every indent stop a line's leading whitespace
+    // passes: spaces advance by their own width, tabs snap to the next tab
+    // stop, and tabStopDistance() is the guide spacing. The content-start
+    // position always gets a guide too, so a 2-space indent is not invisible
+    // just because it never reaches a tab stop.
+    QPainter painter(viewport());
+    QColor color = palette().color(QPalette::Text);
+    color.setAlpha(40);
+    painter.setPen(QPen(color, 1));
+
+    const qreal spaceWidth
+        = qreal(fontMetrics().horizontalAdvance(QLatin1Char(' ')));
+    const qreal tabStop = qreal(tabStopDistance());
+    if (spaceWidth <= 0 || tabStop <= 0) {
+        return;
+    }
+
+    QTextBlock block = firstVisibleBlock();
+    int top = qRound(blockBoundingGeometry(block).translated(contentOffset()).top());
+    int bottom = top + qRound(blockBoundingRect(block).height());
+    const int viewBottom = viewport()->rect().bottom();
+    while (block.isValid() && top <= viewBottom) {
+        if (block.isVisible() && bottom >= viewport()->rect().top()) {
+            const QString text = block.text();
+            qreal x = 0;
+            int i = 0;
+            while (i < text.size()
+                   && (text.at(i) == u' ' || text.at(i) == u'\t')) {
+                x += text.at(i) == u' ' ? spaceWidth
+                                        : tabStop - std::fmod(x, tabStop);
+                ++i;
+            }
+            if (x > 0) {
+                // tab stops passed on the way in, then the content start
+                for (qreal g = tabStop; g < x; g += tabStop) {
+                    painter.drawLine(qRound(g) - 1, top, qRound(g) - 1, bottom);
+                }
+                painter.drawLine(qRound(x) - 1, top, qRound(x) - 1, bottom);
+            }
+        }
+        block = block.next();
+        top = bottom;
+        bottom = top + qRound(blockBoundingRect(block).height());
+    }
+}
+
 void CodeEditor::loadUtf8(const QByteArray& utf8)
 {
     setPlainText(QString::fromUtf8(utf8));

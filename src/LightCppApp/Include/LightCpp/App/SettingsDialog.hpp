@@ -260,6 +260,8 @@ private:
     QComboBox* lineEndingDefault_ = nullptr;
     /// "scroll" | "wrap" — what a line too long for the editor does.
     QComboBox* longLineMode_ = nullptr;
+    QCheckBox* showWhitespaces_ = nullptr;
+    QCheckBox* showIndentGuides_ = nullptr;
     QCheckBox* checkCompilersAtStartup_ = nullptr;
     QCheckBox* showStartupPage_ = nullptr;
     QCheckBox* checkToolchainsAtStartup_ = nullptr;

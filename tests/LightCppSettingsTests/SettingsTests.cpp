@@ -277,6 +277,34 @@ TEST(SettingsJson, LongLineModeReadsAndRoundTrips)
               "scroll");
 }
 
+TEST(SettingsJson, EditorDisplayFlagsReadAndRoundTrip)
+{
+    // Absent -> both display flags default to off.
+    Preferences prefs;
+    fromJson(examplePreferencesJson(), prefs);
+    EXPECT_FALSE(prefs.showWhitespaces);
+    EXPECT_FALSE(prefs.showIndentGuides);
+
+    // Present -> parsed.
+    QJsonObject on = examplePreferencesJson();
+    QJsonObject files = on.value("files").toObject();
+    files.insert("showWhitespaces", true);
+    files.insert("showIndentGuides", true);
+    on.insert("files", files);
+    Preferences shown;
+    fromJson(on, shown);
+    EXPECT_TRUE(shown.showWhitespaces);
+    EXPECT_TRUE(shown.showIndentGuides);
+
+    // Round trip: true survives toJson -> fromJson.
+    Preferences written;
+    written.showWhitespaces = true;
+    Preferences back;
+    fromJson(toJson(written), back);
+    EXPECT_TRUE(back.showWhitespaces);
+    EXPECT_FALSE(back.showIndentGuides);
+}
+
 TEST(SettingsJson, ExampleToolchainAndDefaultsParse)
 {
     Toolchain toolchain;

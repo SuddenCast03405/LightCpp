@@ -212,6 +212,12 @@ struct Preferences {
     /// "scroll".
     QString longLineMode = QStringLiteral("scroll");
 
+    /// files.showWhitespaces — draw spaces and tabs as visible glyphs.
+    bool showWhitespaces = false;
+    /// files.showIndentGuides — vertical lines at the indent stops of every
+    /// indented line.
+    bool showIndentGuides = false;
+
     /// When true (default), the start-up page checks every toolchain and
     /// enabled kit when it opens (compiler files exist, kit toolchain
     /// references resolve) and shows the progress inline.

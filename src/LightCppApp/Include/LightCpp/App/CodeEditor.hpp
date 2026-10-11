@@ -59,6 +59,16 @@ public:
         return longLinesWrap_;
     }
 
+    /// files.showWhitespaces: render spaces as middle dots and tabs as
+    /// arrows. Applied to the document's default text option, so it costs
+    /// nothing while off.
+    void setShowWhitespaces(bool show);
+    /// files.showIndentGuides: a muted vertical line at each indent stop of
+    /// every line that starts with whitespace.
+    void setShowIndentGuides(bool show);
+
+    void paintEvent(QPaintEvent* event) override;
+
     void setFilePath(const QString& path) { filePath_ = path; }
     [[nodiscard]] const QString& filePath() const noexcept { return filePath_; }
 
@@ -285,6 +295,8 @@ private:
     CppSyntaxHighlighter* highlighter_;
     bool syntaxHighlightEnabled_ = true;
     bool longLinesWrap_ = false;
+    bool showWhitespaces_ = false;
+    bool showIndentGuides_ = false;
     LightCpp::App::CompletionPopup* popup_;
     /// The top-level window currently watched for Move/Resize events that
     /// require repositioning the popup (installed by presentPopup()).

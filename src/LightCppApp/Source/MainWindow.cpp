@@ -2583,6 +2583,8 @@ CodeEditor* MainWindow::createEditorTab(const QString& title)
         editor->setEditorFont(editorFont_);
     }
     editor->setLongLinesWrap(longLinesWrap_);
+    editor->setShowWhitespaces(editorsShowWhitespaces_);
+    editor->setShowIndentGuides(editorsShowIndentGuides_);
     connect(editor, &QPlainTextEdit::cursorPositionChanged,
             this, &MainWindow::onCursorPositionChanged);
     // The tab's modification dot follows the document's modified flag, not
@@ -5514,9 +5516,13 @@ void MainWindow::applyPreferences()
     // just new ones, so the setting takes effect without a restart.
     const bool wrapLongLines = prefs.longLineMode == QLatin1String("wrap");
     longLinesWrap_ = wrapLongLines;
+    editorsShowWhitespaces_ = prefs.showWhitespaces;
+    editorsShowIndentGuides_ = prefs.showIndentGuides;
     for (int i = 0; i < tabWidget_->count(); ++i) {
         if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
             ed->setLongLinesWrap(wrapLongLines);
+            ed->setShowWhitespaces(prefs.showWhitespaces);
+            ed->setShowIndentGuides(prefs.showIndentGuides);
         }
     }
 

@@ -285,6 +285,8 @@ QJsonObject toJson(const Preferences& prefs)
     files.insert(QStringLiteral("longLineMode"),
                  prefs.longLineMode.isEmpty() ? QStringLiteral("scroll")
                                               : prefs.longLineMode);
+    files.insert(QStringLiteral("showWhitespaces"), prefs.showWhitespaces);
+    files.insert(QStringLiteral("showIndentGuides"), prefs.showIndentGuides);
     object.insert(QStringLiteral("files"), files);
 
     QJsonObject general;
@@ -480,6 +482,8 @@ void fromJson(const QJsonObject& object, Preferences& out)
             && out.longLineMode != QLatin1String("wrap")) {
             out.longLineMode = QStringLiteral("scroll");
         }
+        readBool(files, "showWhitespaces", out.showWhitespaces);
+        readBool(files, "showIndentGuides", out.showIndentGuides);
         // Legacy "platformOverrides" objects are deliberately not read: the
         // per-platform line-ending overrides were removed from the model.
     }

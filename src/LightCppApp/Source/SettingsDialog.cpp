@@ -786,6 +786,19 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
            "scroll — keep one line per row and scroll it sideways\n"
            "wrap   — break it at the edge of the editing area"));
     filesForm->addRow(tr("Line longer than the editor"), longLineMode_);
+    showWhitespaces_ =
+        makeCheck(QStringLiteral("prefs.files.showWhitespaces"),
+                  tr("Show whitespace characters"));
+    showWhitespaces_->setToolTip(
+        tr("Draw spaces as middle dots and tabs as arrows in the editor."));
+    filesForm->addRow(QStringLiteral(), showWhitespaces_);
+    showIndentGuides_ =
+        makeCheck(QStringLiteral("prefs.files.showIndentGuides"),
+                  tr("Show indent guides"));
+    showIndentGuides_->setToolTip(
+        tr("Draw a muted vertical line at every indent stop of a line's "
+           "leading whitespace."));
+    filesForm->addRow(QStringLiteral(), showIndentGuides_);
     column->addWidget(files);
 
     // --- general -----------------------------------------------------------------
@@ -2017,6 +2030,8 @@ void SettingsDialog::loadPreferencesPage(const Settings::Preferences& prefs)
     longLineMode_->setCurrentText(prefs.longLineMode.isEmpty()
                                       ? QStringLiteral("scroll")
                                       : prefs.longLineMode);
+    showWhitespaces_->setChecked(prefs.showWhitespaces);
+    showIndentGuides_->setChecked(prefs.showIndentGuides);
     checkCompilersAtStartup_->setChecked(prefs.checkCompilersAtStartup);
     showStartupPage_->setChecked(prefs.showStartupPage);
     checkToolchainsAtStartup_->setChecked(prefs.checkToolchainsAtStartup);
@@ -2079,7 +2094,9 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->defaultEncoding = encodingDefault_->currentText().trimmed();
     prefs->detectionPriority = linesOf(encodingPriority_);
     prefs->lineEndingDefault = lineEndingDefault_->currentText();
-prefs->longLineMode = longLineMode_->currentText().trimmed();
+    prefs->longLineMode = longLineMode_->currentText().trimmed();
+    prefs->showWhitespaces = showWhitespaces_->isChecked();
+    prefs->showIndentGuides = showIndentGuides_->isChecked();
     prefs->checkCompilersAtStartup = checkCompilersAtStartup_->isChecked();
     prefs->showStartupPage = showStartupPage_->isChecked();
     prefs->checkToolchainsAtStartup = checkToolchainsAtStartup_->isChecked();

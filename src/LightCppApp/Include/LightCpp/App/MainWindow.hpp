@@ -738,6 +738,10 @@ private:
     /// files.longLineMode == "wrap": lines longer than the editor are broken
     /// at its edge instead of scrolling sideways.
     bool longLinesWrap_ = false;
+    /// files.showWhitespaces / files.showIndentGuides, applied to every
+    /// editor created later as well as to the open ones.
+    bool editorsShowWhitespaces_ = false;
+    bool editorsShowIndentGuides_ = false;
     /// files.encoding default for new buffers (canonical encoding name).
     QString defaultEncodingName_ = QStringLiteral("UTF-8");
     /// files.lineEnding resolved for this platform: "LF" or "CRLF".
