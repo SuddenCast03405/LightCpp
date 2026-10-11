@@ -536,11 +536,33 @@ MainWindow::MainWindow(QWidget* parent)
     loadPlugins();
 
     // The start page takes the place of the auto-opened "Untitled" editor
-    // tab; the old behaviour stays available behind the preference.
-    if (settings_->preferences().showStartupPage) {
-        openStartupTab();
-    } else {
-        onNewFile();  // start with an empty editor
+    // tab; the old behaviour stays available behind the preference. With
+    // session restore on and files recorded at last exit, those tabs come
+    // back instead and the start page is skipped — there is something to
+    // continue with.
+    bool sessionRestored = false;
+    if (settings_->preferences().restoreSession) {
+        const QPair<QStringList, int> session = loadSessionState();
+        int opened = 0;
+        for (const QString& path : session.first) {
+            if (openFileInTab(path) != nullptr) {
+                ++opened;
+            }
+        }
+        if (opened > 0) {
+            sessionRestored = true;
+            const int active = session.second;
+            if (active >= 0 && active < tabWidget_->count()) {
+                tabWidget_->setCurrentIndex(active);
+            }
+        }
+    }
+    if (!sessionRestored) {
+        if (settings_->preferences().showStartupPage) {
+            openStartupTab();
+        } else {
+            onNewFile();  // start with an empty editor
+        }
     }
     updateProjectActions();
 
@@ -720,6 +742,77 @@ void MainWindow::closeStartupTab()
     }
     // removeTab does not delete: drop the stateless page right away.
     page->deleteLater();
+}
+
+// ---------------------------------------------------------------------------
+// Session restore
+// ---------------------------------------------------------------------------
+void MainWindow::saveSessionState() const
+{
+    // Only real, still-existing files are restorable: untitled buffers have
+    // no path to reopen, and a file deleted after the IDE opened it would
+    // just log an error on every start.
+    QStringList files;
+    int active = -1;
+    for (int i = 0; i < tabWidget_->count(); ++i) {
+        if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
+            const QString path = ed->filePath();
+            if (path.isEmpty() || !QFileInfo::exists(path)) {
+                continue;
+            }
+            if (i == tabWidget_->currentIndex()) {
+                active = files.size();
+            }
+            files.append(path);
+        }
+    }
+
+    QJsonObject obj;
+    obj.insert(QStringLiteral("type"), QStringLiteral("session"));
+    QJsonArray filesArr;
+    for (const QString& path : files) {
+        filesArr.append(path);
+    }
+    obj.insert(QStringLiteral("files"), filesArr);
+    obj.insert(QStringLiteral("active"), active);
+
+    const QString sessionPath =
+        LightCpp::Settings::SettingsStore::baseConfigDirectory()
+        + QStringLiteral("/session.json");
+    QDir().mkpath(
+        LightCpp::Settings::SettingsStore::baseConfigDirectory());
+    LightCpp::Settings::SettingsStore::writeDocument(
+        sessionPath, QJsonDocument(obj));
+}
+
+QPair<QStringList, int> MainWindow::loadSessionState() const
+{
+    const QString sessionPath =
+        LightCpp::Settings::SettingsStore::baseConfigDirectory()
+        + QStringLiteral("/session.json");
+    QFile file(sessionPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    file.close();
+    if (!doc.isObject()) {
+        return {};
+    }
+    const QJsonObject obj = doc.object();
+    if (obj.value(QStringLiteral("type")).toString()
+        != QLatin1String("session")) {
+        return {};
+    }
+    QStringList files;
+    const QJsonArray filesArr = obj.value(QStringLiteral("files")).toArray();
+    for (const QJsonValue& value : filesArr) {
+        const QString path = value.toString();
+        if (!path.isEmpty()) {
+            files.append(path);
+        }
+    }
+    return {files, obj.value(QStringLiteral("active")).toInt(-1)};
 }
 
 QList<StartupPage::StartupCheckItem> MainWindow::buildStartupChecks() const
@@ -1611,6 +1704,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
             }
         }
     }
+    // Record the session for the next launch — after the save prompts, so
+    // buffers the user chose to discard are not recorded as open tabs with
+    // paths that then reopen dirty-free but stale.
+    saveSessionState();
     event->accept();
     if (restartPending_) {
         restartPending_ = false;

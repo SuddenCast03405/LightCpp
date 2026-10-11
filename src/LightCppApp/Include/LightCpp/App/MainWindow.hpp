@@ -280,6 +280,15 @@ private:
     /// Remove the start page tab (if it is still up) and delete it. Called
     /// once the user picked something to do from it.
     void closeStartupTab();
+    // --- session restore ----------------------------------------------------
+    /// Record the open file tabs (untitled buffers excepted) plus the active
+    /// one into config/session.json. Called from closeEvent; restore happens
+    /// in the constructor when preferences.general.restoreSession is on.
+    void saveSessionState() const;
+    /// Read back what saveSessionState() wrote: the file paths in tab order
+    /// and the index of the tab that was active (-1 when none). Empty list
+    /// when there is nothing usable (first run, preference off, unreadable).
+    [[nodiscard]] QPair<QStringList, int> loadSessionState() const;
     /// The environment check plan for the start page: one row per toolchain
     /// (its compiler exists) and one per enabled kit (its toolchain
     /// reference resolves and its compiler exists).

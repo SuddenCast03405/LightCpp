@@ -847,6 +847,14 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
            "launch: it lists recently opened files and projects and the "
            "four ways to begin. When off, an empty Untitled editor opens."));
     generalForm->addRow(QStringLiteral(), showStartupPage_);
+    restoreSession_ =
+        makeCheck(QStringLiteral("prefs.general.restoreSession"),
+                  tr("Reopen the previous session's files at launch"));
+    restoreSession_->setToolTip(
+        tr("When enabled, the files open at exit are recorded and reopened "
+           "the next time LightC++ starts, taking the place of the start "
+           "page. Unsaved (untitled) buffers are not restored."));
+    generalForm->addRow(QStringLiteral(), restoreSession_);
     checkToolchainsAtStartup_ =
         makeCheck(QStringLiteral("prefs.general.checkToolchainsAtStartup"),
                   tr("Check toolchains and kits at start-up"));
@@ -2139,6 +2147,7 @@ void SettingsDialog::loadPreferencesPage(const Settings::Preferences& prefs)
     showIndentGuides_->setChecked(prefs.showIndentGuides);
     checkCompilersAtStartup_->setChecked(prefs.checkCompilersAtStartup);
     showStartupPage_->setChecked(prefs.showStartupPage);
+    restoreSession_->setChecked(prefs.restoreSession);
     checkToolchainsAtStartup_->setChecked(prefs.checkToolchainsAtStartup);
     autoSave_->setChecked(prefs.autoSave);
     autoSaveSeconds_->setValue(qBound(5, prefs.autoSaveSeconds, 3600));
@@ -2206,6 +2215,7 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->showIndentGuides = showIndentGuides_->isChecked();
     prefs->checkCompilersAtStartup = checkCompilersAtStartup_->isChecked();
     prefs->showStartupPage = showStartupPage_->isChecked();
+    prefs->restoreSession = restoreSession_->isChecked();
     prefs->checkToolchainsAtStartup = checkToolchainsAtStartup_->isChecked();
     prefs->autoSave = autoSave_->isChecked();
     prefs->autoSaveSeconds = autoSaveSeconds_->value();

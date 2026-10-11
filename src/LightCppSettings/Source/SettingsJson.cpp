@@ -314,6 +314,7 @@ QJsonObject toJson(const Preferences& prefs)
     general.insert(QStringLiteral("checkCompilersAtStartup"),
                    prefs.checkCompilersAtStartup);
     general.insert(QStringLiteral("showStartupPage"), prefs.showStartupPage);
+    general.insert(QStringLiteral("restoreSession"), prefs.restoreSession);
     general.insert(QStringLiteral("checkToolchainsAtStartup"),
                    prefs.checkToolchainsAtStartup);
     general.insert(QStringLiteral("autoSave"), prefs.autoSave);
@@ -558,6 +559,7 @@ void fromJson(const QJsonObject& object, Preferences& out)
         const QJsonObject general = generalValue.toObject();
         readBool(general, "checkCompilersAtStartup", out.checkCompilersAtStartup);
         readBool(general, "showStartupPage", out.showStartupPage);
+        readBool(general, "restoreSession", out.restoreSession);
         readBool(general, "checkToolchainsAtStartup",
                  out.checkToolchainsAtStartup);
         readBool(general, "autoSave", out.autoSave);

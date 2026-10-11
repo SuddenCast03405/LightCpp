@@ -300,6 +300,10 @@ struct Preferences {
     QStringList recentFiles;
     /// When true (default), the start-up page shows once at launch.
     bool showStartupPage = true;
+    /// general.restoreSession — when true, the tabs open at exit are
+    /// recorded (config/session.json) and reopened at the next launch,
+    /// replacing the start page when there is anything to restore.
+    bool restoreSession = true;
 };
 
 // ---------------------------------------------------------------------------
