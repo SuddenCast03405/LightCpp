@@ -207,6 +207,12 @@ private:
     void createActions();
     /// Grey the clipboard actions out when no editor tab is current.
     void updateEditActions();
+    /// Sync the line-ending combo with `editor`: the per-tab override when
+    /// one is set, else what the buffer actually contains (LF vs CRLF), else
+    /// the global save default for an empty buffer.
+    void updateEolCombo(CodeEditor* editor);
+    /// The line-ending combo changed: record the override on the active tab.
+    void onEolChanged(int index);
     void createMenuBar();
     void createToolBar();
     void createStatusBar();
@@ -552,6 +558,10 @@ private:
     /// Find/replace bar docked under the editor tabs; hidden until Ctrl+F.
     FindBar* findBar_ = nullptr;
     QComboBox* encodingCombo_;
+    /// The line-ending drop-down (LF / CRLF) to the left of the encoding
+    /// combo. Reflects the active buffer's line endings; picking one sets a
+    /// per-tab override that encodedSavePayload() honours on the next save.
+    QComboBox* eolCombo_ = nullptr;
     QLabel* statusCursor_;
     QLabel* statusLanguage_;
     QLabel* statusFile_;

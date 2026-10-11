@@ -476,11 +476,13 @@ MainWindow::MainWindow(QWidget* parent)
             statusFile_->setText(ed->filePath().isEmpty()
                                  ? QStringLiteral("Untitled") : ed->filePath());
             updateEncodingCombo(ed);
+            updateEolCombo(ed);
             onCursorPositionChanged();
         } else {
             statusLanguage_->clear();
             statusFile_->clear();
             statusCursor_->clear();
+            updateEolCombo(nullptr);
         }
         updateEditActions();
     });
@@ -2414,6 +2416,20 @@ void MainWindow::createStatusBar()
     connect(encodingCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onEncodingChanged);
 
+    // Line-ending combo — sits next to the encoding drop-down. Shows the
+    // active buffer's line endings (LF or CRLF); picking one sets a per-tab
+    // override that the next save honours, converting the whole buffer.
+    if (eolCombo_ == nullptr) {
+        eolCombo_ = new QComboBox(this);
+    }
+    eolCombo_->clear();
+    eolCombo_->addItems({QStringLiteral("LF"), QStringLiteral("CRLF")});
+    eolCombo_->setToolTip(
+        tr("Line endings of the active file. LF saves with \\n, CRLF with "
+           "\\r\\n; the choice applies when the file is saved."));
+    connect(eolCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onEolChanged);
+
     statusBar()->addWidget(statusFile_, 3);
     // statusGit_ is NOT added here: a hidden permanent widget still leaves
     // its separator behind in the status bar, so the slot is inserted only
@@ -2421,6 +2437,7 @@ void MainWindow::createStatusBar()
     // again the moment it is gone.
     statusBar()->addPermanentWidget(statusLanguage_);
     statusBar()->addPermanentWidget(statusCursor_);
+    statusBar()->addPermanentWidget(eolCombo_);
     statusBar()->addPermanentWidget(encodingCombo_);
 }
 
@@ -2444,6 +2461,7 @@ void MainWindow::onNewFile()
     QDir().mkpath(virtualDir);
     ed->setLintPath(QDir(virtualDir).filePath(title + QStringLiteral(".cpp")));
     updateEncodingCombo(ed);
+    updateEolCombo(ed);
 }
 
 void MainWindow::onOpenFile()
@@ -2477,8 +2495,15 @@ std::optional<QByteArray> MainWindow::encodedSavePayload(CodeEditor* ed)
 
     // Newline translation happens on the text (before encoding): a byte
     // level 0x0A->0x0D0A replace would corrupt UTF-16/32 payloads.
+    // The per-tab override from the status-bar line-ending combo wins over
+    // the global files.lineEnding setting.
+    QString eol = ed->property("lineEndingOverride")
+                      .toString();
+    if (eol.isEmpty()) {
+        eol = lineEndingForSaving_;
+    }
     QString text = ed->toPlainText();
-    if (lineEndingForSaving_ == QLatin1String("CRLF")) {
+    if (eol == QLatin1String("CRLF")) {
         text.replace(u'\n', QStringLiteral("\r\n"));
     }
 
@@ -2888,6 +2913,7 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
 
     setEncodingInfo(editor, toName(content.encoding));
     statusFile_->setText(path);
+    updateEolCombo(editor);
     statusLanguage_->setText(languageFromSuffix(path));
     outputPanel_->appendBuildOutput(
         tr("Opened: %1  [%2, %3 bytes%4]")
@@ -2947,6 +2973,50 @@ void MainWindow::reloadWithEncoding(LightCpp::Text::TextEncoding encoding)
         tr("Reloaded: %1  [%2]")
             .arg(ed->filePath())
             .arg(toName(encoding)));
+    updateEolCombo(ed);
+}
+
+void MainWindow::updateEolCombo(CodeEditor* ed)
+{
+    if (eolCombo_ == nullptr) {
+        return;
+    }
+    if (ed == nullptr) {
+        eolCombo_->setEnabled(false);
+        return;
+    }
+    eolCombo_->setEnabled(true);
+
+    // Per-tab override wins (the user picked one for this tab); otherwise
+    // report what the buffer actually contains, falling back to the global
+    // save default when the buffer has no line endings yet.
+    QString eol = ed->property("lineEndingOverride")
+                      .toString();
+    if (eol.isEmpty()) {
+        const QString text = ed->toPlainText();
+        if (text.contains(QStringLiteral("\r\n"))) {
+            eol = QStringLiteral("CRLF");
+        } else if (text.contains(u'\n')) {
+            eol = QStringLiteral("LF");
+        } else {
+            eol = lineEndingForSaving_;
+        }
+    }
+    const QSignalBlocker blocker(eolCombo_);
+    eolCombo_->setCurrentText(eol);
+}
+
+void MainWindow::onEolChanged(int index)
+{
+    if (index < 0) {
+        return;
+    }
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr) {
+        return;
+    }
+    ed->setProperty("lineEndingOverride",
+                    eolCombo_->currentText());
 }
 
 void MainWindow::watchEditorFile(CodeEditor* ed, bool watch)
@@ -2988,6 +3058,7 @@ void MainWindow::reloadEditorFromDisk(CodeEditor* ed)
     }
     outputPanel_->appendBuildOutput(
         tr("Reloaded (changed on disk): %1").arg(ed->filePath()));
+    updateEolCombo(ed);
 }
 
 void MainWindow::onWatchedFileChanged(const QString& path)
