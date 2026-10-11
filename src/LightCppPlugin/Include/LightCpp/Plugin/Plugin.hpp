@@ -84,6 +84,15 @@ public:
     virtual void registerCommand(const QString& pluginName, const QString& id,
                                  const QString& label, const QString& shortcut,
                                  std::function<void()> callback) = 0;
+    /// Remove every command previously registered under `pluginName`.
+    /// A plugin that fails to load or to initialize must call this: its
+    /// callbacks point into memory that is about to be freed, and a menu
+    /// entry that survives would crash the IDE when clicked. The default
+    /// does nothing, so simple hosts and test stubs stay unaffected.
+    virtual void removePluginCommands(const QString& pluginName)
+    {
+        (void)pluginName;
+    }
 };
 
 }  // namespace LightCpp::Plugin

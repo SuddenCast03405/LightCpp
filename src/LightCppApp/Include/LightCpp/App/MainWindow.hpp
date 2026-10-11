@@ -748,6 +748,9 @@ private:
     };
     /// Flattened symbols of the outline answer currently shown.
     QList<OutlineEntry> outlineEntries_;
+    /// The file the outlineEntries_ describe. The breadcrumb must not show
+    /// another tab's scope chain after a tab switch.
+    QString outlineFilePath_;
     /// The newest in-flight rename / codeAction request ids.
     int latestRenameRequestId_ = 0;
     int latestCodeActionRequestId_ = 0;

@@ -206,6 +206,7 @@ MainWindow::MainWindow(QWidget* parent)
     sideTabs_->setDocumentMode(true);
     sideTabs_->addTab(fileExplorer_, tr("Explorer"));
     sideTabs_->addTab(createGitPlaceholder(), tr("Git"));
+    sideTabs_->addTab(createOutlinePanel(), tr("Outline"));
     sideTabs_->addTab(createPluginPanel(), tr("Plugins"));
 
     auto* mainSplitter = new QSplitter(Qt::Horizontal, this);
@@ -451,7 +452,15 @@ MainWindow::MainWindow(QWidget* parent)
     connect(lsp_, &LightCpp::App::LanguageServerClient::renameReady,
             this, [this](int requestId,
                          const QList<LightCpp::App::LspTextEdit>& edits) {
-        if (requestId != latestRenameRequestId_ || edits.isEmpty()) {
+        if (requestId != latestRenameRequestId_) {
+            return;
+        }
+        if (edits.isEmpty()) {
+            // The server refused (or found nothing) — say so instead of
+            // leaving the user wondering whether the keystroke registered.
+            statusBar()->showMessage(
+                tr("Rename: the server cannot rename this symbol here"),
+                5000);
             return;
         }
         int skipped = 0;
@@ -478,9 +487,29 @@ MainWindow::MainWindow(QWidget* parent)
         if (ed == nullptr) {
             return;
         }
+        // Command-only actions (clangd's applyFix) cannot run: this client
+        // does not execute server commands. Showing them would produce menu
+        // entries that do nothing, so they are filtered out — with a hint
+        // when that leaves the menu empty.
+        int commandOnly = 0;
+        for (const auto& action : actions) {
+            if (action.edits.isEmpty()) {
+                ++commandOnly;
+            }
+        }
+        if (commandOnly == actions.size()) {
+            statusBar()->showMessage(
+                tr("Quick fix: the server only offered command-based fixes, "
+                   "which are not supported"),
+                5000);
+            return;
+        }
         auto* menu = new QMenu(this);
         menu->setAttribute(Qt::WA_DeleteOnClose);
         for (int i = 0; i < actions.size(); ++i) {
+            if (actions[i].edits.isEmpty()) {
+                continue;  // command-only — not executable here
+            }
             QAction* fixAction = menu->addAction(actions[i].title);
             connect(fixAction, &QAction::triggered, this, [this, i] {
                 if (i >= pendingCodeActions_.size()) {
@@ -2210,6 +2239,21 @@ void MainWindow::createActions()
     connect(actGoToSymbol_, &QAction::triggered, this,
             [this] { showSymbolSearch(); });
 
+    actRenameSymbol_ = new QAction(tr("Rename S&ymbol..."), this);
+    actRenameSymbol_->setShortcut(
+        QKeySequence(QStringLiteral("Ctrl+Shift+R")));
+    actRenameSymbol_->setStatusTip(
+        tr("Rename the symbol at the cursor across the project (clangd)"));
+    connect(actRenameSymbol_, &QAction::triggered, this,
+            [this] { renameSymbolAtCursor(); });
+
+    actQuickFix_ = new QAction(tr("&Quick Fix..."), this);
+    actQuickFix_->setShortcut(QKeySequence(QStringLiteral("Ctrl+.")));
+    actQuickFix_->setStatusTip(
+        tr("Show code actions for the diagnostics on the caret line (clangd)"));
+    connect(actQuickFix_, &QAction::triggered, this,
+            [this] { requestQuickFix(); });
+
     // --- bookmarks ----------------------------------------------------------
     actToggleBookmark_ = new QAction(tr("&Toggle Bookmark"), this);
     actToggleBookmark_->setShortcut(QKeySequence(QStringLiteral("Ctrl+F2")));
@@ -2457,6 +2501,9 @@ void MainWindow::createMenuBar()
     editMenu->addAction(actGotoImplementation_);
     editMenu->addAction(actFindReferences_);
     editMenu->addAction(actGoToSymbol_);
+    editMenu->addSeparator();
+    editMenu->addAction(actRenameSymbol_);
+    editMenu->addAction(actQuickFix_);
     editMenu->addSeparator();
     editMenu->addAction(actToggleBookmark_);
     editMenu->addAction(actNextBookmark_);
@@ -3300,9 +3347,13 @@ void MainWindow::applyOutlineSymbols(
     if (ed == nullptr || ed->lintPath() != filePath) {
         return;  // the answer describes a tab that is no longer active
     }
+    if (outlineTree_ == nullptr) {
+        return;  // the outline panel was never created — nothing to fill
+    }
 
     outlineTree_->clear();
     outlineEntries_.clear();
+    outlineFilePath_ = filePath;
 
     // Walk the (possibly nested) symbol list, building tree items and the
     // flattened cache used by the Ctrl+Shift+O dialog in one pass. Top-level
@@ -3366,7 +3417,11 @@ void MainWindow::updateBreadcrumb()
     // caret line, in document order (the flat list is depth-first, so outer
     // scopes come first — exactly breadcrumb order).
     QString key;
-    if (ed != nullptr && !outlineEntries_.isEmpty()) {
+    // The cached entries describe one specific file: after a tab switch the
+    // chain must hide instead of showing (and jumping to) the previous
+    // file's scopes.
+    if (ed != nullptr && !outlineEntries_.isEmpty()
+        && ed->lintPath() == outlineFilePath_) {
         const int caretLine = ed->textCursor().blockNumber();
         QList<const OutlineEntry*> chain;
         for (const OutlineEntry& entry : outlineEntries_) {
@@ -3525,8 +3580,7 @@ int MainWindow::applyWorkspaceEdits(
         if (owner == nullptr) {
             missingFiles.insert(edit.filePath);
             continue;
-        }
-        // Find-or-append the editor's bucket (server edits for one document
+        }        // Find-or-append the editor's bucket (server edits for one document
         // are usually adjacent, so the loop is short).
         int bucket = -1;
         for (int i = 0; i < grouped.size(); ++i) {
@@ -3544,6 +3598,7 @@ int MainWindow::applyWorkspaceEdits(
     }
 
     int applied = 0;
+    int droppedEdits = 0;
     for (const auto& pair : grouped) {
         CodeEditor* ed = pair.first;
         QList<LightCpp::App::LspTextEdit> list = pair.second;
@@ -3565,10 +3620,18 @@ int MainWindow::applyWorkspaceEdits(
             const QTextBlock endBlock =
                 ed->document()->findBlockByNumber(edit.endLine);
             if (!startBlock.isValid() || !endBlock.isValid()) {
-                continue;  // the buffer drifted past the server's view
+                ++droppedEdits;  // the buffer drifted past the server's view
+                continue;
             }
-            cursor.setPosition(startBlock.position() + edit.column);
-            cursor.setPosition(endBlock.position() + edit.endColumn,
+            // Clamp to the real line extents: a stale column (or the line's
+            // newline position) would otherwise place a cursor at an invalid
+            // position and silently corrupt the following edits.
+            const int startCol =
+                qBound(0, edit.column, qMax(startBlock.length() - 1, 0));
+            const int endCol =
+                qBound(0, edit.endColumn, qMax(endBlock.length() - 1, 0));
+            cursor.setPosition(startBlock.position() + startCol);
+            cursor.setPosition(endBlock.position() + endCol,
                                QTextCursor::KeepAnchor);
             cursor.insertText(edit.newText);
             ++applied;
@@ -3577,6 +3640,20 @@ int MainWindow::applyWorkspaceEdits(
     }
     if (skippedFiles != nullptr) {
         *skippedFiles = missingFiles.size();
+    }
+    // Unopened files are not edited at all — naming them is the only way the
+    // user can finish a rename by hand instead of discovering the half-renamed
+    // state at build time.
+    for (const QString& missing : std::as_const(missingFiles)) {
+        outputPanel_->appendProgramOutput(
+            tr("Edit not applied — file is not open in a tab: %1")
+                .arg(missing));
+    }
+    if (droppedEdits > 0) {
+        outputPanel_->appendProgramOutput(
+            tr("%1 edit(s) were dropped because the document changed since "
+               "the server computed them")
+                .arg(droppedEdits));
     }
     return applied;
 }
@@ -6621,14 +6698,17 @@ bool MainWindow::scheduleCompletionRetry()
         return false;  // budget spent — let the empty result stand
     }
     ++completionAttempts_;
-    CodeEditor* ed = lastCompletion_.editor.data();
+    // A QPointer, not a raw pointer: if the tab closes within the retry
+    // delay a raw pointer would dangle (and never read as nullptr).
+    const QPointer<CodeEditor> ed = lastCompletion_.editor.data();
     if (ed == nullptr) {
         return false;
     }
     QTimer::singleShot(400, this, [this, ed] {
-        if (ed == nullptr) {
+        if (ed.isNull()) {
             return;  // tab closed in the meantime
         }
+        CodeEditor* editor = ed.data();
         if (completionBackend_ == QStringLiteral("libclang")) {
             deliverLibClangCompletion();
             return;
@@ -6639,13 +6719,13 @@ bool MainWindow::scheduleCompletionRetry()
         if (!lsp_->isRunning()) {
             return;  // start() failed again; serverFailed already logged it
         }
-        lsp_->changeDocument(lastCompletion_.lintPath, ed->toPlainText());
+        lsp_->changeDocument(lastCompletion_.lintPath, editor->toPlainText());
         const int reqId = lsp_->requestCompletion(
             lastCompletion_.lintPath, lastCompletion_.line,
             lastCompletion_.column, lastCompletion_.triggerChar);
         if (reqId > 0) {
             latestCompletionId_ = reqId;
-            pendingCompletions_[reqId] = ed;
+            pendingCompletions_[reqId] = editor;
         }
     });
     return true;

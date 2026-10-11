@@ -607,6 +607,10 @@ bool LuaPlugin::initialize(::LightCpp::Plugin::IdeServices* /*services*/)
         if (impl_->services != nullptr) {
             impl_->services->log(QStringLiteral("[Lua %1] onInit failed: %2")
                                      .arg(name_, result.error));
+            // initialize() returning false drops this plugin (and its Lua
+            // state with it); the commands the script registered capture
+            // this Impl, so their menu entries must not outlive it.
+            impl_->services->removePluginCommands(impl_->commands.pluginName);
         }
         return false;
     }
@@ -667,6 +671,12 @@ LuaPluginHost::LoadResult LuaPluginHost::loadPlugin(
     const ExecutionResult run = impl->sandbox->runString(
         code, QStringLiteral("@%1").arg(info.absoluteFilePath()));
     if (!run.ok) {
+        // The script may have registered commands before the error: they
+        // capture `impl` internals that die with this scope, so the menu
+        // entries must go now or clicking them would use freed memory.
+        if (services != nullptr) {
+            services->removePluginCommands(stem);
+        }
         result.error = QStringLiteral("script failed: %1").arg(run.error);
         return result;
     }
