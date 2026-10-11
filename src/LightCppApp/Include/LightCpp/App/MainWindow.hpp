@@ -633,6 +633,8 @@ private:
     QAction* actGotoImplementation_ = nullptr; // Edit > Go to Implementation (Ctrl+F11)
     QAction* actFindReferences_ = nullptr;     // Edit > Find References (Shift+F12)
     QAction* actGoToSymbol_ = nullptr;         // Edit > Go to Symbol in File (Ctrl+Shift+O)
+    QAction* actRenameSymbol_ = nullptr;       // Edit > Rename Symbol (Ctrl+Shift+R)
+    QAction* actQuickFix_ = nullptr;           // Edit > Quick Fix (Ctrl+.)
     QAction* actToggleBookmark_ = nullptr;     // Edit > Toggle Bookmark (Ctrl+F2)
     QAction* actNextBookmark_ = nullptr;       // Edit > Next Bookmark (F2)
     QAction* actPrevBookmark_ = nullptr;       // Edit > Previous Bookmark (Shift+F2)
@@ -737,6 +739,12 @@ private:
     };
     /// Flattened symbols of the outline answer currently shown.
     QList<OutlineEntry> outlineEntries_;
+    /// The newest in-flight rename / codeAction request ids.
+    int latestRenameRequestId_ = 0;
+    int latestCodeActionRequestId_ = 0;
+    /// Quick fixes returned for the current position, in server order; the
+    /// popup menu's index maps into this list.
+    QList<LightCpp::App::LspCodeAction> pendingCodeActions_;
     /// Format one signature-help answer into rich text for the tooltip:
     /// the label HTML-escaped with the active parameter bolded. (A plain
     /// private method, not a slot — MOC would demand a metatype for the
@@ -761,6 +769,20 @@ private:
     /// Ctrl+Shift+O: a small dialog filtering the flattened symbol list of
     /// the active document; picking an entry jumps to it.
     void showSymbolSearch();
+
+    // --- workspace edits (rename / quick fix) -------------------------------
+    /// Apply a flattened workspace-edit list to the open editors whose lint
+    /// path matches (edits are grouped per document and applied bottom-up so
+    /// earlier insertions don't shift later positions). Returns the number
+    /// of applied edits; `skippedFiles` counts distinct files with edits but
+    /// no open tab.
+    int applyWorkspaceEdits(const QList<LightCpp::App::LspTextEdit>& edits,
+                            int* skippedFiles = nullptr);
+    /// Edit > Rename Symbol: prompt for the new name, ask clangd, apply.
+    void renameSymbolAtCursor();
+    /// Edit > Quick Fix: request codeActions for the diagnostics around the
+    /// cursor; the answer pops a menu of fixes at the caret.
+    void requestQuickFix();
 
     /// Latest diagnostics per document, keyed by the editor's lint path
     /// (a virtual temp path for unsaved buffers). Feeds the Problems list.

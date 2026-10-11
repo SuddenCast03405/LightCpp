@@ -64,6 +64,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMenuBar>
 #include <QMetaType>
@@ -437,6 +438,62 @@ MainWindow::MainWindow(QWidget* parent)
             return;  // a newer request is already in flight
         }
         applyOutlineSymbols(filePath, symbols);
+    });
+    connect(lsp_, &LightCpp::App::LanguageServerClient::renameReady,
+            this, [this](int requestId,
+                         const QList<LightCpp::App::LspTextEdit>& edits) {
+        if (requestId != latestRenameRequestId_ || edits.isEmpty()) {
+            return;
+        }
+        int skipped = 0;
+        const int applied = applyWorkspaceEdits(edits, &skipped);
+        statusBar()->showMessage(
+            applied > 0
+                ? tr("Renamed: %1 edit(s) applied").arg(applied)
+                : tr("Rename: no matching open document to edit"),
+            5000);
+        if (skipped > 0) {
+            outputPanel_->appendProgramOutput(tr(
+                "Rename skipped %1 file(s) that are not open in a tab")
+                .arg(skipped));
+        }
+    });
+    connect(lsp_, &LightCpp::App::LanguageServerClient::codeActionsReady,
+            this, [this](int requestId,
+                         const QList<LightCpp::App::LspCodeAction>& actions) {
+        if (requestId != latestCodeActionRequestId_ || actions.isEmpty()) {
+            return;
+        }
+        pendingCodeActions_ = actions;
+        CodeEditor* ed = currentEditor();
+        if (ed == nullptr) {
+            return;
+        }
+        auto* menu = new QMenu(this);
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        for (int i = 0; i < actions.size(); ++i) {
+            QAction* fixAction = menu->addAction(actions[i].title);
+            connect(fixAction, &QAction::triggered, this, [this, i] {
+                if (i >= pendingCodeActions_.size()) {
+                    return;
+                }
+                int skipped = 0;
+                const int applied = applyWorkspaceEdits(
+                    pendingCodeActions_[i].edits, &skipped);
+                statusBar()->showMessage(
+                    applied > 0
+                        ? tr("Quick fix: %1 edit(s) applied").arg(applied)
+                        : tr("Quick fix: nothing to apply"),
+                    5000);
+                if (skipped > 0) {
+                    outputPanel_->appendProgramOutput(tr(
+                        "Quick fix skipped %1 file(s) that are not open")
+                        .arg(skipped));
+                }
+            });
+        }
+        menu->popup(ed->viewport()->mapToGlobal(
+            ed->cursorRect().bottomLeft()));
     });
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverFailed,
             this, [this](const QString& message) {
@@ -2326,6 +2383,8 @@ void MainWindow::createActions()
         {actGotoImplementation_, "actionGotoImplementation"},
         {actFindReferences_, "actionFindReferences"},
         {actGoToSymbol_, "actionGoToSymbol"},
+        {actRenameSymbol_, "actionRenameSymbol"},
+        {actQuickFix_, "actionQuickFix"},
         {actToggleBookmark_, "actionToggleBookmark"},
         {actNextBookmark_, "actionNextBookmark"},
         {actPrevBookmark_, "actionPrevBookmark"},
@@ -3364,6 +3423,151 @@ void MainWindow::showSymbolSearch()
     dialog->show();
     dialog->raise();
     dialog->activateWindow();
+}
+
+// ---------------------------------------------------------------------------
+// Workspace edits: rename / quick fix
+// ---------------------------------------------------------------------------
+
+int MainWindow::applyWorkspaceEdits(
+    const QList<LightCpp::App::LspTextEdit>& edits, int* skippedFiles)
+{
+    if (skippedFiles != nullptr) {
+        *skippedFiles = 0;
+    }
+    // Group per open editor. QSet preserves insertion order? No — use a
+    // QList of pairs to keep a deterministic order.
+    QList<QPair<CodeEditor*, QList<LightCpp::App::LspTextEdit>>> grouped;
+    QSet<QString> missingFiles;
+    for (const auto& edit : edits) {
+        CodeEditor* owner = nullptr;
+        for (int i = 0; i < tabWidget_->count(); ++i) {
+            auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i));
+            if (ed != nullptr
+                && QFileInfo(ed->lintPath()).absoluteFilePath()
+                       == QFileInfo(edit.filePath).absoluteFilePath()) {
+                owner = ed;
+                break;
+            }
+        }
+        if (owner == nullptr) {
+            missingFiles.insert(edit.filePath);
+            continue;
+        }
+        // Find-or-append the editor's bucket (server edits for one document
+        // are usually adjacent, so the loop is short).
+        int bucket = -1;
+        for (int i = 0; i < grouped.size(); ++i) {
+            if (grouped[i].first == owner) {
+                bucket = i;
+                break;
+            }
+        }
+        if (bucket < 0) {
+            grouped.append(qMakePair(owner,
+                                     QList<LightCpp::App::LspTextEdit>()));
+            bucket = grouped.size() - 1;
+        }
+        grouped[bucket].second.append(edit);
+    }
+
+    int applied = 0;
+    for (const auto& pair : grouped) {
+        CodeEditor* ed = pair.first;
+        QList<LightCpp::App::LspTextEdit> list = pair.second;
+        // Bottom-up: sort descending by (line, column) so applying one edit
+        // never shifts the positions of the ones still to come.
+        std::sort(list.begin(), list.end(),
+                  [](const LightCpp::App::LspTextEdit& a,
+                     const LightCpp::App::LspTextEdit& b) {
+                      if (a.line != b.line) {
+                          return a.line > b.line;
+                      }
+                      return a.column > b.column;
+                  });
+        QTextCursor cursor(ed->document());
+        cursor.beginEditBlock();
+        for (const auto& edit : list) {
+            const QTextBlock startBlock =
+                ed->document()->findBlockByNumber(edit.line);
+            const QTextBlock endBlock =
+                ed->document()->findBlockByNumber(edit.endLine);
+            if (!startBlock.isValid() || !endBlock.isValid()) {
+                continue;  // the buffer drifted past the server's view
+            }
+            cursor.setPosition(startBlock.position() + edit.column);
+            cursor.setPosition(endBlock.position() + edit.endColumn,
+                               QTextCursor::KeepAnchor);
+            cursor.insertText(edit.newText);
+            ++applied;
+        }
+        cursor.endEditBlock();
+    }
+    if (skippedFiles != nullptr) {
+        *skippedFiles = missingFiles.size();
+    }
+    return applied;
+}
+
+void MainWindow::renameSymbolAtCursor()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || !lsp_->isRunning()) {
+        return;
+    }
+    const QString lintPath = ed->lintPath();
+    if (lintPath.isEmpty() || !isCppLikeFile(lintPath)) {
+        return;
+    }
+    // The identifier under the caret prefills the prompt.
+    QTextCursor word = ed->textCursor();
+    word.select(QTextCursor::WordUnderCursor);
+    const QString currentName = word.selectedText();
+
+    bool ok = false;
+    const QString newName = QInputDialog::getText(
+        this, tr("Rename Symbol"), tr("New name for \"%1\":").arg(currentName),
+        QLineEdit::Normal, currentName, &ok);
+    if (!ok || newName.isEmpty() || newName == currentName) {
+        return;
+    }
+    // clangd wants the caret ON the symbol; WordUnderCursor's anchor may sit
+    // before the first character — use the selection start which is inside
+    // the word either way.
+    const int line = word.blockNumber();
+    const int column = word.selectionStart() - word.block().position();
+    lsp_->changeDocument(lintPath, ed->toPlainText());
+    const int reqId = lsp_->requestRename(lintPath, line, column, newName);
+    if (reqId > 0) {
+        latestRenameRequestId_ = reqId;
+    }
+}
+
+void MainWindow::requestQuickFix()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || !lsp_->isRunning()) {
+        return;
+    }
+    const QString lintPath = ed->lintPath();
+    if (lintPath.isEmpty() || !isCppLikeFile(lintPath)) {
+        return;
+    }
+    // Collect the diagnostics whose range touches the caret's line — that
+    // is the context clangd matches fixes against.
+    const int caretLine = ed->textCursor().blockNumber();
+    QList<LightCpp::App::LspDiagnostic> nearby;
+    for (const auto& d : diagnosticsByFile_.value(lintPath)) {
+        if (caretLine >= d.startLine - 0 && caretLine <= d.endLine + 0) {
+            nearby.append(d);
+        }
+    }
+    lsp_->changeDocument(lintPath, ed->toPlainText());
+    const int reqId = lsp_->requestCodeActions(
+        lintPath, caretLine, ed->textCursor().positionInBlock(), nearby);
+    if (reqId > 0) {
+        latestCodeActionRequestId_ = reqId;
+    }
 }
 
 QString MainWindow::tabTitleFor(const CodeEditor* editor) const

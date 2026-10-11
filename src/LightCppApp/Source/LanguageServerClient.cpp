@@ -125,6 +125,57 @@ bool parseSymbolInformation(const QJsonObject& object, LspSymbol& out)
     return true;
 }
 
+/// Parse one LSP TextEdit {range, newText} into an LspTextEdit owned by
+/// `filePath` (already a local path).
+bool parseTextEdit(const QJsonObject& object, const QString& filePath,
+                   LspTextEdit& out)
+{
+    const QJsonObject range = object.value("range").toObject();
+    if (range.isEmpty()) {
+        return false;
+    }
+    out.filePath = filePath;
+    const QJsonObject start = range.value("start").toObject();
+    const QJsonObject end = range.value("end").toObject();
+    out.line = start.value("line").toInt();
+    out.column = start.value("character").toInt();
+    out.endLine = end.value("line").toInt();
+    out.endColumn = end.value("character").toInt();
+    out.newText = object.value("newText").toString();
+    return true;
+}
+
+/// Flatten a WorkspaceEdit (rename / codeAction answers) into a plain list
+/// of text edits. Handles both wire shapes: `changes` ({uri: [TextEdit]})
+/// and `documentChanges` ([{textDocument:{uri}, edits:[...]}]).
+QList<LspTextEdit> parseWorkspaceEdit(const QJsonValue& value)
+{
+    QList<LspTextEdit> edits;
+    const QJsonObject we = value.toObject();
+    const QJsonObject changes = we.value("changes").toObject();
+    for (auto it = changes.begin(); it != changes.end(); ++it) {
+        const QString filePath = LanguageServerClient::fromFileUri(it.key());
+        for (const QJsonValue& v : it.value().toArray()) {
+            LspTextEdit edit;
+            if (parseTextEdit(v.toObject(), filePath, edit)) {
+                edits.append(edit);
+            }
+        }
+    }
+    for (const QJsonValue& v : we.value("documentChanges").toArray()) {
+        const QJsonObject entry = v.toObject();
+        const QString filePath = LanguageServerClient::fromFileUri(
+            entry.value("textDocument").toObject().value("uri").toString());
+        for (const QJsonValue& ev : entry.value("edits").toArray()) {
+            LspTextEdit edit;
+            if (parseTextEdit(ev.toObject(), filePath, edit)) {
+                edits.append(edit);
+            }
+        }
+    }
+    return edits;
+}
+
 /// Directory holding the generated clangd flags file. Under the temp
 /// directory on purpose: nothing about this is the user's project, and their
 /// source tree must not be littered with build-system leftovers.
@@ -450,6 +501,8 @@ void LanguageServerClient::stop()
     referencesRequests_.clear();
     signatureHelpRequests_.clear();
     documentSymbolRequests_.clear();
+    renameRequests_.clear();
+    codeActionRequests_.clear();
 }
 
 bool LanguageServerClient::isRunning() const
@@ -794,6 +847,88 @@ int LanguageServerClient::requestDocumentSymbols(const QString& filePath)
     return id;
 }
 
+int LanguageServerClient::requestRename(const QString& filePath, int line,
+                                        int column, const QString& newName)
+{
+    if (process_ == nullptr || !initialized_
+        || !documentVersions_.contains(toFileUri(filePath))
+        || newName.isEmpty()) {
+        return 0;
+    }
+    const int id = nextRequestId_++;
+    renameRequests_.insert(id, 0);
+
+    QJsonObject textDocument;
+    textDocument.insert("uri", toFileUri(filePath));
+    QJsonObject position;
+    position.insert("line", line);
+    position.insert("character", column);
+    QJsonObject params;
+    params.insert("textDocument", textDocument);
+    params.insert("position", position);
+    params.insert("newName", newName);
+
+    QJsonObject request;
+    request.insert("jsonrpc", "2.0");
+    request.insert("id", id);
+    request.insert("method", "textDocument/rename");
+    request.insert("params", params);
+    sendJsonRpc(request);
+    return id;
+}
+
+int LanguageServerClient::requestCodeActions(
+    const QString& filePath, int line, int column,
+    const QList<LspDiagnostic>& diagnostics)
+{
+    if (process_ == nullptr || !initialized_
+        || !documentVersions_.contains(toFileUri(filePath))) {
+        return 0;
+    }
+    const int id = nextRequestId_++;
+    codeActionRequests_.insert(id, 0);
+
+    QJsonObject textDocument;
+    textDocument.insert("uri", toFileUri(filePath));
+    QJsonObject start;
+    start.insert("line", line);
+    start.insert("character", column);
+    QJsonObject range;
+    range.insert("start", start);
+    range.insert("end", start);  // degenerate range: caret position only
+    QJsonArray contextDiagnostics;
+    for (const auto& d : diagnostics) {
+        QJsonObject djStart;
+        djStart.insert("line", d.startLine);
+        djStart.insert("character", d.startColumn);
+        QJsonObject djEnd;
+        djEnd.insert("line", d.endLine);
+        djEnd.insert("character", d.endColumn);
+        QJsonObject djRange;
+        djRange.insert("start", djStart);
+        djRange.insert("end", djEnd);
+        QJsonObject dj;
+        dj.insert("range", djRange);
+        dj.insert("message", d.message);
+        dj.insert("severity", d.severity);
+        contextDiagnostics.append(dj);
+    }
+    QJsonObject context;
+    context.insert("diagnostics", contextDiagnostics);
+    QJsonObject params;
+    params.insert("textDocument", textDocument);
+    params.insert("range", range);
+    params.insert("context", context);
+
+    QJsonObject request;
+    request.insert("jsonrpc", "2.0");
+    request.insert("id", id);
+    request.insert("method", "textDocument/codeAction");
+    request.insert("params", params);
+    sendJsonRpc(request);
+    return id;
+}
+
 // ---------------------------------------------------------------------------
 // URI helpers
 // ---------------------------------------------------------------------------
@@ -1054,6 +1189,32 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
                 }
             }
             emit documentSymbolsReady(id, filePath, symbols);
+            return;
+        }
+        if (renameRequests_.contains(id)) {
+            renameRequests_.remove(id);
+            // result: WorkspaceEdit | null (null = nothing renameable).
+            emit renameReady(id, parseWorkspaceEdit(message.value("result")));
+            return;
+        }
+        if (codeActionRequests_.contains(id)) {
+            codeActionRequests_.remove(id);
+            // result: (Command | CodeAction)[] | null. Commands carry no
+            // edit; only actions with a workspace edit are surfaced.
+            QList<LspCodeAction> actions;
+            for (const QJsonValue& v :
+                 message.value("result").toArray()) {
+                const QJsonObject obj = v.toObject();
+                LspCodeAction action;
+                action.title = obj.value("title").toString();
+                action.kind = obj.value("kind").toString();
+                if (action.title.isEmpty()) {
+                    continue;
+                }
+                action.edits = parseWorkspaceEdit(obj.value("edit"));
+                actions.append(action);
+            }
+            emit codeActionsReady(id, actions);
             return;
         }
         return;

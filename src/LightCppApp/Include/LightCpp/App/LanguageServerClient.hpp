@@ -88,6 +88,27 @@ struct LspSymbol {
     QList<LspSymbol> children;
 };
 
+/// One concrete text edit inside a workspace edit (rename / codeAction
+/// answers), with the owning document resolved to a local path. Ranges are
+/// 0-based UTF-16 positions, directly usable with QTextCursor.
+struct LspTextEdit {
+    QString filePath;
+    int line = 0;
+    int column = 0;
+    int endLine = 0;
+    int endColumn = 0;
+    QString newText;
+};
+
+/// One quick fix returned by textDocument/codeAction. `edits` is the
+/// flattened workspace edit to apply; it is empty when the action is a
+/// command (clangd's applyFix commands) — those are skipped by the caller.
+struct LspCodeAction {
+    QString title;
+    QString kind;  // "quickfix", "refactor", ...
+    QList<LspTextEdit> edits;
+};
+
 class LanguageServerClient : public QObject {
     Q_OBJECT
 public:
@@ -197,6 +218,20 @@ public:
     /// (possibly nested) list. Answer via documentSymbolsReady().
     int requestDocumentSymbols(const QString& filePath);
 
+    /// textDocument/rename — rename the symbol at (line, column) to
+    /// `newName`. The answer is a WorkspaceEdit flattened into a list of
+    /// concrete text edits across all affected documents; the caller
+    /// applies them to the open editors. Answer via renameReady().
+    int requestRename(const QString& filePath, int line, int column,
+                      const QString& newName);
+
+    /// textDocument/codeAction — the quick fixes available for `diagnostics`
+    /// at (line, column). The `edits` out-list gets one entry per returned
+    /// action, in the server's order; an entry's edit list may be empty when
+    /// the action is a command instead of a workspace edit.
+    int requestCodeActions(const QString& filePath, int line, int column,
+                           const QList<LspDiagnostic>& diagnostics);
+
     // --- URI helpers (LSP uses file:// URIs with percent encoding) ---
 
     [[nodiscard]] static QString toFileUri(const QString& filePath);
@@ -236,6 +271,16 @@ signals:
     void documentSymbolsReady(int requestId, const QString& filePath,
                               const QList<LspSymbol>& symbols);
 
+    /// Rename response arrived. An empty list means the position had no
+    /// renameable symbol (or the new name was rejected). Edits span every
+    /// document the server touched — apply only the ones whose file is open.
+    void renameReady(int requestId, const QList<LspTextEdit>& edits);
+
+    /// Code action response arrived, in the server's order. An empty list
+    /// means no fixes at that position.
+    void codeActionsReady(int requestId,
+                          const QList<LspCodeAction>& actions);
+
     /// The initialize handshake completed; documents can now be opened.
     void serverStarted();
 
@@ -271,6 +316,8 @@ private:
     QMap<int, QString> referencesRequests_;       // requestId -> fileUri
     QMap<int, QString> signatureHelpRequests_;    // requestId -> fileUri
     QMap<int, QString> documentSymbolRequests_;   // requestId -> fileUri
+    QMap<int, int> renameRequests_;               // requestId -> 0 (pending)
+    QMap<int, int> codeActionRequests_;           // requestId -> 0 (pending)
     bool initialized_ = false;          // handshake done
     bool everInitialized_ = false;      // handshake completed at least once —
                                         // separates "exited during start-up"
