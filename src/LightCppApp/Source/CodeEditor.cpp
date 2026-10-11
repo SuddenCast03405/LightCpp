@@ -1465,18 +1465,24 @@ void CodeEditor::unfoldAll()
 
 void CodeEditor::unfoldLine(int line)
 {
-    if (!hiddenLines_.contains(line)) {
-        return;
-    }
-    for (const FoldAnchor& anchor : std::as_const(folded_)) {
-        if (anchor.regionIndex < 0 || anchor.regionIndex >= foldRegions_.size()) {
-            continue;
+    // Nested folds can stack over the same line; unfolding only the outermost
+    // would still leave it hidden, so keep peeling until the line shows.
+    while (hiddenLines_.contains(line)) {
+        bool peeled = false;
+        for (const FoldAnchor& anchor : std::as_const(folded_)) {
+            if (anchor.regionIndex < 0 || anchor.regionIndex >= foldRegions_.size()) {
+                continue;
+            }
+            const LightCpp::Core::Fold::FoldRegion& region =
+                foldRegions_.at(anchor.regionIndex);
+            if (int(region.startLine) < line && line <= int(region.endLine)) {
+                setFolded(anchor.regionIndex, false);
+                peeled = true;
+                break;  // setFolded mutates folded_; restart the scan
+            }
         }
-        const LightCpp::Core::Fold::FoldRegion& region =
-            foldRegions_.at(anchor.regionIndex);
-        if (int(region.startLine) < line && line <= int(region.endLine)) {
-            setFolded(anchor.regionIndex, false);
-            return;
+        if (!peeled) {
+            break;  // nothing left that covers the line
         }
     }
 }
@@ -1554,11 +1560,28 @@ void CodeEditor::paintFoldMarker(QPainter* painter, int top, int bottom, int reg
                       isFolded(regionIndex) ? QString(QChar(0x2212)) : QString(u'+'));
 
     if (isFolded(regionIndex)) {
-        // A collapsed range usually has more lines below it, so the marker
-        // keeps a hairline running down to the bottom of the visible gutter.
-        const int cx = x + box / 2;
-        painter->setPen(QPen(color, 1));
-        painter->drawLine(cx, y + box + 1, cx, lineNumberArea_->rect().bottom());
+        // The guide runs down only as far as the folded range does: it must
+        // stop at the first visible block after the region's end, not run to
+        // the bottom of the gutter — otherwise, with visible code below the
+        // fold, the hairline would cut straight through it.
+        int stopY = lineNumberArea_->rect().bottom();
+        QTextBlock after = document()->findBlockByNumber(
+            int(foldRegions_.at(regionIndex).endLine) + 1);
+        while (after.isValid() && !after.isVisible()) {
+            after = after.next();  // covered by another (nested) folded range
+        }
+        if (after.isValid()) {
+            const int yAfter = qRound(
+                blockBoundingGeometry(after).translated(contentOffset()).top());
+            if (yAfter < stopY) {
+                stopY = yAfter;  // the fold ends inside the viewport
+            }
+        }
+        if (stopY > y + box + 1) {
+            const int cx = x + box / 2;
+            painter->setPen(QPen(color, 1));
+            painter->drawLine(cx, y + box + 1, cx, stopY);
+        }
     }
 }
 
