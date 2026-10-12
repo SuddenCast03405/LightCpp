@@ -288,6 +288,15 @@ QStringList DebuggerController::startCommands(
     QStringList commands;
     switch (backend_) {
     case Backend::Gdb:
+        // Negotiate the charset before anything else: the rest of this batch
+        // carries file paths as UTF-8 bytes, and GDB otherwise decodes its
+        // input in the host locale charset (GBK on zh-CN Windows), so a
+        // Chinese path would never match and the breakpoint never plants.
+        // With UTF-8 on both sides paths round-trip and the console stream
+        // decodes as UTF-8 (see onReadyRead). QProcess queues these lines in
+        // order and GDB executes them one at a time, so the setting is in
+        // effect for every command below.
+        commands << QStringLiteral("-gdb-set charset UTF-8");
         for (const DebugBreakpoint& bp : breakpoints) {
             commands << QStringLiteral("-break-insert \"%1\"")
                             .arg(breakpointLocation(bp));
@@ -408,6 +417,18 @@ void DebuggerController::onReadyRead()
         return;
     }
     outputBuffer_ += process_->readAll();
+    // Decode in the charset the backend actually speaks: GDB negotiated
+    // UTF-8 at startup (-gdb-set charset UTF-8 in startCommands) and LLDB
+    // emits UTF-8 natively, so their streams must not go through
+    // fromLocal8Bit — on a zh-CN Windows that would garble every Chinese
+    // path and break the frame->editor match. cdb reports in the console
+    // codepage, which is exactly what fromLocal8Bit decodes.
+    const bool utf8Output =
+        backend_ == Backend::Gdb || backend_ == Backend::Lldb;
+    const auto decode = [utf8Output](const QByteArray& bytes) {
+        return utf8Output ? QString::fromUtf8(bytes)
+                          : QString::fromLocal8Bit(bytes);
+    };
     // Drain every complete line; one chunk can carry several MI records and
     // gdb stays quiet after "*running", so leftovers would never be seen.
     for (;;) {
@@ -415,13 +436,13 @@ void DebuggerController::onReadyRead()
         if (newline < 0) {
             break;
         }
-        QString line = QString::fromLocal8Bit(outputBuffer_.left(newline));
+        QString line = decode(outputBuffer_.left(newline));
         outputBuffer_.remove(0, newline + 1);
         handleLine(line.remove(QLatin1Char('\r')));
     }
     // No complete line yet — but a prompt (cdb's `0:000>`, lldb's `(lldb)`)
     // ends a chunk without a newline; flush it as a line.
-    const QString pending = QString::fromLocal8Bit(outputBuffer_);
+    const QString pending = decode(outputBuffer_);
     if (pending.contains(QLatin1String("0:000>"))
         || pending.contains(QLatin1String("(lldb)"))) {
         outputBuffer_.clear();

@@ -20,6 +20,33 @@ namespace {
 
 using LightCpp::App::LspCompletionItem;
 
+/// Clang's columns are 1-based and counted in UTF-8 bytes from the line
+/// start, while QTextCursor columns (what the editor sends, and what LSP
+/// positions use) count UTF-16 code units. A line with Chinese comments or
+/// string literals makes the two diverge — passing the UTF-16 unit count
+/// straight through lands the completion point to the right of the caret.
+/// Convert by re-encoding the caret's line prefix as UTF-8.
+unsigned byteColumnFor(const QString& content, int line, int column)
+{
+    // Walk to the start of `line` (0-based) without materialising a copy of
+    // the whole document.
+    qsizetype lineStart = 0;
+    for (int l = 0; l < line; ++l) {
+        const qsizetype newline = content.indexOf(u'\n', lineStart);
+        if (newline < 0) {
+            return unsigned(qMax(column, 0)) + 1;  // line not in content
+        }
+        lineStart = newline + 1;
+    }
+    const qsizetype newline = content.indexOf(u'\n', lineStart);
+    const qsizetype lineEnd = newline < 0 ? content.size() : newline;
+    qsizetype units = column;
+    units = qBound<qsizetype>(qsizetype(0), units, lineEnd - lineStart);
+    const QByteArray prefix =
+        content.mid(lineStart, units).toUtf8();
+    return unsigned(prefix.size()) + 1;
+}
+
 /// Lives on the libclang worker thread and runs the translation-unit parse.
 /// A QObject (rather than a bare lambda) is what lets the queued invocation
 /// carry the thread affinity with it; the completer itself outlives the
@@ -340,11 +367,13 @@ QList<LspCompletionItem> LibClangCompleter::complete(const Request& request,
         return fail(tr("libclang: parse failed with error %1").arg(parseError));
     }
 
-    // 1-based line/column, unlike LSP.
+    // 1-based line/column for clang; the column is byte-based (see
+    // byteColumnFor above — the request carries UTF-16 units).
     const unsigned options = CXCodeComplete_IncludeBriefComments;
     CXCodeCompleteResults* results = static_cast<CXCodeCompleteResults*>(codeCompleteAt_(
         tu, fileNameUtf8.constData(), unsigned(request.line + 1),
-        unsigned(request.column + 1), &unsaved, 1, options));
+        byteColumnFor(request.content, request.line, request.column),
+        &unsaved, 1, options));
     if (results == nullptr) {
         disposeTU_(tu);
         return fail(tr("libclang: completion failed"));
