@@ -120,7 +120,7 @@ end
     EXPECT_TRUE(services.logs.contains(QStringLiteral("hello from lua")));
 }
 
-TEST(LuaPluginHost, ExposesIdeApiThroughLuaBridge)
+TEST(LuaPluginHost, ExposesIdeApiThroughClosures)
 {
     StubServices services;
     const QTemporaryDir dir;

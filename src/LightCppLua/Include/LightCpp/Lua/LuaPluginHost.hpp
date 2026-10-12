@@ -3,8 +3,8 @@
 // Each *.lua under <exe dir>/plugins/lua gets its own sandboxed Lua 5.4
 // state (see LuaSandbox) and is adapted to the same Plugin interface the
 // C++ plugins implement, so the PluginManager treats scripts and DLLs
-// identically. The IDE's whitelisted surface is bridged through LuaBridge3
-// as the global `ide` table:
+// identically. The IDE's whitelisted surface is exposed as the global `ide`
+// table of hand-written C closures (upvalue = binding object):
 //
 //   ide.log(message, ...)            write a line to the Plugins channel
 //   ide.editor.activePath()          the active tab's file path ("" if untitled)

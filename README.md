@@ -4,14 +4,32 @@
 
 ## Current status
 
-Implements the **UTF-8 text file reading** module of the core library
-(`LightCppCore`), per the engineering standards in `要求.md`.
+A working Qt6 Widgets IDE per the engineering standards in `要求.md`:
+editing (syntax highlighting, code folding, bracket matching), project
+management (MSVC/Dev-C++/CMake/.dsp/.dsw), building and running, a
+pluggable completion/syntax-check backend (clangd / libclang / ccls over
+LSP), debugging (GDB-MI / LLDB / cdb), Git status, Lua 5.4 plugins, and a
+settings system with per-project overlays.
 
-## Module: LightCpp::Core::Text
+Six static logic libraries plus the Qt application layer:
+
+| Module | Purpose |
+|--------|---------|
+| `src/LightCppCore/` | Encoding/UTF-8 utilities, `Result` sum type, Qt-free |
+| `src/LightCppText/` | Text document model, encoding detection, line endings, folding |
+| `src/LightCppProject/` | Project/build-configuration parsing (`.vcxproj`/`.vcproj`/`.dev`/`.dsp`/`.dsw`/CMake), compiler diagnostics |
+| `src/LightCppSettings/` | Preferences/toolchains/kits, JSON config store |
+| `src/LightCppPlugin/` | Plugin interface and registry |
+| `src/LightCppLua/` | Sandboxed Lua 5.4 plugin host (`ide` API via hand-written C closures) |
+| `src/LightCppApp/` | Qt Widgets application layer (MainWindow, editors, panels, dialogs) |
+
+Each logic library has a GTest suite under `tests/` (CTest, 333 tests).
+
+## Module: LightCpp::Core::Text (UTF-8)
 
 | File | Purpose |
 |------|---------|
-| `src/LightCppCore/Include/LightCpp/Core/Utf8.hpp` | `constexpr` UTF-8 decoder & validator (maximal-subpart strategy) |
+| `src/LightCppCore/Include/LightCpp/Core/Utf8.hpp` | `constexpr` UTF-8 decoder & validator |
 | `src/LightCppCore/Include/LightCpp/Core/Utf8File.hpp` | Public API: `readUtf8File`, `ReadResult`, `ReadOptions` |
 | `src/LightCppCore/Source/Utf8File.cpp` | Implementation (BOM handling, size limits, sanitization) |
 
@@ -23,13 +41,25 @@ Features:
 - Binary-mode reads (no CRLF translation), chunked reading via `FILE*` RAII
 - Wide-character path support on Windows (`_wfopen`), thread-safe, Qt-free
 
+Decoding behaviour (matches the code, not older promises):
+- On a broken continuation byte the decoder resynchronises at the first
+  invalid byte (one U+FFFD for the valid prefix) — the WHATWG
+  "maximal subpart" strategy for that case.
+- On scalar-value violations (surrogate range, overlong encodings,
+  above U+10FFFF) the whole sequence is consumed as a single U+FFFD,
+  which differs from WHATWG's byte-level resynchronisation.
+
+Note: `readUtf8File()` is a standalone utility of this module; the
+product's file-loading pipeline lives in `LightCppText` (encoding
+detection incl. GBK/Big5) and does not call it.
+
 Design notes (spec compliance):
 - `Utf8.hpp` is header-only and `constexpr`, so decoding/validation can run at
   compile time and be unit-tested without touching the filesystem.
-- No Qt dependency in this layer (spec 4.1/4.4): the reader is a pure function
-  of `(path, options)`, callable from any thread. Per spec 4.3 the UI layer
-  will drive it through `QtConcurrent`/`QThread` and marshal results back with
-  `QMetaObject::invokeMethod`, never blocking the GUI thread.
+- No Qt dependency in the logic layers (spec 4.1/4.4): pure functions of
+  their inputs, callable from any thread. The Qt application layer drives
+  file I/O on background threads and marshals results back with queued
+  signals, never blocking the GUI thread.
 - `ReadResult` is a small C++20 sum type; `std::expected` was deliberately
   avoided because it is C++23 and the project baseline is C++20.
 
@@ -38,7 +68,7 @@ Design notes (spec compliance):
 ```bash
 E:/msys64/ucrt64/bin/cmake.exe --preset msys2-ucrt64
 E:/msys64/ucrt64/bin/cmake.exe --build --preset msys2-ucrt64
-E:/msys64/ucrt64/bin/ctest.exe  --preset msys2-ucrt64      # 28 tests, all passing
+E:/msys64/ucrt64/bin/ctest.exe  --preset msys2-ucrt64      # 333 tests, all passing
 ```
 
 Or use the helper script (it puts the toolchain on `PATH` first):
@@ -51,7 +81,10 @@ Notes:
 - GoogleTest 1.14.0 is vendored in `third_party/` and handed to CPM via
   `SOURCE_DIR`, so configure works offline. Override with
   `-DLIGHTCPP_GTEST_SOURCE=<path>`.
-- On MinGW the test binary links the GCC runtime statically
+- Lua 5.4.7 is vendored in `third_party/lua-5.4.7/src` and built from
+  source. The Lua binding layer is hand-written C closures (upvalue =
+  binding object); LuaBridge3 is vendored but not used by the `ide` API.
+- On MinGW the test binaries link the GCC runtime statically
   (`-static-libgcc -static-libstdc++`) so `ctest` does not need
   `E:\msys64\ucrt64\bin` on `PATH`.
 
@@ -63,6 +96,12 @@ Coverage build: `cmake --build build/msys2-ucrt64-coverage --target LightCppCove
 ```
 cmake/CPM.cmake              # CPM.cmake bootstrap (spec 4.2)
 src/LightCppCore/            # core logic library (static)
-tests/LightCppCoreTests/     # GTest suite, run via CTest
+src/LightCppText/            # text model / encoding / folding (static)
+src/LightCppProject/         # project & build configs, diagnostics (static)
+src/LightCppSettings/        # settings store, toolchains/kits (static)
+src/LightCppPlugin/          # plugin interface (static)
+src/LightCppLua/             # Lua 5.4 plugin host (static)
+src/LightCppApp/             # Qt Widgets application (lightcpp.exe)
+tests/LightCpp*Tests/        # GTest suites, run via CTest
 CMakePresets.json            # MSYS2 UCRT64 debug & coverage presets
 ```
