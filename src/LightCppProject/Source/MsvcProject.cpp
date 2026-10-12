@@ -661,7 +661,19 @@ std::optional<MsvcProject> loadMsvcProject(const QString& filePath, QString* err
         }
         return std::nullopt;
     }
-    return parseMsvcProject(filePath, file.readAll(), error);
+    const QByteArray content = file.readAll();
+    // A truncated read (locked file, dying disk) yields an empty or partial
+    // document that would fail XML parsing with a misleading position —
+    // catch the I/O error while the real cause is still on the file object.
+    if (file.error() != QFileDevice::NoError) {
+        if (error != nullptr) {
+            *error = QStringLiteral("error reading %1: %2")
+                         .arg(filePath)
+                         .arg(file.error());
+        }
+        return std::nullopt;
+    }
+    return parseMsvcProject(filePath, content, error);
 }
 
 }  // namespace LightCpp::Project

@@ -4900,9 +4900,10 @@ void MainWindow::onRunProject()
     if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
         const QString tree = LightCpp::Project::buildDirectory(*cmakeProject_,
                                                                buildConfiguration());
-        if (const QString newest = LightCpp::Project::newestExecutable(tree);
-            !newest.isEmpty()) {
-            lastProjectExe_ = newest;
+        if (const QString preferred =
+                LightCpp::Project::preferredExecutable(tree);
+            !preferred.isEmpty()) {
+            lastProjectExe_ = preferred;
         }
     }
     if (lastProjectExe_.isEmpty() || !QFileInfo::exists(lastProjectExe_)) {
@@ -5215,7 +5216,7 @@ void MainWindow::finishProjectBuild(bool succeeded, int exitCode)
         // Resolve what to run. The build tree is the authority: the IDE may not
         // have been the one that produced the binary.
         if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
-            lastProjectExe_ = LightCpp::Project::newestExecutable(
+            lastProjectExe_ = LightCpp::Project::preferredExecutable(
                 LightCpp::Project::buildDirectory(*cmakeProject_, buildConfiguration()));
         } else if (hasDevProject_) {
             lastProjectExe_ = devSummary_.outputPath;

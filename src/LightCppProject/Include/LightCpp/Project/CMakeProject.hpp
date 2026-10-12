@@ -66,4 +66,14 @@ struct CMakeProject {
 /// The most recently built executable, or empty when the tree has none.
 [[nodiscard]] QString newestExecutable(const QString& buildTree);
 
+/// The executable a plain "run the project" should start.
+///
+/// A multi-target build tree also produces test runners and tools, and
+/// "newest of everything" regularly picks one of those after an incremental
+/// build that touched a test. The top-level `project()` name —
+/// CMAKE_PROJECT_NAME in CMakeCache.txt — is conventionally also the main
+/// target's name, so an .exe matching it wins when present; anything else
+/// falls back to newestExecutable().
+[[nodiscard]] QString preferredExecutable(const QString& buildTree);
+
 }  // namespace LightCpp::Project

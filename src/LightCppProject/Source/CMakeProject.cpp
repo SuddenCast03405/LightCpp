@@ -2,6 +2,8 @@
 
 #include <QDir>
 #include <QDirIterator>
+#include <QFile>
+#include <QFileDevice>
 #include <QFileInfo>
 #include <QVector>
 
@@ -127,6 +129,45 @@ QString newestExecutable(const QString& buildTree)
 {
     const QStringList found = builtExecutables(buildTree);
     return found.isEmpty() ? QString() : found.first();
+}
+
+QString preferredExecutable(const QString& buildTree)
+{
+    const QStringList found = builtExecutables(buildTree);
+    if (found.size() <= 1) {
+        return found.isEmpty() ? QString() : found.first();
+    }
+
+    // CMAKE_PROJECT_NAME:<TYPE>=<value> in the cache — the top-level
+    // project() call, whose name conventionally matches the main target.
+    QString projectName;
+    QFile cache(QDir(buildTree).filePath(kCacheFile));
+    if (cache.open(QIODevice::ReadOnly)) {
+        const QByteArray content = cache.readAll();
+        if (cache.error() == QFileDevice::NoError) {
+            for (const QByteArray& line : content.split('\n')) {
+                if (line.startsWith("CMAKE_PROJECT_NAME:")) {
+                    const qsizetype equals = line.indexOf('=');
+                    if (equals > 0) {
+                        projectName = QString::fromUtf8(
+                            line.mid(equals + 1).trimmed());
+                    }
+                    break;
+                }
+            }
+        }
+        cache.close();
+    }
+
+    if (!projectName.isEmpty()) {
+        for (const QString& path : found) {
+            if (QFileInfo(path).completeBaseName().compare(
+                    projectName, Qt::CaseInsensitive) == 0) {
+                return path;
+            }
+        }
+    }
+    return found.first();  // newest — the old behaviour
 }
 
 }  // namespace LightCpp::Project

@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileDevice>
 #include <QFileInfo>
 #include <QRegularExpression>
 
@@ -167,6 +168,12 @@ std::optional<DspProject> parseDspProject(const QString& filePath,
 
     DspTargetKind pendingKind = DspTargetKind::Application;
     DspConfiguration* current = nullptr;
+    // Configuration blocks (!IF "$(CFG)" == ...) live between "# Begin
+    // Project" and "# Begin Target". A !IF inside the target section wraps
+    // SOURCE= lines of a hand-rolled or tool-generated file and has nothing
+    // to do with configurations — treating it as one used to manufacture a
+    // ghost configuration in the drop-down.
+    bool inTargetSection = false;
     for (const QString& rawLine : text->split(QLatin1Char('\n'))) {
         QString line = rawLine;
         while (line.endsWith(QLatin1Char('\r'))) {
@@ -174,6 +181,15 @@ std::optional<DspProject> parseDspProject(const QString& filePath,
         }
         line = line.trimmed();
         if (line.isEmpty()) {
+            continue;
+        }
+
+        if (line.startsWith(QLatin1String("# Begin Target"))) {
+            inTargetSection = true;
+            continue;
+        }
+        if (line.startsWith(QLatin1String("# End Target"))) {
+            inTargetSection = false;
             continue;
         }
 
@@ -224,8 +240,11 @@ std::optional<DspProject> parseDspProject(const QString& filePath,
         }
 
         // Configuration block openers: `!IF "$(CFG)" == "hello - Win32
-        // Debug"` and `!ELSEIF ...`. Each starts one configuration.
-        if (line.startsWith(QLatin1String("!IF")) || line.startsWith(QLatin1String("!ELSEIF"))) {
+        // Debug"` and `!ELSEIF ...`. Each starts one configuration — but
+        // only outside the target section, where the SOURCE= lists live.
+        if (!inTargetSection
+            && (line.startsWith(QLatin1String("!IF"))
+                || line.startsWith(QLatin1String("!ELSEIF")))) {
             static const QRegularExpression cfgPattern(
                 QStringLiteral("\"([^\"]+-[^\"]+)\""));
             const QRegularExpressionMatch match = cfgPattern.match(line);
@@ -312,7 +331,18 @@ std::optional<DspProject> loadDspProject(const QString& filePath, QString* error
         }
         return std::nullopt;
     }
-    return parseDspProject(filePath, file.readAll(), error);
+    const QByteArray content = file.readAll();
+    // A truncated read would surface as "no configurations found" — catch
+    // the I/O error while the real cause is still on the file object.
+    if (file.error() != QFileDevice::NoError) {
+        if (error != nullptr) {
+            *error = QStringLiteral("error reading %1: %2")
+                         .arg(filePath)
+                         .arg(file.error());
+        }
+        return std::nullopt;
+    }
+    return parseDspProject(filePath, content, error);
 }
 
 std::optional<DswWorkspace> parseDswWorkspace(const QString& filePath,
@@ -377,7 +407,16 @@ std::optional<DswWorkspace> loadDswWorkspace(const QString& filePath, QString* e
         }
         return std::nullopt;
     }
-    return parseDswWorkspace(filePath, file.readAll(), error);
+    const QByteArray content = file.readAll();
+    if (file.error() != QFileDevice::NoError) {
+        if (error != nullptr) {
+            *error = QStringLiteral("error reading %1: %2")
+                         .arg(filePath)
+                         .arg(file.error());
+        }
+        return std::nullopt;
+    }
+    return parseDswWorkspace(filePath, content, error);
 }
 
 const DspConfiguration* DspProject::configurationFor(const QString& configName) const

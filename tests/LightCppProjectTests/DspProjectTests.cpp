@@ -369,3 +369,39 @@ TEST(DspProject, LoadFromDisk)
     EXPECT_EQ(project->name, QStringLiteral("t"));
     EXPECT_EQ(project->projectDir, QDir(dir.path()).absolutePath());
 }
+
+// --- target-section conditionals ----------------------------------------
+
+TEST(DspProject, TargetSectionConditionalsMakeNoGhostConfiguration)
+{
+    // A hand-rolled .dsp that wraps SOURCE= lines in !IF inside
+    // "# Begin Target": those conditionals belong to the file list, not to
+    // the configuration model. The real configuration block sits before
+    // "# Begin Target" and must still parse.
+    const auto project = parseDsp(
+        "# Microsoft Developer Studio Project File - Name=\"hello\" - "
+        "Package Owner=<4>\n"
+        "# TARGTYPE \"Win32 (x86) Console Application\" 0x0103\n"
+        "CFG=hello - Win32 Debug\n"
+        "!IF  \"$(CFG)\" == \"hello - Win32 Debug\"\n"
+        "# PROP Output_Dir \"Debug\"\n"
+        "# ADD CPP /D \"WIN32\"\n"
+        "!ENDIF \n"
+        "# Begin Target\n"
+        "# Name \"hello - Win32 Debug\"\n"
+        "!IF  \"$(CFG)\" == \"hello - Win32 Debug\"\n"
+        "SOURCE=.\\main.cpp\n"
+        "!ELSE\n"
+        "SOURCE=.\\stub.cpp\n"
+        "!ENDIF \n"
+        "# End Target\n");
+    ASSERT_TRUE(project.has_value()) << lastError.toStdString();
+    // Exactly the one real configuration - the in-target !IF used to add
+    // "hello - Win32 Debug" a second time as a ghost.
+    ASSERT_EQ(project->configurations.size(), 1);
+    EXPECT_EQ(project->configurations.first().name,
+              QStringLiteral("Debug"));
+    // Both conditional variants of the file list are still collected.
+    EXPECT_EQ(project->sourceFiles.size(), 2);
+}
+

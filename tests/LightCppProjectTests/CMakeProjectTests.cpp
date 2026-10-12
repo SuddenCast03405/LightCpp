@@ -24,6 +24,7 @@ using LightCpp::Project::configureArguments;
 using LightCpp::Project::findCMakeProject;
 using LightCpp::Project::isConfigured;
 using LightCpp::Project::newestExecutable;
+using LightCpp::Project::preferredExecutable;
 using LightCpp::Project::BuildConfiguration;
 
 /// Writes a file, creating any missing directories. Returns its path.
@@ -230,3 +231,58 @@ TEST(CMakeProject, EmptyOrMissingBuildTreeHasNoExecutables)
     EXPECT_TRUE(builtExecutables(temp.path()).isEmpty());
     EXPECT_TRUE(newestExecutable(temp.path()).isEmpty());
 }
+
+
+// --- preferredExecutable -----------------------------------------------
+
+/// A configured build tree: CMakeCache.txt with (or without) the top-level
+/// project name, plus the exes the two-target shape produces.
+void makeBuildTree(const QString& root, const char* cacheProjectLine)
+{
+    writeFile(root, "CMakeCache.txt",
+              QByteArray(cacheProjectLine) + QByteArray("\nother:flag=x\n"));
+    writeFile(root, "hello.exe", QByteArray("main"));
+    writeFile(root, "test_runner.exe", QByteArray("test"));
+}
+
+TEST(CMakeProject, PreferredExecutablePicksTheProjectNamesake)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString tree = dir.filePath("build/Debug");
+    makeBuildTree(tree,
+                  "CMAKE_PROJECT_NAME:STATIC=hello");
+    // Make the test runner the NEWEST executable: "newest of everything"
+    // would pick it, the project-name match must beat that.
+    setModified(QDir(tree).filePath("hello.exe"), -60);
+    setModified(QDir(tree).filePath("test_runner.exe"), 0);
+
+    EXPECT_EQ(preferredExecutable(tree),
+              QDir(tree).filePath("hello.exe"));
+}
+
+TEST(CMakeProject, PreferredExecutableFallsBackToNewestWithoutAName)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString tree = dir.filePath("build/Debug");
+    makeBuildTree(tree, "CMAKE_GENERATOR:INTERNAL=Ninja");
+    setModified(QDir(tree).filePath("hello.exe"), -60);
+    setModified(QDir(tree).filePath("test_runner.exe"), 0);
+
+    EXPECT_EQ(preferredExecutable(tree),
+              QDir(tree).filePath("test_runner.exe"));
+}
+
+TEST(CMakeProject, PreferredExecutableIsNewestWhenItIsTheOnlyOne)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString tree = dir.filePath("build/Debug");
+    writeFile(tree, "CMakeCache.txt", "CMAKE_PROJECT_NAME:STATIC=hello\n");
+    writeFile(tree, "tool.exe", QByteArray("tool"));
+
+    EXPECT_EQ(preferredExecutable(tree),
+              QDir(tree).filePath("tool.exe"));
+}
+
