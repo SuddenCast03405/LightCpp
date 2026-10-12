@@ -1215,3 +1215,48 @@ TEST(SettingsJson, RoundTripKeepsValues)
     EXPECT_EQ(parsedPrefs.clangd.completion, prefs.clangd.completion);
     EXPECT_EQ(parsedPrefs.globalStyle, prefs.globalStyle);
 }
+
+// --- mergeUnknownKeys ---------------------------------------------------
+
+TEST(SettingsStore, MergeUnknownKeysKeepsHandAddedKeys)
+{
+    QJsonObject previous;
+    previous.insert("type", "preferences");
+    QJsonObject prefs;
+    prefs.insert("editor.font", "custom");
+    prefs.insert("myOwn.key", QJsonValue(true));   // unknown to the model
+    QJsonObject nested;
+    nested.insert("kept", 1);
+    previous.insert("preferences", prefs);
+    previous.insert("nested", nested);
+
+    QJsonObject fresh;
+    QJsonObject freshPrefs;
+    freshPrefs.insert("editor.font", "changed");
+    fresh.insert("type", "preferences");
+    fresh.insert("preferences", freshPrefs);
+    QJsonObject freshNested;
+    freshNested.insert("kept", 2);
+    freshNested.insert("added", 3);
+    fresh.insert("nested", freshNested);
+
+    const QJsonObject merged = SettingsStore::mergeUnknownKeys(fresh, previous);
+    EXPECT_EQ(merged.value("preferences").toObject().value("editor.font"),
+              QJsonValue(QStringLiteral("changed")));  // fresh wins on known keys
+    EXPECT_EQ(merged.value("preferences").toObject().value("myOwn.key"),
+              QJsonValue(true));                       // unknown key survives
+    EXPECT_EQ(merged.value("nested").toObject().value("kept"), QJsonValue(2));
+    EXPECT_EQ(merged.value("nested").toObject().value("added"), QJsonValue(3));
+    // A key the fresh document dropped entirely comes back.
+    EXPECT_TRUE(merged.contains("type"));
+}
+
+TEST(SettingsStore, MergeUnknownKeysHandlesBrokenOrEmptyPrevious)
+{
+    QJsonObject fresh;
+    fresh.insert("type", "preferences");
+
+    const QJsonObject fromEmpty = SettingsStore::mergeUnknownKeys(fresh, {});
+    EXPECT_EQ(fromEmpty, fresh);
+}
+

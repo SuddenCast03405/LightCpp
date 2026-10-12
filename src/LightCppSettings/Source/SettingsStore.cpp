@@ -12,6 +12,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QSaveFile>
 
 #include <algorithm>
 
@@ -69,13 +70,42 @@ bool SettingsStore::writeDocument(const QString& filePath,
     if (!QDir().mkpath(info.absolutePath())) {
         return false;
     }
-    QFile file(filePath);
+    // QSaveFile writes to a temporary file in the same directory and moves
+    // it into place on commit — a crash or a full disk mid-write then
+    // leaves the previous config intact instead of a half-written file
+    // that fails to parse on the next start.
+    QSaveFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         return false;
     }
     const QByteArray bytes =
         document.toJson(QJsonDocument::Indented);
-    return file.write(bytes) == bytes.size();
+    if (file.write(bytes) != bytes.size()) {
+        file.cancelWriting();
+        return false;
+    }
+    return file.commit();
+}
+
+QJsonObject SettingsStore::mergeUnknownKeys(const QJsonObject& fresh,
+                                            const QJsonObject& previous)
+{
+    const auto grow = [](auto&& self, const QJsonObject& f,
+                         const QJsonObject& p) -> QJsonObject {
+        QJsonObject merged = f;
+        for (auto it = p.constBegin(); it != p.constEnd(); ++it) {
+            if (!merged.contains(it.key())) {
+                merged.insert(it.key(), it.value());
+            } else if (it.value().isObject()
+                       && merged.value(it.key()).isObject()) {
+                merged.insert(it.key(),
+                              self(self, merged.value(it.key()).toObject(),
+                                   it.value().toObject()));
+            }
+        }
+        return merged;
+    };
+    return grow(grow, fresh, previous);
 }
 
 // ---------------------------------------------------------------------------

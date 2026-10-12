@@ -290,7 +290,13 @@ SettingsDialog::SettingsDialog(QWidget* parent)
     connect(buttons, &QDialogButtonBox::accepted, this, &SettingsDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &SettingsDialog::reject);
     connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, this,
-            [this] { saveModifiedScopes(); });
+            [this] {
+                if (saveModifiedScopes()) {
+                    // Written is not applied: the main window re-reads and
+                    // re-applies the config on this signal.
+                    emit settingsApplied();
+                }
+            });
     rootLayout->addWidget(buttons);
 
     // --- wiring -----------------------------------------------------------------
@@ -1254,6 +1260,10 @@ void SettingsDialog::handleScopeChanged(int index)
             }
         } else {
             current.loaded = false;  // discard edits: re-read from disk later
+            // The edits are being thrown away: without clearing the flag,
+            // OK/Apply would later write the in-memory state — the very
+            // edits the user just declined to save — back to disk.
+            current.modified = false;
         }
     }
     loadScopeToUi(target);
@@ -2387,6 +2397,30 @@ bool SettingsDialog::saveScope(Scope scope, QString* errorMessage)
         return false;
     };
     ScopeState& current = state(scope);
+
+    // The generated documents only carry the keys the model knows. A user
+    // who hand-added an unknown key to defaults.json or preferences.json
+    // (for a newer build, or for their own tooling) would lose it on the
+    // next save — the fresh document is grown from the previous file's
+    // content, keeping every key the model does not write itself. The
+    // toolchain/kit arrays are not merged: their entries are matched by id
+    // and the model owns their shape outright.
+    const auto documentWithPreviousKeys = [&](const char* fileName,
+                                              const QJsonObject& freshObject) {
+        QJsonObject merged = freshObject;
+        QFile previous(QDir(dir).filePath(QLatin1String(fileName)));
+        if (previous.open(QIODevice::ReadOnly)) {
+            const QJsonDocument parsed =
+                QJsonDocument::fromJson(previous.readAll());
+            previous.close();
+            if (parsed.isObject()) {
+                merged = Settings::SettingsStore::mergeUnknownKeys(
+                    freshObject, parsed.object());
+            }
+        }
+        return QJsonDocument(merged);
+    };
+
     QJsonArray toolchainArray;
     for (const Settings::Toolchain& toolchain : current.toolchains) {
         toolchainArray.append(Settings::toJson(toolchain));
@@ -2401,10 +2435,14 @@ bool SettingsDialog::saveScope(Scope scope, QString* errorMessage)
     if (!write("kits.json", QJsonDocument(kitArray))) {
         return false;
     }
-    if (!write("defaults.json", QJsonDocument(Settings::toJson(current.defaults)))) {
+    if (!write("defaults.json",
+               documentWithPreviousKeys("defaults.json",
+                                        Settings::toJson(current.defaults)))) {
         return false;
     }
-    if (!write("preferences.json", QJsonDocument(Settings::toJson(current.preferences)))) {
+    if (!write("preferences.json",
+               documentWithPreviousKeys("preferences.json",
+                                        Settings::toJson(current.preferences)))) {
         return false;
     }
     current.modified = false;

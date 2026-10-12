@@ -45,6 +45,14 @@ public:
     /// Used by the default-config writer; the store itself never writes.
     static bool writeDocument(const QString& filePath, const QJsonDocument& document);
 
+    /// Grows `fresh` from `previous`: every key the fresh document does not
+    /// carry is kept from the previous one (recursively for objects), so
+    /// keys the model does not know — ones a user hand-added for their own
+    /// tooling or a newer build — survive a save. Keys present in `fresh`
+    /// always come from `fresh`, including ones the UI cleared.
+    [[nodiscard]] static QJsonObject mergeUnknownKeys(
+        const QJsonObject& fresh, const QJsonObject& previous);
+
     /// Directories whose config documents are merged over the base, in the
     /// given order (later wins). Each entry is the config directory itself
     /// (…/config), not the workspace root.

@@ -7155,6 +7155,10 @@ void MainWindow::onSettings()
     if (!overlay.isEmpty()) {
         dialog.setOverlayDirectory(overlay);
     }
+    // Apply writes the files but leaves the dialog open — without this the
+    // changes would sit on disk inert until the next OK or restart.
+    connect(&dialog, &LightCpp::App::SettingsDialog::settingsApplied, this,
+            &MainWindow::onReloadSettings);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }

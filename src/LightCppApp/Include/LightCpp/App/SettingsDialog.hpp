@@ -68,6 +68,13 @@ public:
     void accept() override;
     void reject() override;
 
+signals:
+    /// Emitted after Apply wrote the config files. Apply does not close the
+    /// dialog, so without this the main window would never re-read and
+    /// re-apply them — the changes would land on disk but stay inert until
+    /// the next OK or restart.
+    void settingsApplied();
+
 private:
     /// Working state of one layer. `loaded` is set once the layer has been
     /// read from disk (lazily, on first switch); `modified` marks layers
