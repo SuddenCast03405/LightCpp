@@ -32,6 +32,8 @@ namespace {
 
 using LightCpp::Text::TextEncoding;
 using LightCpp::Text::TextFileError;
+using LightCpp::Text::TextFileResult;
+using LightCpp::Text::readDetectedTextFile;
 
 class TextFileTest : public ::testing::Test {
 protected:
@@ -164,3 +166,89 @@ TEST_F(TextFileTest, BinaryRejected)
 }
 
 }  // namespace
+
+// --- detectLineEndings -------------------------------------------------
+
+TEST(DetectLineEndings, EmptyContentIsNone)
+{
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(QByteArray()),
+              LightCpp::Text::LineEnding::None);
+}
+
+TEST(DetectLineEndings, NoNewlineAtAllIsNone)
+{
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(QByteArray("one line")),
+              LightCpp::Text::LineEnding::None);
+}
+
+TEST(DetectLineEndings, LfFile)
+{
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(QByteArray("a\nb\nc")),
+              LightCpp::Text::LineEnding::Lf);
+}
+
+TEST(DetectLineEndings, CrLfFile)
+{
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(QByteArray("a\r\nb\r\nc")),
+              LightCpp::Text::LineEnding::CrLf);
+}
+
+TEST(DetectLineEndings, MixedContentTakesTheMajority)
+{
+    // 4 CRLF vs 1 LF -> CRLF.
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(
+                  QByteArray("a\r\nb\r\nc\r\nd\r\ne\n")),
+              LightCpp::Text::LineEnding::CrLf);
+    // 1 CRLF vs 4 LF -> LF.
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(
+                  QByteArray("a\r\nb\nc\nd\ne\n")),
+              LightCpp::Text::LineEnding::Lf);
+}
+
+TEST(DetectLineEndings, LoneCarriageReturnsAreIgnored)
+{
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(QByteArray("a\rb\rc")),
+              LightCpp::Text::LineEnding::None);
+}
+
+TEST(DetectLineEndings, Utf16NewlinesAreCountedByteWise)
+{
+    // UTF-16LE "a\n" is 61 00 0A 00: the 0x0A byte still only ever appears
+    // as a line feed, so the byte-wise scan works regardless of encoding.
+    const unsigned char utf16le[] = {'a', 0x00, '\n', 0x00,
+                                     'b', 0x00, '\n', 0x00};
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(
+                  QByteArray(reinterpret_cast<const char*>(utf16le), 8)),
+              LightCpp::Text::LineEnding::Lf);
+}
+
+// --- readDetectedTextFile carries the detection ------------------------
+
+TEST_F(TextFileTest, ReadReportsLineEndingStyle)
+{
+    const QString lfPath = writeFile("lines_lf.txt", QByteArray("a\nb\n"));
+    const TextFileResult lf = readDetectedTextFile(lfPath);
+    ASSERT_TRUE(lf.hasValue());
+    EXPECT_EQ(lf.value().lineEndings, LightCpp::Text::LineEnding::Lf);
+
+    const QString crlfPath =
+        writeFile("lines_crlf.txt", QByteArray("a\r\nb\r\n"));
+    const TextFileResult crlf = readDetectedTextFile(crlfPath);
+    ASSERT_TRUE(crlf.hasValue());
+    EXPECT_EQ(crlf.value().lineEndings, LightCpp::Text::LineEnding::CrLf);
+
+    const TextFileResult none = readDetectedTextFile(
+        writeFile("single.txt", QByteArray("no newline")));
+    ASSERT_TRUE(none.hasValue());
+    EXPECT_EQ(none.value().lineEndings, LightCpp::Text::LineEnding::None);
+}
+
+TEST(DetectLineEndings, NamesMatchTheStatusBarCombo)
+{
+    EXPECT_STREQ(LightCpp::Text::toString(LightCpp::Text::LineEnding::Lf),
+                 "LF");
+    EXPECT_STREQ(LightCpp::Text::toString(LightCpp::Text::LineEnding::CrLf),
+                 "CRLF");
+    EXPECT_STREQ(LightCpp::Text::toString(LightCpp::Text::LineEnding::None),
+                 "");
+}

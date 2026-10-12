@@ -2896,6 +2896,23 @@ void MainWindow::onOpenFile()
     }
 }
 
+QString MainWindow::effectiveLineEnding(CodeEditor* ed) const
+{
+    // Priority: the per-tab override from the status-bar combo, then the
+    // line-ending style the file itself was loaded with (keep what is
+    // there — an LF file must not become CRLF because a global default
+    // says so), then the global files.lineEnding setting for new files.
+    QString eol = ed->property("lineEndingOverride")
+                      .toString();
+    if (eol.isEmpty()) {
+        eol = ed->property("detectedLineEnding").toString();
+    }
+    if (eol.isEmpty()) {
+        eol = lineEndingForSaving_;
+    }
+    return eol;
+}
+
 std::optional<QByteArray> MainWindow::encodedSavePayload(CodeEditor* ed)
 {
     namespace LT = LightCpp::Text;
@@ -2916,13 +2933,7 @@ std::optional<QByteArray> MainWindow::encodedSavePayload(CodeEditor* ed)
 
     // Newline translation happens on the text (before encoding): a byte
     // level 0x0A->0x0D0A replace would corrupt UTF-16/32 payloads.
-    // The per-tab override from the status-bar line-ending combo wins over
-    // the global files.lineEnding setting.
-    QString eol = ed->property("lineEndingOverride")
-                      .toString();
-    if (eol.isEmpty()) {
-        eol = lineEndingForSaving_;
-    }
+    const QString eol = effectiveLineEnding(ed);
     QString text = ed->toPlainText();
     if (eol == QLatin1String("CRLF")) {
         text.replace(u'\n', QStringLiteral("\r\n"));
@@ -2987,6 +2998,12 @@ bool MainWindow::saveEditorToDisk(CodeEditor* ed)
             fileWatcher_->addPath(path);
         }
         ed->setModified(false);
+        // The buffer now matches what was written: record the style that
+        // was actually used as the file's line endings, so the status-bar
+        // combo and the next save agree with the bytes on disk even after
+        // a save-as-new-file.
+        ed->setProperty("detectedLineEnding", effectiveLineEnding(ed));
+        updateEolCombo(ed);
         const int idx = tabWidget_->indexOf(ed);
         if (idx >= 0) {
             tabWidget_->setTabText(idx, QFileInfo(path).fileName());
@@ -3948,6 +3965,11 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
     }
 
     setEncodingInfo(editor, toName(content.encoding));
+    // Remember how the file on disk ends its lines, so saving keeps that
+    // style instead of rewriting every line to the global default (an LF
+    // file edited by one line used to come back all-CRLF).
+    editor->setProperty("detectedLineEnding",
+                        QString::fromLatin1(LightCpp::Text::toString(content.lineEndings)));
     statusFile_->setText(path);
     updateEolCombo(editor);
     statusLanguage_->setText(languageFromSuffix(path));
@@ -4005,6 +4027,8 @@ void MainWindow::reloadWithEncoding(LightCpp::Text::TextEncoding encoding)
     const TextFileContent& content = result.value();
     ed->loadUtf8(content.utf8);
     setEncodingInfo(ed, toName(encoding));
+    ed->setProperty("detectedLineEnding",
+                    QString::fromLatin1(LightCpp::Text::toString(content.lineEndings)));
     outputPanel_->appendBuildOutput(
         tr("Reloaded: %1  [%2]")
             .arg(ed->filePath())
@@ -4024,10 +4048,15 @@ void MainWindow::updateEolCombo(CodeEditor* ed)
     eolCombo_->setEnabled(true);
 
     // Per-tab override wins (the user picked one for this tab); otherwise
-    // report what the buffer actually contains, falling back to the global
-    // save default when the buffer has no line endings yet.
+    // the style the file was loaded with — the buffer itself always reads
+    // as LF because QTextDocument normalizes, so the disk detection is the
+    // only honest source — falling back to the global save default for
+    // buffers that were never loaded from disk.
     QString eol = ed->property("lineEndingOverride")
                       .toString();
+    if (eol.isEmpty()) {
+        eol = ed->property("detectedLineEnding").toString();
+    }
     if (eol.isEmpty()) {
         const QString text = ed->toPlainText();
         if (text.contains(QStringLiteral("\r\n"))) {
@@ -4085,6 +4114,8 @@ void MainWindow::reloadEditorFromDisk(CodeEditor* ed)
     // collapsed regions by index + header text, so folds survive a reload.
     ed->loadUtf8(content.utf8);
     setEncodingInfo(ed, toName(content.encoding));
+    ed->setProperty("detectedLineEnding",
+                    QString::fromLatin1(LightCpp::Text::toString(content.lineEndings)));
     // The file may have become writable (or read-only) outside the IDE.
     ed->setReadOnly(!QFileInfo(ed->filePath()).isWritable());
     if (lsp_->isRunning() && isCppLikeFile(ed->lintPath())
@@ -4676,6 +4707,10 @@ void MainWindow::reloadFormattedOpenTabs(const QStringList& paths)
         // loadUtf8 clears the modified flag; the textChanged handler then
         // re-pushes the document to clangd through the lint debounce.
         ed->loadUtf8(result.value().utf8);
+        ed->setProperty(
+            "detectedLineEnding",
+            QString::fromLatin1(
+                LightCpp::Text::toString(result.value().lineEndings)));
     }
 }
 

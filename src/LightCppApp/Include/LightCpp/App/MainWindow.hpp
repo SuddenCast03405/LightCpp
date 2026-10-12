@@ -339,6 +339,12 @@ private:
     /// message) when the encoding cannot represent the text — the caller
     /// must not write a half-converted file in that case.
     [[nodiscard]] std::optional<QByteArray> encodedSavePayload(CodeEditor* editor);
+    /// The line-ending style a save of this editor writes with: the
+    /// per-tab status-bar override, else the style the file was loaded
+    /// with, else the global files.lineEnding default. Both
+    /// encodedSavePayload() and the post-save bookkeeping use it so the
+    /// priority cannot drift apart.
+    [[nodiscard]] QString effectiveLineEnding(CodeEditor* editor) const;
     /// Disk-write half of saving, shared by Ctrl+S and the auto-save timer.
     [[nodiscard]] bool saveEditorToDisk(CodeEditor* editor);
     /// Start/stop watching `ed`'s file for external changes.

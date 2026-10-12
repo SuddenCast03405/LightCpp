@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include <QByteArray>
+#include <QByteArrayView>
 #include <QString>
 
 #include "LightCpp/Core/Result.hpp"
@@ -27,6 +28,24 @@ enum class TextFileError {
 /// Human-readable description of a TextFileError.
 [[nodiscard]] const char* toString(TextFileError error) noexcept;
 
+/// The line-ending style a file's bytes use.
+enum class LineEnding {
+    None,  ///< no newline at all (empty file or single line without \n)
+    Lf,    ///< \n line feeds (Unix style)
+    CrLf,  ///< \r\n pairs (Windows style)
+};
+
+/// Human-readable name: "LF", "CRLF" or "" for None — the exact strings
+/// the status-bar line-ending combo uses.
+[[nodiscard]] const char* toString(LineEnding ending) noexcept;
+
+/// Count the line endings in the bytes and report the dominant style.
+///
+/// A lone \r (classic Mac, essentially extinct) is ignored. Ties and
+/// newline-free content report None, meaning "no evidence" — callers fall
+/// back to their own default rather than guessing from nothing.
+[[nodiscard]] LineEnding detectLineEndings(QByteArrayView bytes) noexcept;
+
 /// Payload of a successful read.
 struct TextFileContent {
     /// Decoded text as UTF-8, BOM stripped, newlines untouched.
@@ -41,6 +60,9 @@ struct TextFileContent {
     int detectionScore = 0;
     /// True for BOM-based or strong heuristic detection.
     bool detectionReliable = false;
+    /// The line-ending style the file's bytes use, so the editor can keep
+    /// it on save instead of rewriting every line to the global default.
+    LineEnding lineEndings = LineEnding::None;
 };
 
 /// Either a TextFileContent or a TextFileError.

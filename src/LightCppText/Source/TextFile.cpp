@@ -24,6 +24,43 @@ const char* toString(TextFileError error) noexcept
     return "unknown error";
 }
 
+const char* toString(LineEnding ending) noexcept
+{
+    switch (ending) {
+    case LineEnding::Lf: return "LF";
+    case LineEnding::CrLf: return "CRLF";
+    case LineEnding::None: break;
+    }
+    return "";
+}
+
+LineEnding detectLineEndings(QByteArrayView bytes) noexcept
+{
+    // Multi-byte encodings (GBK/UTF-16...) cannot produce a 0x0A or 0x0D0A
+    // sequence as part of a character code, so counting raw bytes is safe
+    // regardless of the file's encoding: UTF-16 pairs the NUL with the \n
+    // but the \n byte still only ever appears as a line feed, and GBK trail
+    // bytes never reach 0x0A.
+    qsizetype lf = 0;
+    qsizetype crlf = 0;
+    for (qsizetype i = 0; i < bytes.size(); ++i) {
+        if (bytes[i] != '\n') {
+            continue;
+        }
+        ++lf;
+        if (i > 0 && bytes[i - 1] == '\r') {
+            ++crlf;
+        }
+    }
+    if (lf == 0) {
+        return LineEnding::None;
+    }
+    // The dominant style wins; a file that genuinely mixes gets whichever
+    // has the majority, and an exact tie goes to LF (the least destructive
+    // choice — CRLF would add a byte per line).
+    return crlf * 2 > lf ? LineEnding::CrLf : LineEnding::Lf;
+}
+
 TextFileResult readDetectedTextFile(const QString& path, const TextFileOptions& options)
 {
     const QFileInfo info(path);
@@ -74,6 +111,7 @@ TextFileResult readDetectedTextFile(const QString& path, const TextFileOptions& 
     content.byteSize = data.size();
     content.detectionScore = detection.score;
     content.detectionReliable = detection.reliable;
+    content.lineEndings = detectLineEndings(data);
 
     return TextFileResult::success(std::move(content));
 }
@@ -140,6 +178,7 @@ TextFileResult readTextFileWithEncoding(
     content.byteSize = data.size();
     content.detectionScore = 1000;  // user override is authoritative
     content.detectionReliable = true;
+    content.lineEndings = detectLineEndings(data);
 
     return TextFileResult::success(std::move(content));
 }
