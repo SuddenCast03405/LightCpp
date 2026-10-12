@@ -42,11 +42,20 @@ void skipSpaces(const std::string& s, size_t& pos)
 
 /// Match one of the severity words at `pos` (after optional "fatal ").
 /// Returns the LSP severity code (1 = error, 2 = warning) or 0 on no match.
+///
+/// The localized MSVC words (错误/警告, 致命错误) are matched on their UTF-8
+/// bytes: the App layer decodes console output to QString and hands lines
+/// over as UTF-8 std::string, so the byte sequences are stable regardless
+/// of the compiler's code page.
 int readSeverity(const std::string& s, size_t& pos)
 {
     static const char* kFatal = "fatal error";
     static const char* kError = "error";
     static const char* kWarning = "warning";
+    // Localized MSVC: "致命错误 Cxxxx:", "错误 Cxxxx:", "警告 Cxxxx:".
+    static const char* kFatalCn = "\xE8\x87\xB4\xE5\x91\xBD\xE9\x94\x99\xE8\xAF\xAF";   // 致命错误
+    static const char* kErrorCn = "\xE9\x94\x99\xE8\xAF\xAF";                           // 错误
+    static const char* kWarningCn = "\xE8\xAD\xA6\xE5\x91\x8A";                         // 警告
 
     const auto startsWith = [&s, &pos](const char* word) {
         const size_t len = std::char_traits<char>::length(word);
@@ -54,7 +63,8 @@ int readSeverity(const std::string& s, size_t& pos)
             return false;
         }
         // The word must end here (space, colon or end of line), so
-        // "errors" does not come back as "error".
+        // "errors" does not come back as "error" — and the multi-byte
+        // words do not splice into a longer run of bytes.
         const size_t after = pos + len;
         if (after < s.size() && s[after] != ' ' && s[after] != ':' && s[after] != '\t') {
             return false;
@@ -69,11 +79,23 @@ int readSeverity(const std::string& s, size_t& pos)
         return 1;
     }
     pos = start;
+    if (startsWith(kFatalCn)) {
+        return 1;
+    }
+    pos = start;
     if (startsWith(kError)) {
         return 1;
     }
     pos = start;
+    if (startsWith(kErrorCn)) {
+        return 1;
+    }
+    pos = start;
     if (startsWith(kWarning)) {
+        return 2;
+    }
+    pos = start;
+    if (startsWith(kWarningCn)) {
         return 2;
     }
     pos = start;
@@ -174,68 +196,75 @@ std::optional<CompilerDiagnostic> parseGnuStyle(const std::string& line)
 
 
 /// MSVC style: <file>(<line>[,<col>]): severity [Cxxxx]: <msg>.
+///
+/// The location parenthesis is scanned LEFT to RIGHT, taking the first one
+/// whose contents parse as "<digits>[,<digits>]": taking the LAST '(' used
+/// to derail as soon as the message itself contained a parenthesis
+/// ("error: 括号不匹配((" or an English "unmatched '('"), which every
+/// localized-vs-error line with a '(' in its text did.
 std::optional<CompilerDiagnostic> parseMsvcStyle(const std::string& line)
 {
-    const size_t open = line.rfind('(');
-    if (open == std::string::npos) {
-        return std::nullopt;
-    }
-    size_t pos = open + 1;
-    const int lineNo = readNumber(line, pos);
-    if (lineNo <= 0) {
-        return std::nullopt;
-    }
-    int columnNo = 0;
-    if (pos < line.size() && line[pos] == ',') {
+    for (size_t open = line.find('('); open != std::string::npos;
+         open = line.find('(', open + 1)) {
+        size_t pos = open + 1;
+        const int lineNo = readNumber(line, pos);
+        if (lineNo <= 0) {
+            continue;
+        }
+        int columnNo = 0;
+        if (pos < line.size() && line[pos] == ',') {
+            ++pos;
+            columnNo = readNumber(line, pos);
+            if (columnNo <= 0) {
+                continue;
+            }
+        }
+        if (pos >= line.size() || line[pos] != ')') {
+            continue;
+        }
         ++pos;
-        columnNo = readNumber(line, pos);
-        if (columnNo <= 0) {
-            return std::nullopt;
+        if (pos >= line.size() || line[pos] != ':') {
+            continue;
         }
-    }
-    if (pos >= line.size() || line[pos] != ')') {
-        return std::nullopt;
-    }
-    ++pos;
-    if (pos >= line.size() || line[pos] != ':') {
-        return std::nullopt;
-    }
-    ++pos;
-    skipSpaces(line, pos);
-    const int severity = readSeverity(line, pos);
-    if (severity == 0) {
-        return std::nullopt;
-    }
-    // Optional diagnostic code ("C2065"), then the ':' before the message.
-    skipSpaces(line, pos);
-    size_t codeEnd = pos;
-    while (codeEnd < line.size() && line[codeEnd] != ':'
-           && line[codeEnd] != ' ') {
-        ++codeEnd;
-    }
-    if (codeEnd < line.size() && line[codeEnd] == ':') {
-        // "error: msg" — the code run was empty; keep pos before the colon.
-        pos = codeEnd;
-    } else if (codeEnd > pos && codeEnd < line.size()
-               && line[codeEnd] == ' ') {
-        // A code word followed by ':' or more spaces — re-scan for ':'.
-        size_t scan = codeEnd;
-        skipSpaces(line, scan);
-        if (scan < line.size() && line[scan] == ':') {
-            pos = scan;
+        ++pos;
+        skipSpaces(line, pos);
+        const int severity = readSeverity(line, pos);
+        if (severity == 0) {
+            continue;
+        }
+        // Optional diagnostic code ("C2065" or the localized shape), then
+        // the ':' before the message.
+        skipSpaces(line, pos);
+        size_t codeEnd = pos;
+        while (codeEnd < line.size() && line[codeEnd] != ':'
+               && line[codeEnd] != ' ') {
+            ++codeEnd;
+        }
+        if (codeEnd < line.size() && line[codeEnd] == ':') {
+            // "error: msg" — the code run was empty; keep pos before the colon.
+            pos = codeEnd;
+        } else if (codeEnd > pos && codeEnd < line.size()
+                   && line[codeEnd] == ' ') {
+            // A code word followed by ':' or more spaces — re-scan for ':'.
+            size_t scan = codeEnd;
+            skipSpaces(line, scan);
+            if (scan < line.size() && line[scan] == ':') {
+                pos = scan;
+            } else {
+                continue;  // "warning something else" — not a report
+            }
         } else {
-            return std::nullopt;  // "warning something else" — not a report
+            continue;
         }
-    } else {
-        return std::nullopt;
+        size_t msgPos = pos + 1;
+        skipSpaces(line, msgPos);
+        if (msgPos >= line.size()) {
+            continue;
+        }
+        return makeLocated(line.substr(0, open), lineNo, columnNo, severity,
+                           line.substr(msgPos));
     }
-    size_t msgPos = pos + 1;
-    skipSpaces(line, msgPos);
-    if (msgPos >= line.size()) {
-        return std::nullopt;
-    }
-    return makeLocated(line.substr(0, open), lineNo, columnNo, severity,
-                       line.substr(msgPos));
+    return std::nullopt;
 }
 
 /// Driver level: <program>: error: <msg> (no source location).

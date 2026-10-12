@@ -140,15 +140,16 @@ CppSyntaxHighlighter::CppSyntaxHighlighter(QTextDocument* parent)
     r.format = funcFormat_;
     rules_.append(r);
 
-    // Double-quoted string
-    r.pattern = QRegularExpression(QStringLiteral(R"("(?:[^"\\]|\\.)*")"));
-    r.format = stringFormat_;
-    rules_.append(r);
+    // Double-quoted string and single-quoted char live in stringRules_,
+    // applied LAST so literal green wins over anything the word/number
+    // passes painted inside the literal.
+    Rule str;
+    str.pattern = QRegularExpression(QStringLiteral(R"("(?:[^"\\]|\\.)*")"));
+    str.format = stringFormat_;
+    stringRules_.append(str);
 
-    // Single-quoted char
-    r.pattern = QRegularExpression(QStringLiteral(R"('(?:[^'\\]|\\.)*')"));
-    r.format = stringFormat_;
-    rules_.append(r);
+    str.pattern = QRegularExpression(QStringLiteral(R"('(?:[^'\\]|\\.)*')"));
+    stringRules_.append(str);
 
     // TODO / FIXME / XXX / HACK markers. Applied separately at the END of
     // highlightBlock (after the comment passes) so they stay orange inside
@@ -188,6 +189,17 @@ void CppSyntaxHighlighter::highlightBlock(const QString& text)
         }
     }
 
+    // String and char literals last among the coloured passes: their green
+    // overwrites whatever the word/number/identifier rules painted inside
+    // the literal ("int", 0x41, size_t(...)).
+    for (const auto& rule : stringRules_) {
+        auto it = rule.pattern.globalMatch(text);
+        while (it.hasNext()) {
+            const QRegularExpressionMatch m = it.next();
+            setFormat(m.capturedStart(), m.capturedLength(), rule.format);
+        }
+    }
+
     // Multi-line comment: track state across blocks.
     setCurrentBlockState(0);
 
@@ -215,10 +227,26 @@ void CppSyntaxHighlighter::highlightBlock(const QString& text)
         }
     }
 
-    // Single-line comment //
+    // Single-line comment // — skipping every position inside a string or
+    // char literal, so "http://example.com" keeps its green instead of
+    // turning grey from the // in the URL onward.
+    QList<QRegularExpressionMatch> literals;
+    for (const auto& rule : stringRules_) {
+        auto litIt = rule.pattern.globalMatch(text);
+        while (litIt.hasNext()) {
+            literals.append(litIt.next());
+        }
+    }
+    const auto insideLiteral = [&literals](int pos) {
+        for (const QRegularExpressionMatch& m : literals) {
+            if (pos >= m.capturedStart() && pos < m.capturedEnd()) {
+                return true;
+            }
+        }
+        return false;
+    };
     for (int i = 0; i < text.length() - 1; ++i) {
-        if (text[i] == u'/' && text[i + 1] == u'/') {
-            // Don't override inside a string — but this is simple highlighter.
+        if (text[i] == u'/' && text[i + 1] == u'/' && !insideLiteral(i)) {
             setFormat(i, text.length() - i, commentFormat_);
             break;
         }

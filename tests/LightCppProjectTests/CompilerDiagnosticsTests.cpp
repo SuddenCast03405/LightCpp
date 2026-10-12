@@ -163,3 +163,65 @@ TEST(CompilerDiagnostics, GnuLinesThatAreNotReports)
 }
 
 }  // namespace
+
+// --- localized MSVC output ----------------------------------------------
+
+TEST(CompilerDiagnostics, ChineseMsvcErrorParses)
+{
+    // A localized Visual Studio prints 错误/警告 instead of error/warning;
+    // the bytes arrive as UTF-8 (the console decoder already normalized).
+    // "错误" = E9 94 99 E8 AF AF, "警告" = E8 AD A6 E5 91 8A.
+    const std::string line =
+        "E:/proj/main.cpp(12,5): \xE9\x94\x99\xE8\xAF\xAF C2065: "
+        "\xE6\x9C\xAA\xE5\xA3\xB0\xE6\x98\x8E";   // 未声明
+    const auto d = parseCompilerDiagnostic(line);
+    ASSERT_TRUE(d.has_value());
+    EXPECT_EQ(d->file, "E:/proj/main.cpp");
+    EXPECT_EQ(d->line, 11);
+    EXPECT_EQ(d->column, 4);
+    EXPECT_EQ(d->severity, 1);
+}
+
+TEST(CompilerDiagnostics, ChineseMsvcWarningParses)
+{
+    const std::string line =
+        "main.cpp(7): \xE8\xAD\xA6\xE5\x91\x8A C4101: unused";
+    const auto d = parseCompilerDiagnostic(line);
+    ASSERT_TRUE(d.has_value());
+    EXPECT_EQ(d->severity, 2);
+    EXPECT_EQ(d->line, 6);
+}
+
+TEST(CompilerDiagnostics, ChineseMsvcFatalErrorParses)
+{
+    // 致命错误 = fatal error
+    const std::string line =
+        "main.cpp(3): \xE8\x87\xB4\xE5\x91\xBD\xE9\x94\x99\xE8\xAF\xAF C1083: nope";
+    const auto d = parseCompilerDiagnostic(line);
+    ASSERT_TRUE(d.has_value());
+    EXPECT_EQ(d->severity, 1);
+}
+
+TEST(CompilerDiagnostics, MsvcLineWithParenthesisInTheMessage)
+{
+    // The LAST '(' in the line is inside the message; the location
+    // parenthesis is the first one whose contents parse as numbers.
+    const auto d = parseCompilerDiagnostic(
+        "main.cpp(4): error C2059: syntax error: unmatched '('");
+    ASSERT_TRUE(d.has_value());
+    EXPECT_EQ(d->file, "main.cpp");
+    EXPECT_EQ(d->line, 3);
+    EXPECT_EQ(d->severity, 1);
+}
+
+TEST(CompilerDiagnostics, MsvcLineWithParenthesisInPath)
+{
+    // Parenthesised directories ("Program Files (x86)") stay intact.
+    const auto d = parseCompilerDiagnostic(
+        "E:/Tools (x86)/proj/main.cpp(9,2): error C2143: missing ';'");
+    ASSERT_TRUE(d.has_value());
+    EXPECT_EQ(d->file, "E:/Tools (x86)/proj/main.cpp");
+    EXPECT_EQ(d->line, 8);
+    EXPECT_EQ(d->column, 1);
+}
+
