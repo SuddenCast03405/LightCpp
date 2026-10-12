@@ -5,6 +5,7 @@
 #include <QDomElement>
 #include <QFile>
 #include <QFileInfo>
+#include <QSet>
 
 #include <functional>
 
@@ -101,6 +102,54 @@ bool conditionMatches(const QString& condition, const MsvcConfiguration& config)
     return condition.contains(wanted);
 }
 
+/// True when an MSBuild condition names at least one of the project's known
+/// configurations. Matched textually, like conditionMatches(), but loose on
+/// the platform half: conditions that only compare $(Configuration) are
+/// common enough to warrant the second shape. Used to decide whether a
+/// conditioned ItemGroup or a conditioned ExcludedFromBuild child still
+/// describes the default compile set.
+bool conditionMentionsAnyConfiguration(const QString& condition,
+                                       const MsvcProject& project)
+{
+    for (const MsvcConfiguration& config : project.configurations) {
+        if (condition.contains(
+                QStringLiteral("=='%1|%2'").arg(config.name, config.platform))
+            || condition.contains(
+                QStringLiteral("=='%1'").arg(config.name))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// True when the ExcludedFromBuild child of a ClCompile/ResourceCompile
+/// element turns compilation off for the whole project as this model can
+/// tell: a true value without a condition excludes everywhere, and a
+/// condition that names no known configuration is treated the same way.
+/// A condition that keeps the file in at least one configuration leaves it
+/// in the compile list — msbuild evaluates the real condition during the
+/// build, the model only has to keep the tree and the unit counts sane.
+bool excludedFromBuildEverywhere(const QDomElement& node,
+                                 const MsvcProject& project)
+{
+    for (QDomElement excluded = node.firstChildElement(
+             QStringLiteral("ExcludedFromBuild"));
+         !excluded.isNull();
+         excluded = excluded.nextSiblingElement(
+             QStringLiteral("ExcludedFromBuild"))) {
+        const QString value = excluded.text().trimmed().toLower();
+        if (value != QLatin1String("true") && value != QLatin1String("1")) {
+            continue;
+        }
+        const QString condition = excluded.attribute(QStringLiteral("Condition"));
+        if (condition.isEmpty()
+            || !conditionMentionsAnyConfiguration(condition, project)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 QStringList splitSemicolonList(const QString& value)
 {
     QStringList parts = value.split(QLatin1Char(';'), Qt::SkipEmptyParts);
@@ -133,8 +182,20 @@ void readVcxprojPropertyGroup(const QDomElement& group,
 }
 
 /// Reads an ItemGroup that lists files (ClCompile/ClInclude/...).
-void readVcxprojFileGroup(const QDomElement& group, MsvcProject& project)
+///
+/// `groupCondition` is the ItemGroup's own Condition attribute, empty when
+/// none. A condition naming none of the project's configurations demotes the
+/// group's compilable files to otherFiles: they stay visible in the tree but
+/// must not inflate the compile list. Files already listed elsewhere are
+/// skipped — the same file regularly appears in an unconditioned group and
+/// again in a conditioned one, and the duplicate used to be counted (and
+/// shown) twice.
+void readVcxprojFileGroup(const QDomElement& group, const QString& groupCondition,
+                          MsvcProject& project, QSet<QString>& seenPaths)
 {
+    const bool groupBuildsNowhere =
+        !groupCondition.isEmpty()
+        && !conditionMentionsAnyConfiguration(groupCondition, project);
     for (QDomElement node = group.firstChildElement(); !node.isNull();
          node = node.nextSiblingElement()) {
         const QString include = node.attribute(QStringLiteral("Include"));
@@ -144,7 +205,7 @@ void readVcxprojFileGroup(const QDomElement& group, MsvcProject& project)
         // A single Include= may list several files separated by ';'.
         const QStringList listed = include.split(QLatin1Char(';'), Qt::SkipEmptyParts);
         for (const QString& entry : listed) {
-            const FileSlot slot = [&node, &entry] {
+            FileSlot slot = [&node, &entry] {
                 if (node.tagName() == QLatin1String("ClCompile")) {
                     return FileSlot::Source;
                 }
@@ -156,8 +217,20 @@ void readVcxprojFileGroup(const QDomElement& group, MsvcProject& project)
                 }
                 return slotForFile(entry);
             }();
-            appendProjectFile(project, slot,
-                              resolveFilePath(project.projectDir, entry.trimmed()));
+            const QString path =
+                resolveFilePath(project.projectDir, entry.trimmed());
+            if (seenPaths.contains(path)) {
+                continue;  // the other spelling already covered this file
+            }
+            seenPaths.insert(path);
+            // ExcludedFromBuild (and a group condition nothing matches) keep
+            // the file in the tree but out of the compile set.
+            if ((slot == FileSlot::Source || slot == FileSlot::Resource)
+                && (groupBuildsNowhere
+                    || excludedFromBuildEverywhere(node, project))) {
+                slot = FileSlot::Other;
+            }
+            appendProjectFile(project, slot, path);
         }
     }
 }
@@ -219,6 +292,11 @@ std::optional<MsvcProject> parseVcxproj(const QString& filePath,
     // fallback.
     QString namespaceFallback;
 
+    // Every listed file, absolute — dedup across the whole project, since
+    // the same path can arrive from an unconditioned group and a
+    // conditioned one (or twice in one list).
+    QSet<QString> seenPaths;
+
     // Two passes: the configurations must be known before the conditioned
     // PropertyGroups are matched against them, and nothing in the format
     // guarantees the ProjectConfigurations group comes first.
@@ -258,7 +336,9 @@ std::optional<MsvcProject> parseVcxproj(const QString& filePath,
             }
         } else if (group.tagName() == QLatin1String("ItemGroup")
                    && !isConfigurationsGroup(group)) {
-            readVcxprojFileGroup(group, project);
+            readVcxprojFileGroup(group,
+                                 group.attribute(QStringLiteral("Condition")),
+                                 project, seenPaths);
         }
     }
 
@@ -328,8 +408,11 @@ std::optional<MsvcProject> parseVcproj(const QString& filePath,
     }
 
     // <Files> nests <Filter> directories with <File RelativePath="...">.
+    // The same relative path can arrive twice (a file listed inside two
+    // filters); count and show it once.
+    QSet<QString> seenPaths;
     const std::function<void(const QDomElement&)> readFiles =
-        [&project, &readFiles](const QDomElement& parent) {
+        [&project, &readFiles, &seenPaths](const QDomElement& parent) {
             for (QDomElement node = parent.firstChildElement(); !node.isNull();
                  node = node.nextSiblingElement()) {
                 if (node.tagName() == QLatin1String("Filter")) {
@@ -337,10 +420,14 @@ std::optional<MsvcProject> parseVcproj(const QString& filePath,
                 } else if (node.tagName() == QLatin1String("File")) {
                     const QString relative =
                         node.attribute(QStringLiteral("RelativePath"));
-                    if (!relative.isEmpty()) {
-                        appendProjectFile(
-                            project, slotForFile(relative),
-                            resolveFilePath(project.projectDir, relative.trimmed()));
+                    if (relative.isEmpty()) {
+                        continue;
+                    }
+                    const QString path = resolveFilePath(
+                        project.projectDir, relative.trimmed());
+                    if (!seenPaths.contains(path)) {
+                        seenPaths.insert(path);
+                        appendProjectFile(project, slotForFile(relative), path);
                     }
                 }
             }

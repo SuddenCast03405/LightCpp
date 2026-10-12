@@ -438,3 +438,123 @@ TEST(MsvcProject, GbkEncodedVcprojDecodesItsName)
     // FromUtf8 would have produced U+FFFD mush here.
     EXPECT_EQ(project->name, QStringLiteral("\x9879\x76EE" "1"));
 }
+
+// --- ExcludedFromBuild / conditioned groups / duplicates ----------------
+
+/// Two configurations (Debug|Win32, Release|Win32), one plain source and
+/// room for the conditioned shapes under test.
+const char* kVcxprojTwoConfigs =
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+    "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n"
+    "  <ItemGroup Label=\"ProjectConfigurations\">\n"
+    "    <ProjectConfiguration Include=\"Debug|Win32\">\n"
+    "      <Configuration>Debug</Configuration>\n"
+    "      <Platform>Win32</Platform>\n"
+    "    </ProjectConfiguration>\n"
+    "    <ProjectConfiguration Include=\"Release|Win32\">\n"
+    "      <Configuration>Release</Configuration>\n"
+    "      <Platform>Win32</Platform>\n"
+    "    </ProjectConfiguration>\n"
+    "  </ItemGroup>\n"
+    "%1"
+    "</Project>\n";
+
+TEST(MsvcProject, VcxprojDropsSourcesExcludedFromEveryConfiguration)
+{
+    const QString xml = QString(kVcxprojTwoConfigs).arg(
+        "  <ItemGroup>\n"
+        "    <ClCompile Include=\"main.cpp\" />\n"
+        "    <ClCompile Include=\"generated.cpp\">\n"
+        "      <ExcludedFromBuild>true</ExcludedFromBuild>\n"
+        "    </ClCompile>\n"
+        "  </ItemGroup>\n");
+    const auto project = parseVcxproj(xml.toUtf8().constData());
+    ASSERT_TRUE(project.has_value()) << lastError.toStdString();
+    EXPECT_EQ(project->sourceFiles,
+              QStringList({QStringLiteral("E:/proj/main.cpp")}));
+    // Still visible in the tree, just not counted as a compile unit.
+    EXPECT_EQ(project->otherFiles,
+              QStringList({QStringLiteral("E:/proj/generated.cpp")}));
+}
+
+TEST(MsvcProject, VcxprojKeepsPartiallyExcludedSources)
+{
+    // Excluded only for Debug: the file still builds in Release, so the
+    // model keeps it in the compile list (msbuild evaluates the real
+    // condition; this model only must not over-exclude).
+    const QString xml = QString(kVcxprojTwoConfigs).arg(
+        "  <ItemGroup>\n"
+        "    <ClCompile Include=\"main.cpp\" />\n"
+        "    <ClCompile Include=\"gui.cpp\">\n"
+        "      <ExcludedFromBuild "
+        "Condition=\"'$(Configuration)|$(Platform)'=='Debug|Win32'\">true"
+        "</ExcludedFromBuild>\n"
+        "    </ClCompile>\n"
+        "  </ItemGroup>\n");
+    const auto project = parseVcxproj(xml.toUtf8().constData());
+    ASSERT_TRUE(project.has_value()) << lastError.toStdString();
+    EXPECT_TRUE(project->sourceFiles.contains(QStringLiteral("E:/proj/gui.cpp")));
+    EXPECT_TRUE(project->otherFiles.isEmpty());
+}
+
+TEST(MsvcProject, VcxprojDeduplicatesFilesAcrossGroups)
+{
+    // The same file listed in an unconditioned group and again in a
+    // conditioned one - the duplicate used to be counted and shown twice.
+    const QString xml = QString(kVcxprojTwoConfigs).arg(
+        "  <ItemGroup>\n"
+        "    <ClCompile Include=\"main.cpp\" />\n"
+        "  </ItemGroup>\n"
+        "  <ItemGroup>\n"
+        "    <ClCompile Include=\"main.cpp\" />\n"
+        "    <ClCompile Include=\"util.cpp\" />\n"
+        "  </ItemGroup>\n");
+    const auto project = parseVcxproj(xml.toUtf8().constData());
+    ASSERT_TRUE(project.has_value()) << lastError.toStdString();
+    EXPECT_EQ(project->sourceFiles.size(), 2);
+    EXPECT_EQ(project->sourceFiles.count(QStringLiteral("E:/proj/main.cpp")), 1);
+}
+
+TEST(MsvcProject, VcxprojConditionedGroupMatchingNoConfiguration)
+{
+    // A condition nothing selects (a tool-specific property) must not
+    // inflate the compile list; the files stay visible in the tree.
+    const QString xml = QString(kVcxprojTwoConfigs).arg(
+        "  <ItemGroup>\n"
+        "    <ClCompile Include=\"main.cpp\" />\n"
+        "  </ItemGroup>\n"
+        "  <ItemGroup Condition=\"'$(VisualStudioVersion)'=='16.0'\">\n"
+        "    <ClCompile Include=\"v16only.cpp\" />\n"
+        "  </ItemGroup>\n"
+        "  <ItemGroup Condition=\"'$(Configuration)|$(Platform)'=='Release|Win32'\">\n"
+        "    <ClCompile Include=\"reonly.cpp\" />\n"
+        "  </ItemGroup>\n");
+    const auto project = parseVcxproj(xml.toUtf8().constData());
+    ASSERT_TRUE(project.has_value()) << lastError.toStdString();
+    EXPECT_EQ(project->sourceFiles.size(), 2);
+    EXPECT_TRUE(project->sourceFiles.contains(QStringLiteral("E:/proj/reonly.cpp")));
+    EXPECT_EQ(project->otherFiles,
+              QStringList({QStringLiteral("E:/proj/v16only.cpp")}));
+}
+
+TEST(MsvcProject, VcprojDeduplicatesFilesAcrossFilters)
+{
+    const auto project = parseVcproj(
+        "<?xml version=\"1.0\" encoding=\"gb2312\"?>\n"
+        "<VisualStudioProject Name=\"hello\">\n"
+        "  <Configurations>\n"
+        "    <Configuration Name=\"Debug|Win32\" ConfigurationType=\"1\" />\n"
+        "  </Configurations>\n"
+        "  <Files>\n"
+        "    <Filter Name=\"Source Files\">\n"
+        "      <File RelativePath=\".\\main.cpp\" />\n"
+        "    </Filter>\n"
+        "    <Filter Name=\"Helper\">\n"
+        "      <File RelativePath=\"main.cpp\" />\n"
+        "    </Filter>\n"
+        "  </Files>\n"
+        "</VisualStudioProject>\n");
+    ASSERT_TRUE(project.has_value()) << lastError.toStdString();
+    EXPECT_EQ(project->sourceFiles.size(), 1);
+}
+

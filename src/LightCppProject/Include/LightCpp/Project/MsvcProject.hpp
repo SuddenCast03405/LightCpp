@@ -67,8 +67,11 @@ struct MsvcProject {
 
     QList<MsvcConfiguration> configurations;
 
-    /// Absolute paths. Resource files are .rc scripts (compiled by rc.exe);
-    /// anything neither compilable nor a header lands in otherFiles.
+    /// Absolute paths, deduplicated across the whole project. Resource
+    /// files are .rc scripts (compiled by rc.exe); anything neither
+    /// compilable nor a header lands in otherFiles — including sources the
+    /// file excludes from every configuration via ExcludedFromBuild, which
+    /// stay visible in the tree without inflating the compile count.
     QStringList sourceFiles;
     QStringList headerFiles;
     QStringList resourceFiles;
