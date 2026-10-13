@@ -42,9 +42,11 @@ enum class LineEnding {
 
 /// Count the line endings in the bytes and report the dominant style.
 ///
-/// A lone \r (classic Mac, essentially extinct) is ignored. Ties and
-/// newline-free content report None, meaning "no evidence" — callers fall
-/// back to their own default rather than guessing from nothing.
+/// A lone \r (classic Mac, essentially extinct) is ignored. Content with no
+/// newline at all reports None, meaning "no evidence" — callers fall back to
+/// their own default rather than guessing from nothing. A tie between LF and
+/// CRLF reports Lf: rewriting to CRLF would add a byte to every line, so the
+/// less destructive answer wins.
 [[nodiscard]] LineEnding detectLineEndings(QByteArrayView bytes) noexcept;
 
 /// Payload of a successful read.

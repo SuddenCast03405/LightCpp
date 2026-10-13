@@ -73,15 +73,19 @@ void parseBranchHeader(const QString& header, GitStatusSummary& summary)
         summary.detached = true;
         return;
     }
-    // A repository with no commits yet still names the branch it is on.
+    // A repository with no commits yet still names the branch it is on, and
+    // can name its upstream too ("No commits yet on main...origin/main"), so
+    // the prefix comes off here and the shared split below does the rest.
+    // Returning early with the whole remainder used to leak "...origin/main"
+    // into the branch name and leave the upstream empty.
     static const QStringList unbornPrefixes = {
         QStringLiteral("No commits yet on "),
         QStringLiteral("Initial commit on "),
     };
     for (const QString& prefix : unbornPrefixes) {
         if (refs.startsWith(prefix)) {
-            summary.branch = refs.mid(prefix.size());
-            return;
+            refs = refs.mid(prefix.size());
+            break;
         }
     }
     const qsizetype dots = refs.indexOf(QStringLiteral("..."));

@@ -276,7 +276,8 @@ MainWindow::MainWindow(QWidget* parent)
     // the configured backend: Clangd Output, ccls Output or libclang Output.
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverLog, this,
             [this](const QString& text) { appendServerProcessLog(text); });
-    connect(lsp_, &LightCpp::App::LanguageServerClient::serverStarted, [this] {
+    connect(lsp_, &LightCpp::App::LanguageServerClient::serverStarted, this,
+            [this] {
         appendServerProcessLog(tr("language server started"));
         // Open the documents that are already in tabs. Use lintPath so
         // unsaved (untitled) buffers get their virtual path pushed too.
@@ -626,7 +627,7 @@ MainWindow::MainWindow(QWidget* parent)
         outputPanel_->appendDebugOutput(text);
         debugger_->writeCommand(text);
     });
-    connect(tabWidget_, &QTabWidget::currentChanged, [this](int) {
+    connect(tabWidget_, &QTabWidget::currentChanged, this, [this](int) {
         // Whatever made this tab current — opening a file, switching or
         // closing tabs — the git pane must follow the active file, or a
         // non-repository directory keeps showing the previous repo's branch.
@@ -1383,22 +1384,29 @@ void MainWindow::loadPlugins()
     // Finish uninstalling what had to be deferred last run: the locked dll
     // of a plugin that was uninstalled while the IDE was still using it.
     // Now, before anything is loaded, the file is free to delete.
+    //
+    // The survivors go into a second list instead of erasing from the one
+    // being iterated: a range-for holds a const iterator, and removeAll()
+    // invalidates it — undefined behaviour on a path that is only ever taken
+    // after a plugin was uninstalled while in use, which is why it never
+    // showed up in testing.
     QStringList pending = prefs.pendingPluginDeletes;
+    QStringList stillPending;
     for (const QString& rel : std::as_const(pending)) {
         const QString absolute = QDir(pluginDir).filePath(rel);
         if (QFile::remove(absolute)) {
-            pending.removeAll(rel);
             outputPanel_->appendPluginOutput(
                 tr("Deleted on start-up as requested earlier: %1")
                     .arg(rel));
         } else {
+            stillPending.append(rel);
             outputPanel_->appendPluginOutput(
                 tr("Still cannot delete (will retry next start): %1")
                     .arg(rel));
         }
     }
-    if (pending.size() != prefs.pendingPluginDeletes.size()) {
-        persistPluginLists(prefs.disabledPlugins, pending);
+    if (stillPending.size() != prefs.pendingPluginDeletes.size()) {
+        persistPluginLists(prefs.disabledPlugins, stillPending);
     }
 
     // Split the disable list by kind: shared plugins match by bare file
@@ -2385,7 +2393,10 @@ void MainWindow::createActions()
 
     actRunProject_ = new QAction(QIcon::fromTheme(QStringLiteral("media-playback-start")),
                                  tr("Run Pro&ject"), this);
-    actRunProject_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+F5")));
+    // F6, not Ctrl+Shift+F5: that one is already Stop Debugging, and two
+    // actions on the same key means neither works reliably — the menu shows
+    // the same shortcut twice and which one fires depends on enable state.
+    actRunProject_->setShortcut(QKeySequence(Qt::Key_F6));
     actRunProject_->setStatusTip(
         tr("Run the executable the last project build produced"));
     connect(actRunProject_, &QAction::triggered, this, &MainWindow::onRunProject);
@@ -3559,9 +3570,16 @@ void MainWindow::showSymbolSearch()
     if (ed == nullptr) {
         return;
     }
-    if (outlineEntries_.isEmpty()) {
-        // Nothing cached yet (server down, non-C++ file, or the answer has
-        // not arrived): ask once and let the user retry in a moment.
+    // The cache holds one file's symbols, and after a tab switch it still
+    // describes the file that was active when the answer arrived. Listing
+    // those used to send the caret of the file on screen to a line that means
+    // nothing there, so the cache is only used when it is this file's.
+    const bool cacheMatchesEditor =
+        !ed->lintPath().isEmpty() && ed->lintPath() == outlineFilePath_;
+    if (!cacheMatchesEditor) {
+        // Nothing usable cached (another file's symbols, a stale file, or the
+        // answer has not arrived): ask once and let the user retry in a
+        // moment rather than answer with somebody else's outlines.
         requestOutline();
     }
 
@@ -3578,6 +3596,20 @@ void MainWindow::showSymbolSearch()
     auto* list = new QListWidget(dialog);
     list->setUniformItemSizes(true);
     layout->addWidget(list, 1);
+
+    if (!cacheMatchesEditor) {
+        // Say what is happening instead of presenting an empty box: the
+        // first Ctrl+Shift+O after a tab switch lands here.
+        const QString message = isCppLikeFile(ed->lintPath())
+            ? tr("Reading symbols for %1 — press Ctrl+Shift+O again in a "
+                 "moment.")
+                  .arg(tabTitleFor(ed))
+            : tr("No symbol outline for this kind of file.");
+        auto* pending = new QListWidgetItem(message, list);
+        pending->setFlags(Qt::NoItemFlags);
+        dialog->show();
+        return;
+    }
 
     for (const OutlineEntry& entry : outlineEntries_) {
         QString label = entry.name;
@@ -3768,6 +3800,17 @@ void MainWindow::renameSymbolAtCursor()
     const int reqId = lsp_->requestRename(lintPath, line, column, newName);
     if (reqId > 0) {
         latestRenameRequestId_ = reqId;
+    } else {
+        // 0 means the request never went out — the handshake has not finished,
+        // the document is not open, or the server is down. Dropping that made
+        // the prompt a dead end: it closed and nothing else happened, with no
+        // hint that the rename was never attempted.
+        appendServerProcessLog(
+            tr("Rename was not requested: the language server is not ready."));
+        statusBar()->showMessage(
+            tr("Rename needs a running language server — see the language "
+               "server output."),
+            6000);
     }
 }
 
@@ -3795,6 +3838,15 @@ void MainWindow::requestQuickFix()
         lintPath, caretLine, ed->textCursor().positionInBlock(), nearby);
     if (reqId > 0) {
         latestCodeActionRequestId_ = reqId;
+    } else {
+        // Same dead end as Rename: the menu item is enabled, so the user is
+        // entitled to know the request was never sent.
+        appendServerProcessLog(tr(
+            "Quick fixes were not requested: the language server is not ready."));
+        statusBar()->showMessage(
+            tr("Quick fixes need a running language server — see the language "
+               "server output."),
+            6000);
     }
 }
 
@@ -3846,7 +3898,7 @@ CodeEditor* MainWindow::createEditorTab(const QString& title)
         }
     });
 
-    connect(editor, &QPlainTextEdit::textChanged, [this, editor]() {
+    connect(editor, &QPlainTextEdit::textChanged, this, [this, editor]() {
         // Debounce a didChange notification to the language server.
         scheduleLint(editor);
     });
@@ -6085,8 +6137,14 @@ void MainWindow::onStopProgram()
         runner_->kill();
     }
     if (terminalRunning) {
-        outputPanel_->showChannel(
-            static_cast<OutputPanel::Channel>(terminalChannel_));
+        // Show the terminal page before reporting, or the stop message lands
+        // in a channel nobody is looking at. terminalChannel_ is filled in
+        // when the embedded session opens its channel; -1 means no session
+        // ever opened one, in which case there is nothing to switch to.
+        if (terminalChannel_ >= 0) {
+            outputPanel_->showChannel(
+                static_cast<OutputPanel::Channel>(terminalChannel_));
+        }
         outputPanel_->appendTerminalOutput(tr("--- Stopping terminal ---\n"));
         terminalRunner_->kill();
     }
@@ -6450,10 +6508,10 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
             return;
         }
         if (!shellUp) {
-            outputPanel_->openTerminalChannel(terminalLabel);
+            terminalChannel_ = outputPanel_->openTerminalChannel(terminalLabel);
         } else {
             // Reusing the session: keep the previous output visible.
-            outputPanel_->openTerminalChannel(terminalLabel, false);
+            terminalChannel_ = outputPanel_->openTerminalChannel(terminalLabel, false);
         }
         QProcess* runner = ensureTerminalRunner();
         // A PowerShell-style template ends in -Command/-c, which needs a
@@ -7096,11 +7154,13 @@ void MainWindow::applyPreferences()
         programOutputMode_ == QLatin1String("program"));
 
     // --- language service: completion backend -----------------------------
+    // Captured before the new value lands, not after: comparing the setting
+    // with itself is how the "backend changed" receipt below never fired.
+    const QString previousBackend = completionBackend_;
     completionBackend_ = prefs.completion.backend.isEmpty()
         ? QStringLiteral("clangd") : prefs.completion.backend;
     completionRetryCount_ = qMax(0, prefs.completion.retryCount);
     completionAttempts_ = 0;
-    const QString previousBackend = completionBackend_;
     if (completionBackend_ == QStringLiteral("libclang")) {
         if (libClang_ != nullptr && !libClang_->isLoaded()) {
             const QString libPath = resolveLibClangPath();

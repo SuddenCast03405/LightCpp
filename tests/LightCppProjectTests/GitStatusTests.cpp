@@ -132,6 +132,27 @@ TEST(GitStatus, UnbornBranchHasANameButNoUpstream)
     EXPECT_FALSE(status.detached);
 }
 
+TEST(GitStatus, UnbornBranchCanStillNameItsUpstream)
+{
+    // git prints the tracking relation for an unborn branch too when the
+    // config already points at a remote. Treating that as "just a name"
+    // leaked the upstream into the branch ("main...origin/main") and left the
+    // upstream empty, so the status bar showed a branch that does not exist.
+    const GitStatusSummary status =
+        parse("## No commits yet on main...origin/main\n"
+              "?? a.txt\n");
+    EXPECT_EQ(status.branch, QStringLiteral("main"));
+    EXPECT_EQ(status.upstream, QStringLiteral("origin/main"));
+    EXPECT_FALSE(status.detached);
+
+    // Same for the other wording of the same state.
+    const GitStatusSummary initial =
+        parse("## Initial commit on trunk...origin/trunk [ahead 1]\n");
+    EXPECT_EQ(initial.branch, QStringLiteral("trunk"));
+    EXPECT_EQ(initial.upstream, QStringLiteral("origin/trunk"));
+    EXPECT_EQ(initial.ahead, 1);
+}
+
 TEST(GitStatus, BranchWithoutUpstream)
 {
     const GitStatusSummary status = parse("## feature/x\n");

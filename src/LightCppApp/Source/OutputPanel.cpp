@@ -341,10 +341,12 @@ void OutputPanel::showChannel(Channel channel)
 
 void OutputPanel::setOutputFont(const QFont& font)
 {
-    // The four log channels plus the Problems tree — everything the output
-    // area renders. An empty family means "reset to the application font"
-    // (the built-in default), which is what the caller sends when the user
-    // un-picks a custom output font; a named font must carry a size.
+    // Every log channel plus the Problems tree — everything the output area
+    // renders. Leaving one out is not harmless: the pane simply keeps the
+    // old font, which looks like the setting "mostly works". An empty family
+    // means "reset to the application font" (the built-in default), which is
+    // what the caller sends when the user un-picks a custom output font; a
+    // named font must carry a size.
     if (!font.family().isEmpty() && font.pointSizeF() <= 0) {
         return;
     }
@@ -354,6 +356,8 @@ void OutputPanel::setOutputFont(const QFont& font)
     gitLog_->setFont(font);
     debugLog_->setFont(font);
     pluginLog_->setFont(font);
+    cclsLog_->setFont(font);
+    libClangLog_->setFont(font);
     if (terminalLog_ != nullptr) {
         terminalLog_->setFont(font);
     }
