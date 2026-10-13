@@ -40,6 +40,52 @@ void skipSpaces(const std::string& s, size_t& pos)
     }
 }
 
+/// After a severity word, skip spaces past an optional diagnostic code and
+/// return the position of the ':' that introduces the message, or npos when
+/// the shape is not "<code>: <msg>" / ": <msg>".
+///
+/// Handles both "error: msg" (no code) and "error LNK2019: msg" /
+/// "error C2065: msg" (a code word before the colon), which both the MSVC
+/// and the driver-level forms need.
+size_t skipCodeToColon(const std::string& s, size_t pos)
+{
+    skipSpaces(s, pos);
+    size_t codeEnd = pos;
+    while (codeEnd < s.size() && s[codeEnd] != ':' && s[codeEnd] != ' ') {
+        ++codeEnd;
+    }
+    if (codeEnd < s.size() && s[codeEnd] == ':') {
+        return codeEnd;  // ": msg" — the code run was empty
+    }
+    if (codeEnd > pos && codeEnd < s.size() && s[codeEnd] == ' ') {
+        size_t scan = codeEnd;
+        skipSpaces(s, scan);
+        if (scan < s.size() && s[scan] == ':') {
+            return scan;
+        }
+    }
+    return std::string::npos;
+}
+
+/// Drop msbuild's console-logger line prefix ("<project number>>"), which is
+/// "1>" for a single-project build. msbuild prints every line through it, so
+/// a diagnostic arrives as "1>main.cpp(10): error C2065: ..." — left in place
+/// the "1>" becomes part of the file name, the Problems entry reads
+/// "1>main.cpp" and the double-click cannot open it (or opens an empty tab).
+/// A line that starts with digits is only stripped when a '>' actually
+/// follows, so "3:x.cpp..." (a line number, not a prefix) is untouched.
+[[nodiscard]] std::string stripBuildToolPrefix(const std::string& line)
+{
+    size_t i = 0;
+    while (i < line.size() && isDigit(line[i])) {
+        ++i;
+    }
+    if (i > 0 && i < line.size() && line[i] == '>') {
+        return line.substr(i + 1);
+    }
+    return line;
+}
+
 /// Match one of the severity words at `pos` (after optional "fatal ").
 /// Returns the LSP severity code (1 = error, 2 = warning) or 0 on no match.
 ///
@@ -233,29 +279,13 @@ std::optional<CompilerDiagnostic> parseMsvcStyle(const std::string& line)
             continue;
         }
         // Optional diagnostic code ("C2065" or the localized shape), then
-        // the ':' before the message.
-        skipSpaces(line, pos);
-        size_t codeEnd = pos;
-        while (codeEnd < line.size() && line[codeEnd] != ':'
-               && line[codeEnd] != ' ') {
-            ++codeEnd;
-        }
-        if (codeEnd < line.size() && line[codeEnd] == ':') {
-            // "error: msg" — the code run was empty; keep pos before the colon.
-            pos = codeEnd;
-        } else if (codeEnd > pos && codeEnd < line.size()
-                   && line[codeEnd] == ' ') {
-            // A code word followed by ':' or more spaces — re-scan for ':'.
-            size_t scan = codeEnd;
-            skipSpaces(line, scan);
-            if (scan < line.size() && line[scan] == ':') {
-                pos = scan;
-            } else {
-                continue;  // "warning something else" — not a report
-            }
-        } else {
+        // the ':' before the message. An unrecognised code word
+        // ("warning something else") means this is not a report line.
+        const size_t colon = skipCodeToColon(line, pos);
+        if (colon == std::string::npos) {
             continue;
         }
+        pos = colon;
         size_t msgPos = pos + 1;
         skipSpaces(line, msgPos);
         if (msgPos >= line.size()) {
@@ -274,7 +304,17 @@ std::optional<CompilerDiagnostic> parseDriverStyle(const std::string& line)
     if (sep == std::string::npos) {
         return std::nullopt;
     }
-    const std::string program = line.substr(0, sep);
+    // Trim the surroundings: GNU linker output writes "main.obj : error
+    // LNK2019: ..." with a space before the colon, and the trailing space made
+    // looksLikeDriverName reject it — so a link failure produced no Problems
+    // entry at all ("0 errors" while the build was red).
+    std::string program = line.substr(0, sep);
+    const size_t firstNonSpace = program.find_first_not_of(" \t");
+    const size_t lastNonSpace = program.find_last_not_of(" \t");
+    if (firstNonSpace == std::string::npos) {
+        return std::nullopt;
+    }
+    program = program.substr(firstNonSpace, lastNonSpace - firstNonSpace + 1);
     if (!looksLikeDriverName(program)) {
         return std::nullopt;
     }
@@ -283,10 +323,13 @@ std::optional<CompilerDiagnostic> parseDriverStyle(const std::string& line)
     if (severity == 0) {
         return std::nullopt;
     }
-    if (pos >= line.size() || line[pos] != ':') {
+    // Optional diagnostic code between the severity and the ':'
+    // ("main.obj : error LNK2019: ..."), the same shape the MSVC form uses.
+    const size_t colon = skipCodeToColon(line, pos);
+    if (colon == std::string::npos) {
         return std::nullopt;
     }
-    size_t msgPos = pos + 1;
+    size_t msgPos = colon + 1;
     skipSpaces(line, msgPos);
     if (msgPos >= line.size()) {
         return std::nullopt;
@@ -308,13 +351,14 @@ parseCompilerDiagnostic(const std::string& line)
     if (line.empty()) {
         return std::nullopt;
     }
-    if (auto d = parseGnuStyle(line)) {
+    const std::string stripped = stripBuildToolPrefix(line);
+    if (auto d = parseGnuStyle(stripped)) {
         return d;
     }
-    if (auto d = parseMsvcStyle(line)) {
+    if (auto d = parseMsvcStyle(stripped)) {
         return d;
     }
-    return parseDriverStyle(line);
+    return parseDriverStyle(stripped);
 }
 
 }  // namespace LightCpp::Project

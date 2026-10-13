@@ -225,3 +225,47 @@ TEST(CompilerDiagnostics, MsvcLineWithParenthesisInPath)
     EXPECT_EQ(d->column, 1);
 }
 
+TEST(CompilerDiagnostics, StripsMsbuildLinePrefix)
+{
+    // msbuild's console logger prefixes every line with "<n>>". Left in the
+    // file part, the Problems entry reads "1>main.cpp" and the double-click
+    // cannot open it.
+    const auto msvc = parseCompilerDiagnostic(
+        "1>main.cpp(10): error C2065: 'x': undeclared identifier");
+    ASSERT_TRUE(msvc.has_value());
+    EXPECT_EQ(msvc->file, "main.cpp");
+    EXPECT_EQ(msvc->line, 9);
+    EXPECT_EQ(msvc->severity, 1);
+
+    const auto gnu = parseCompilerDiagnostic(
+        "2>src/util.cpp:12:7: warning: unused variable 'y'");
+    ASSERT_TRUE(gnu.has_value());
+    EXPECT_EQ(gnu->file, "src/util.cpp");
+    EXPECT_EQ(gnu->line, 11);
+    EXPECT_EQ(gnu->column, 6);
+    EXPECT_EQ(gnu->severity, 2);
+}
+
+TEST(CompilerDiagnostics, LeavesDigitColonLinesAlone)
+{
+    // A leading digit is only a prefix when a '>' follows; "3:x.cpp..." is a
+    // line number and must not be trimmed.
+    EXPECT_FALSE(parseCompilerDiagnostic(
+        "3:x.cpp: not a report").has_value());
+}
+
+TEST(CompilerDiagnostics, DriverLineWithSpaceBeforeColon)
+{
+    // GNU linker output: "main.obj : error LNK2019: ...". The space before the
+    // colon used to make the program name fail looksLikeDriverName, dropping
+    // the line — a link failure then produced no Problems entry at all.
+    const auto d = parseCompilerDiagnostic(
+        "main.obj : error LNK2019: unresolved external symbol _main");
+    ASSERT_TRUE(d.has_value());
+    EXPECT_TRUE(d->file.empty());
+    EXPECT_EQ(d->line, 0);
+    EXPECT_EQ(d->severity, 1);
+    EXPECT_EQ(d->message,
+              "unresolved external symbol _main");
+}
+
