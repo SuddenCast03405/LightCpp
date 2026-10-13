@@ -281,7 +281,8 @@ void LanguageServerClient::start()
         return;  // already running or starting up
     }
     if (!QFileInfo::exists(serverPath_)) {
-        emit serverFailed(tr("language server not found: %1").arg(serverPath_));
+        // Nothing to tear down; this only queues the notification.
+        reportServerFailure(tr("language server not found: %1").arg(serverPath_));
         return;
     }
 
@@ -319,12 +320,16 @@ void LanguageServerClient::start()
     });
     connect(process_, &QProcess::errorOccurred,
             this, [this](QProcess::ProcessError error) {
-        if (process_ == nullptr) return;  // already being torn down
-        if (error == QProcess::FailedToStart) {
-            emit serverFailed(tr("failed to start language server: %1")
-                                  .arg(serverPath_));
-            stop();
-        }
+        if (error != QProcess::FailedToStart) return;
+        // A stale process from an earlier start() must not take the
+        // current one down with it.
+        if (sender() != process_) return;
+        // Never call stop() here: this signal is emitted from inside
+        // QProcess::start(), so deleting the process now would resume
+        // Qt's startProcess() on freed memory. reportServerFailure
+        // detaches the process and queues the notification instead.
+        reportServerFailure(tr("failed to start language server: %1")
+                                .arg(serverPath_));
     });
     connect(process_, &QIODevice::aboutToClose, this, [this] {
         // Process ended (possibly on its own).
@@ -338,25 +343,38 @@ void LanguageServerClient::start()
         // waitForFinished below can deliver finished() to this slot
         // while stop() is mid-flight, which previously crashed on the
         // process_->deleteLater() line).
-        if (auto* p = qobject_cast<QProcess*>(sender())) {
+        auto* p = qobject_cast<QProcess*>(sender());
+        if (p == nullptr) {
+            return;
+        }
+        // Read everything off the process, then detach it, before any
+        // emit: the serverFailed handler may synchronously walk into
+        // stop() and free this very object.
+        const int exitCode = p->exitCode();
+        const bool duringStartup = !everInitialized_;
+        if (process_ == p) {
+            process_ = nullptr;
+        }
+        initialized_ = false;
+        p->deleteLater();
+        if (duringStartup) {
             // A server that dies before the LSP handshake completes would
             // otherwise vanish silently: ccls rejects unknown command-line
             // arguments by printing to stderr and exiting with code 1, and
             // QProcess only reports FailedToStart when CreateProcess fails.
-            if (!everInitialized_) {
-                emit serverFailed(tr("language server exited during start-up "
-                                     "(exit code %1)")
-                                      .arg(p->exitCode()));
-            } else {
-                emit serverLog(tr("language server exited (exit code %1)")
-                                   .arg(p->exitCode()));
-            }
-            p->deleteLater();
+            QMetaObject::invokeMethod(
+                this,
+                [this, exitCode] {
+                    emit serverFailed(
+                        tr("language server exited during start-up "
+                           "(exit code %1)")
+                            .arg(exitCode));
+                },
+                Qt::QueuedConnection);
+        } else {
+            emit serverLog(tr("language server exited (exit code %1)")
+                               .arg(exitCode));
         }
-        if (process_ == sender()) {
-            process_ = nullptr;
-        }
-        initialized_ = false;
     });
 
     // Light options: no background indexing, no clang-tidy checks — this is
@@ -506,6 +524,35 @@ void LanguageServerClient::stop()
     documentSymbolRequests_.clear();
     renameRequests_.clear();
     codeActionRequests_.clear();
+}
+
+void LanguageServerClient::reportServerFailure(const QString& message)
+{
+    QProcess* proc = process_;
+    process_ = nullptr;
+    initialized_ = false;
+    if (proc != nullptr) {
+        // Mute our own slots first: readyRead would keep parsing a dead
+        // handshake, and errorOccurred/finished would re-enter this
+        // method for a process that is already being discarded.
+        proc->disconnect(this);
+        if (proc->state() != QProcess::NotRunning) {
+            proc->kill();
+        }
+        // Never delete directly. errorOccurred(FailedToStart) arrives
+        // from inside QProcess::start(), and the process must stay
+        // alive until that call has returned — the event loop deletes
+        // it one iteration later.
+        proc->deleteLater();
+    }
+    // Queued on purpose: the receiver (MainWindow) reacts by unchecking
+    // Syntax Check, which re-enters stop(). Running that now would
+    // delete the process while Qt is still inside start()/the finished
+    // slot, and would also clear the user's check state before the
+    // toggle handler had a chance to finish.
+    QMetaObject::invokeMethod(
+        this, [this, message] { emit serverFailed(message); },
+        Qt::QueuedConnection);
 }
 
 bool LanguageServerClient::isRunning() const
@@ -1027,12 +1074,12 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
                 // version mismatch...). Pretending this was success left a
                 // running-but-dead server: no capabilities, every request
                 // silently unanswered. Report it and drop the process —
-                // the finished handler cleans it up (it fires the
-                // start-up-exit failure again, which is fine).
+                // reportServerFailure kills, detaches and queues the
+                // notification, so nothing here may touch process_ again
+                // (the handler synchronously calls stop()).
                 const QJsonObject err = message.value("error").toObject();
-                emit serverFailed(tr("language server rejected initialize: %1")
-                                      .arg(err.value("message").toString()));
-                process_->kill();
+                reportServerFailure(tr("language server rejected initialize: %1")
+                                        .arg(err.value("message").toString()));
                 return;
             }
             // initialize response — complete the handshake.

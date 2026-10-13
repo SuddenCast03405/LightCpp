@@ -310,6 +310,22 @@ private:
     void handlePublishDiagnostics(const QJsonObject& params);
     void requestShutdown();
 
+    /// Report a start-up/exit failure to the outside world.
+    ///
+    /// The serverFailed slot runs synchronously and may tear this client
+    /// down: MainWindow reacts by unchecking Syntax Check, which calls
+    /// stop(), which deletes the QProcess. Two rules make that safe:
+    ///
+    ///  * The process is detached (process_ = nullptr) and handed to the
+    ///    event loop first, so a stop() from the slot is a no-op instead
+    ///    of deleting the object that is emitting.
+    ///  * The signal itself is queued, so the teardown never runs from
+    ///    inside a QProcess signal. errorOccurred(FailedToStart) is
+    ///    delivered from *within* QProcess::start(); destroying the
+    ///    process there made Qt resume startProcess() on freed memory
+    ///    (SIGSEGV, worth a hard crash of the whole IDE).
+    void reportServerFailure(const QString& message);
+
     QString serverPath_;
     QString rootPath_;
     /// Style passed as clangd's --fallback-style; empty/"file" = its own.
