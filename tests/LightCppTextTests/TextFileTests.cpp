@@ -4,9 +4,13 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
+
 #include <QByteArray>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QStringEncoder>
 
@@ -251,4 +255,127 @@ TEST(DetectLineEndings, NamesMatchTheStatusBarCombo)
                  "CRLF");
     EXPECT_STREQ(LightCpp::Text::toString(LightCpp::Text::LineEnding::None),
                  "");
+}
+
+// ---------------------------------------------------------------------------
+// writeFileAtomically
+// ---------------------------------------------------------------------------
+
+using LightCpp::Text::writeFileAtomically;
+using LightCpp::Text::WriteFileError;
+
+namespace {
+
+QByteArray readBack(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QByteArray("<unreadable>");
+    }
+    return file.readAll();
+}
+
+/// Files left in the temp dir. The atomic write must not leave its
+/// temporary behind on either path (commit or rollback).
+QStringList filesIn(const QTemporaryDir& dir)
+{
+    return QDir(dir.path()).entryList(QDir::Files);
+}
+
+}  // namespace
+
+TEST_F(TextFileTest, WriteFileAtomicallyCreatesAndReplacesContent)
+{
+    const QString path = dir_.filePath("out.txt");
+
+    EXPECT_FALSE(writeFileAtomically(path, QByteArray("first")).has_value());
+    EXPECT_EQ(readBack(path), QByteArray("first"));
+    EXPECT_EQ(filesIn(dir_), QStringList{QStringLiteral("out.txt")});
+
+    // A second save replaces the contents and leaves no temporary behind.
+    EXPECT_FALSE(writeFileAtomically(path, QByteArray("second")).has_value());
+    EXPECT_EQ(readBack(path), QByteArray("second"));
+    EXPECT_EQ(filesIn(dir_), QStringList{QStringLiteral("out.txt")});
+}
+
+TEST_F(TextFileTest, WriteFileAtomicallyIsBinarySafeAndKeepsLineEndings)
+{
+    const QString path = dir_.filePath("bytes.txt");
+    // NUL, CRLF and non-ASCII must survive verbatim: the editor's payload is
+    // already the final byte sequence, this must not re-encode anything.
+    QByteArray payload("line1\r\n\x00binary\xC3\xA9\r\n");
+    EXPECT_FALSE(writeFileAtomically(path, payload).has_value());
+    EXPECT_EQ(readBack(path), payload);
+}
+
+TEST_F(TextFileTest, WriteFileAtomicallyWritesAnEmptyFile)
+{
+    // A zero-byte payload is a legitimate save (the user deleted everything);
+    // it must not be mistaken for a failed/short write.
+    const QString path = dir_.filePath("empty.txt");
+    EXPECT_FALSE(writeFileAtomically(path, QByteArray()).has_value());
+    ASSERT_TRUE(QFile::exists(path));
+    EXPECT_EQ(QFileInfo(path).size(), 0);
+    EXPECT_EQ(filesIn(dir_), QStringList{QStringLiteral("empty.txt")});
+}
+
+TEST_F(TextFileTest, WriteFileAtomicallyOverwritesAnExistingFile)
+{
+    const QString path = writeFile("existing.txt", QByteArray("ORIGINAL"));
+    EXPECT_FALSE(writeFileAtomically(path, QByteArray("NEW")).has_value());
+    EXPECT_EQ(readBack(path), QByteArray("NEW"));
+    EXPECT_EQ(filesIn(dir_), QStringList{QStringLiteral("existing.txt")});
+}
+
+TEST_F(TextFileTest, WriteFileAtomicallyFailsWhenTheDirectoryIsMissing)
+{
+    const QString path = dir_.filePath("nope/deeper/out.txt");
+    const std::optional<WriteFileError> error =
+        writeFileAtomically(path, QByteArray("x"));
+    ASSERT_TRUE(error.has_value());
+    EXPECT_EQ(*error, WriteFileError::OpenFailed);
+    EXPECT_FALSE(QFile::exists(path));
+    // Nothing may be created anywhere on the way there.
+    EXPECT_TRUE(filesIn(dir_).isEmpty());
+}
+
+#ifdef _WIN32
+TEST_F(TextFileTest, WriteFileAtomicallyKeepsOldContentWhenTheTargetIsLocked)
+{
+    // The reason this function exists. A Truncate + write() would already
+    // have emptied the file at this point, losing the old content and
+    // leaving the new one nowhere; the atomic write must leave the file
+    // exactly as it was.
+    const QString path = writeFile("locked.txt", QByteArray("ORIGINAL"));
+
+    // Hold the target with no sharing at all, like an antivirus scanner or
+    // another editor would while it has the file open.
+    const HANDLE handle = ::CreateFileW(
+        reinterpret_cast<const wchar_t*>(path.utf16()),
+        0, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+
+    const std::optional<WriteFileError> error =
+        writeFileAtomically(path, QByteArray("REPLACEMENT"));
+
+    ::CloseHandle(handle);
+
+    ASSERT_TRUE(error.has_value()) << "replacing a locked file must fail";
+    // Which of the two it is depends on how far Qt gets before the sharing
+    // violation stops it (it may fail reading the target's permissions too);
+    // either way nothing was written.
+    EXPECT_TRUE(*error == WriteFileError::CommitFailed
+                || *error == WriteFileError::OpenFailed)
+        << "unexpected reason: " << LightCpp::Text::toString(*error);
+    EXPECT_EQ(readBack(path), QByteArray("ORIGINAL"));
+    // The temporary it wrote must be gone, not orphaned next to the target.
+    EXPECT_EQ(filesIn(dir_), QStringList{QStringLiteral("locked.txt")});
+}
+#endif  // _WIN32
+
+TEST(WriteFileErrorNames, DescribeEveryFailure)
+{
+    EXPECT_STRNE(LightCpp::Text::toString(WriteFileError::OpenFailed), "");
+    EXPECT_STRNE(LightCpp::Text::toString(WriteFileError::WriteFailed), "");
+    EXPECT_STRNE(LightCpp::Text::toString(WriteFileError::CommitFailed), "");
 }

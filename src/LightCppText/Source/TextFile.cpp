@@ -4,6 +4,7 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 
 #include "LightCpp/Text/Converter.hpp"
 
@@ -181,6 +182,45 @@ TextFileResult readTextFileWithEncoding(
     content.lineEndings = detectLineEndings(data);
 
     return TextFileResult::success(std::move(content));
+}
+
+const char* toString(WriteFileError error) noexcept
+{
+    switch (error) {
+    case WriteFileError::OpenFailed:
+        return "could not create a temporary file next to the target";
+    case WriteFileError::WriteFailed:
+        return "the contents could not be written to disk";
+    case WriteFileError::CommitFailed:
+        return "the new contents could not replace the file";
+    }
+    return "unknown error";
+}
+
+std::optional<WriteFileError> writeFileAtomically(const QString& path,
+                                                  const QByteArray& bytes)
+{
+    // QSaveFile writes beside the target and swaps the file in on commit(),
+    // so the target keeps its old contents until the new ones are complete.
+    // The temporary must live in the target's own directory for the final
+    // rename to stay on one volume (and therefore be atomic).
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return WriteFileError::OpenFailed;
+    }
+    // write() may satisfy the request in pieces; QIODevice loops internally
+    // but still reports short writes, and a short write here means the
+    // buffer could not reach the disk driver.
+    if (file.write(bytes) != bytes.size()) {
+        // Drop the temporary: leaving it behind both litters the user's
+        // directory and would make the next save's rename collide.
+        file.cancelWriting();
+        return WriteFileError::WriteFailed;
+    }
+    if (!file.commit()) {
+        return WriteFileError::CommitFailed;
+    }
+    return std::nullopt;
 }
 
 }  // namespace LightCpp::Text

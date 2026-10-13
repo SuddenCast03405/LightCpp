@@ -2976,8 +2976,13 @@ void MainWindow::onSaveFile()
     }
 
     if (!saveEditorToDisk(ed)) {
-        QMessageBox::warning(this, tr("Save Error"),
-                             tr("Cannot write to %1").arg(path));
+        // The write is atomic, so a failure at this point means the file on
+        // disk still holds exactly what it held before — worth saying, since
+        // the opposite assumption is what makes a failed save frightening.
+        QMessageBox::warning(
+            this, tr("Save Error"),
+            tr("Cannot write to %1.\n\nThe file is unchanged; see the Build "
+               "output for the reason.").arg(path));
     }
 }
 
@@ -2993,62 +2998,73 @@ bool MainWindow::saveEditorToDisk(CodeEditor* ed)
         return false;
     }
 
-    if (QFile f(path); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        f.write(*payload);
-        f.close();
-        // Our own write will fire fileChanged within milliseconds; the
-        // timestamp marks it as ours so the watcher does not reload.
-        selfWriteMs_.insert(path, QDateTime::currentMSecsSinceEpoch());
-        // QFileSystemWatcher silently drops files that were deleted while
-        // watched, so a save-as-new-file (or a recreate) needs a re-add.
-        if (!fileWatcher_->files().contains(path)) {
-            fileWatcher_->addPath(path);
-        }
-        ed->setModified(false);
-        // The buffer now matches what was written: record the style that
-        // was actually used as the file's line endings, so the status-bar
-        // combo and the next save agree with the bytes on disk even after
-        // a save-as-new-file.
-        ed->setProperty("detectedLineEnding", effectiveLineEnding(ed));
-        updateEolCombo(ed);
-        const int idx = tabWidget_->indexOf(ed);
-        if (idx >= 0) {
-            tabWidget_->setTabText(idx, QFileInfo(path).fileName());
-        }
-        statusFile_->setText(path);
-        statusLanguage_->setText(languageFromSuffix(path));
-        outputPanel_->appendBuildOutput(tr("Saved: %1").arg(path));
-        // Re-sync the language server: the buffer moved from its virtual
-        // (untitled) path to the real location, and the extension may have
-        // changed the parse mode.
-        const QString oldLint = ed->lintPath();
-        if (lsp_->isRunning()) {
-            if (!oldLint.isEmpty() && QFileInfo(oldLint).absoluteFilePath()
-                                       != QFileInfo(path).absoluteFilePath()) {
-                lsp_->closeDocument(oldLint);
-            }
-            ed->setLintPath(path);
-            if (isCppLikeFile(path)) {
-                lsp_->openDocument(path, languageIdForFile(path),
-                                   ed->toPlainText());
-            }
-        }
-        // The problem list is keyed by lint path — re-key it, otherwise the
-        // entries would end up orphaned under the old virtual path.
-        const QString newLint = ed->lintPath();
-        if (oldLint != newLint && diagnosticsByFile_.contains(oldLint)) {
-            diagnosticsByFile_.insert(newLint, diagnosticsByFile_.take(oldLint));
-            rebuildProblems();
-        }
-        // languageService.clangFormat.formatOnSave: the buffer is formatted
-        // after the write. The answer is asynchronous, so the formatted text
-        // lands as a modification the user saves like any other edit.
-        if (formatOnSave_ && clangFormatEnabled_ && isCppLikeFile(path)) {
-            onFormatDocument();
-        }
-        return true;
+    // Atomic write: the bytes land in a temporary file beside the target and
+    // only replace it once they are complete. Truncating the target first
+    // (QIODevice::Truncate, as this used to do) means a full disk, a locked
+    // file or a power cut destroys the old contents *and* leaves nothing of
+    // the new ones — while the UI below still reported "Saved".
+    if (const std::optional<LightCpp::Text::WriteFileError> writeError =
+            LightCpp::Text::writeFileAtomically(path, *payload)) {
+        outputPanel_->appendBuildOutput(
+            tr("Cannot save %1: %2")
+                .arg(path,
+                     QString::fromUtf8(LightCpp::Text::toString(*writeError))));
+        return false;
     }
-    return false;
+
+    // Our own write will fire fileChanged within milliseconds; the
+    // timestamp marks it as ours so the watcher does not reload.
+    selfWriteMs_.insert(path, QDateTime::currentMSecsSinceEpoch());
+    // QFileSystemWatcher silently drops files that were deleted while
+    // watched, so a save-as-new-file (or a recreate) needs a re-add.
+    if (!fileWatcher_->files().contains(path)) {
+        fileWatcher_->addPath(path);
+    }
+    ed->setModified(false);
+    // The buffer now matches what was written: record the style that
+    // was actually used as the file's line endings, so the status-bar
+    // combo and the next save agree with the bytes on disk even after
+    // a save-as-new-file.
+    ed->setProperty("detectedLineEnding", effectiveLineEnding(ed));
+    updateEolCombo(ed);
+    const int idx = tabWidget_->indexOf(ed);
+    if (idx >= 0) {
+        tabWidget_->setTabText(idx, QFileInfo(path).fileName());
+    }
+    statusFile_->setText(path);
+    statusLanguage_->setText(languageFromSuffix(path));
+    outputPanel_->appendBuildOutput(tr("Saved: %1").arg(path));
+    // Re-sync the language server: the buffer may have moved from its
+    // virtual (untitled) path to the real location, and the extension may
+    // have changed the parse mode. changeDocument() sends didChange and
+    // opens the document itself when the server has not seen it yet, so a
+    // save no longer emits a second didOpen() for an already-open file —
+    // which the shared save path would otherwise repeat on every F7 too.
+    const QString oldLint = ed->lintPath();
+    if (lsp_->isRunning()) {
+        if (!oldLint.isEmpty() && QFileInfo(oldLint).absoluteFilePath()
+                                   != QFileInfo(path).absoluteFilePath()) {
+            lsp_->closeDocument(oldLint);
+        }
+        ed->setLintPath(path);
+        if (isCppLikeFile(path)) {
+            lsp_->changeDocument(path, ed->toPlainText());
+        }
+    }
+    // The problem list is keyed by lint path — re-key it, otherwise the
+    // entries would end up orphaned under the old virtual path.
+    const QString newLint = ed->lintPath();
+    if (oldLint != newLint && diagnosticsByFile_.contains(oldLint)) {
+        diagnosticsByFile_.insert(newLint, diagnosticsByFile_.take(oldLint));
+        rebuildProblems();
+    }
+    // languageService.clangFormat.formatOnSave: the buffer is formatted
+    // after the write. The answer is asynchronous, so the formatted text
+    // lands as a modification the user saves like any other edit.
+    if (formatOnSave_ && clangFormatEnabled_ && isCppLikeFile(path)) {
+        onFormatDocument();
+    }
+    return true;
 }
 
 void MainWindow::onAutoSaveTimeout()
@@ -5643,13 +5659,14 @@ void MainWindow::onCompileCurrentFile()
         QDir().mkpath(QFileInfo(srcPath).absolutePath());
         if (std::optional<QByteArray> payload = encodedSavePayload(ed);
             payload.has_value()) {
-            if (QFile f(srcPath);
-                f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                f.write(*payload);
-            } else {
+            if (const std::optional<LightCpp::Text::WriteFileError> error =
+                    LightCpp::Text::writeFileAtomically(srcPath, *payload)) {
                 outputPanel_->showChannel(OutputPanel::ChannelBuild);
                 outputPanel_->appendBuildOutput(
-                    tr("Cannot write temp file: %1").arg(srcPath));
+                    tr("Cannot write temp file %1: %2")
+                        .arg(srcPath,
+                             QString::fromUtf8(
+                                 LightCpp::Text::toString(*error))));
                 runAfterBuild_ = false;
                 return;
             }
@@ -5658,19 +5675,16 @@ void MainWindow::onCompileCurrentFile()
             return;  // encoding error already reported by the helper
         }
     } else if (ed->isModified()) {
-        std::optional<QByteArray> payload = encodedSavePayload(ed);
-        if (!payload.has_value()) {
-            runAfterBuild_ = false;
-            return;  // encoding error already reported by the helper
-        }
-        if (QFile f(srcPath); f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            f.write(*payload);
-            // setModified(false) emits modificationChanged, which strips
-            // the tab's modification dot (see createEditorTab).
-            ed->setModified(false);
-        } else {
+        // Go through the shared save path rather than writing here. Besides
+        // the atomic write, it records selfWriteMs_ — without that timestamp
+        // the file watcher saw this write as an external change and reloaded
+        // the buffer, so every F7 cleared the undo history and dropped
+        // whatever had been typed since.
+        if (!saveEditorToDisk(ed)) {
+            // saveEditorToDisk() already explained the reason in the channel.
             outputPanel_->showChannel(OutputPanel::ChannelBuild);
-            outputPanel_->appendBuildOutput(tr("Cannot save %1 before compile").arg(srcPath));
+            outputPanel_->appendBuildOutput(
+                tr("Build aborted: %1 could not be saved.").arg(srcPath));
             runAfterBuild_ = false;
             return;
         }

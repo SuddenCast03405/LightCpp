@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include <QByteArray>
 #include <QByteArrayView>
@@ -94,5 +95,35 @@ struct TextFileOptions {
     const QString& path,
     TextEncoding encoding,
     const TextFileOptions& options = {});
+
+/// Why writing a text file failed.
+enum class WriteFileError {
+    OpenFailed,    ///< the temporary file could not be created
+    WriteFailed,   ///< the bytes could not be written or flushed to disk
+    CommitFailed,  ///< the temporary file could not replace the target
+};
+
+/// Human-readable description of a WriteFileError.
+[[nodiscard]] const char* toString(WriteFileError error) noexcept;
+
+/// Write `bytes` to `path`, replacing the file's contents atomically.
+///
+/// The bytes go to a temporary file in the target's own directory and are
+/// flushed before that temporary replaces `path`. A crash, a full disk or an
+/// antivirus holding the file therefore leaves the previous contents intact.
+/// A plain `QIODevice::Truncate` + write() cannot offer that: it cuts the
+/// file down to zero bytes first, so a failure loses the old content *and*
+/// leaves nothing of the new one.
+///
+/// Binary-safe (NUL bytes and CRLF pass through untouched); the caller
+/// supplies the final byte sequence, see Converter for encoding and
+/// line-ending selection.
+///
+/// Returns std::nullopt on success, or the reason the write failed. A value
+/// coming back means the target still holds its previous contents and the
+/// caller must not report a successful save. Safe to call from background
+/// threads (never touches the GUI).
+[[nodiscard]] std::optional<WriteFileError> writeFileAtomically(
+    const QString& path, const QByteArray& bytes);
 
 }  // namespace LightCpp::Text
