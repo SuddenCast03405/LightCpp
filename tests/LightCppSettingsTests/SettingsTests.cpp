@@ -1260,3 +1260,238 @@ TEST(SettingsStore, MergeUnknownKeysHandlesBrokenOrEmptyPrevious)
     EXPECT_EQ(fromEmpty, fresh);
 }
 
+// ---------------------------------------------------------------------------
+// Layers: what a layer is entitled to write (R2-05)
+//
+// A layer's document is serialised from a whole model, so a field the user
+// never touched comes out as its struct default — an empty string, an empty
+// list. Since the layers merge later-wins, writing those defaults out is not
+// "no opinion", it is an instruction to blank the layer below. These tests
+// pin down the rule that keeps an untouched field out of the file, and the
+// end-to-end consequence for a project layer over a real global config.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Base-layer documents holding settings a user would notice losing.
+void writeRealBaseConfig(const QString& dir)
+{
+    QJsonObject defaults = toJson(GlobalDefaults{});
+    defaults.insert("defaultKitId", "msys2-ucrt64-gcc");
+    defaults.insert("defaultBuildConfiguration", "Debug");
+    defaults.insert("gitPath", "E:/msys64/ucrt64/bin/git.exe");
+    defaults.insert("clangdPath", "E:/msys64/ucrt64/bin/clangd.exe");
+    defaults.insert("clangFormatPath", "E:/msys64/ucrt64/bin/clang-format.exe");
+    writeJson(QDir(dir).filePath("defaults.json"), defaults);
+
+    Preferences prefs;
+    prefs.defaultEncoding = "GBK";
+    prefs.lineEndingDefault = "CRLF";
+    prefs.recentFiles = QStringList{QStringLiteral("E:/demo/main.cpp")};
+    prefs.disabledPlugins =
+        QStringList{QStringLiteral("E:/demo/plugins/old.dll")};
+    writeJson(QDir(dir).filePath("preferences.json"), toJson(prefs));
+}
+
+}  // namespace
+
+TEST(SettingsLayer, DeltaIsEmptyWhenNothingWasTouched)
+{
+    // The layer read nothing of its own and the user changed nothing: the
+    // serialised model is byte-for-byte what it was at load time.
+    const QJsonObject fresh = toJson(GlobalDefaults{});
+    const QJsonObject delta =
+        SettingsStore::layerDelta(fresh, toJson(GlobalDefaults{}), {});
+
+    EXPECT_FALSE(SettingsStore::layerDeltaHasContent(delta));
+    // The header still rides along, so the result would be a valid document.
+    EXPECT_EQ(delta.value("type"), QJsonValue(QStringLiteral("defaults")));
+    EXPECT_EQ(delta.value("id"), QJsonValue(QStringLiteral("global")));
+    EXPECT_FALSE(delta.contains("gitPath"));
+    EXPECT_FALSE(delta.contains("defaultKitId"));
+}
+
+TEST(SettingsLayer, DeltaKeepsOnlyTheFieldTheUserChanged)
+{
+    QJsonObject fresh = toJson(GlobalDefaults{});
+    fresh.insert("gitPath", "D:/project/tools/git.exe");
+
+    const QJsonObject delta =
+        SettingsStore::layerDelta(fresh, toJson(GlobalDefaults{}), {});
+
+    EXPECT_TRUE(SettingsStore::layerDeltaHasContent(delta));
+    EXPECT_EQ(delta.value("gitPath"),
+              QJsonValue(QStringLiteral("D:/project/tools/git.exe")));
+    EXPECT_FALSE(delta.contains("clangdPath"));  // left alone -> left out
+    EXPECT_FALSE(delta.contains("defaultKitId"));
+}
+
+TEST(SettingsLayer, DeltaKeepsKeysTheLayerAlreadyHad)
+{
+    // The layer's own file named clangdPath before (nothing else); the user
+    // opens the dialog and saves without touching anything. Dropping the key
+    // now would silently un-inherit the project's override.
+    QJsonObject previous;
+    previous.insert("type", "defaults");
+    previous.insert("id", "global");
+    previous.insert("clangdPath", "D:/project/tools/clangd.exe");
+    QJsonObject loaded = toJson(GlobalDefaults{});
+    loaded.insert("clangdPath", "D:/project/tools/clangd.exe");
+
+    const QJsonObject delta = SettingsStore::layerDelta(loaded, loaded, previous);
+
+    EXPECT_TRUE(SettingsStore::layerDeltaHasContent(delta));
+    EXPECT_EQ(delta.value("clangdPath"),
+              QJsonValue(QStringLiteral("D:/project/tools/clangd.exe")));
+    EXPECT_FALSE(delta.contains("gitPath"));  // the layer never said
+    EXPECT_FALSE(delta.contains("defaultKitId"));
+}
+
+TEST(SettingsLayer, DeltaKeepsAnExplicitClear)
+{
+    // "" in the layer's own file is how a layer says "do not use the one
+    // below". The dialog cannot express it, but an unrelated save must not
+    // throw it away either.
+    QJsonObject previous;
+    previous.insert("type", "defaults");
+    previous.insert("id", "global");
+    previous.insert("gitPath", QString());
+    QJsonObject loaded = toJson(GlobalDefaults{});
+    loaded.insert("gitPath", QString());
+
+    const QJsonObject delta = SettingsStore::layerDelta(loaded, loaded, previous);
+
+    ASSERT_TRUE(delta.contains("gitPath"));
+    EXPECT_EQ(delta.value("gitPath"), QJsonValue(QString()));
+    EXPECT_FALSE(delta.contains("clangdPath"));
+}
+
+TEST(SettingsLayer, DeltaRecursesIntoNestedObjects)
+{
+    // Preferences are nested. Changing one field must not hand over the
+    // whole sibling object, or "files" alone would reset the encoding,
+    // the line ending and the long-line mode together.
+    Preferences edited;
+    edited.defaultEncoding = "GBK";
+    const QJsonObject delta = SettingsStore::layerDelta(
+        toJson(edited), toJson(Preferences{}), {});
+
+    ASSERT_TRUE(delta.contains("files"));
+    const QJsonObject files = delta.value("files").toObject();
+    ASSERT_TRUE(files.contains("encoding"));
+    EXPECT_EQ(files.value("encoding").toObject().value("default"),
+              QJsonValue(QStringLiteral("GBK")));
+    EXPECT_FALSE(files.contains("lineEnding"));
+    EXPECT_FALSE(files.contains("longLineMode"));
+    EXPECT_FALSE(delta.contains("general"));
+    EXPECT_FALSE(delta.contains("plugins"));
+}
+
+TEST(SettingsLayer, DeltaCarriesKeysTheModelDoesNotProduce)
+{
+    // Same courtesy as mergeUnknownKeys(): a key this build knows nothing
+    // about belongs to whoever wrote it.
+    QJsonObject previous;
+    previous.insert("type", "defaults");
+    previous.insert("id", "global");
+    previous.insert("myOwnTool",
+                    QJsonObject{{QStringLiteral("path"),
+                                 QStringLiteral("D:/tool.exe")}});
+
+    const QJsonObject delta = SettingsStore::layerDelta(
+        toJson(GlobalDefaults{}), toJson(GlobalDefaults{}), previous);
+
+    EXPECT_TRUE(SettingsStore::layerDeltaHasContent(delta));
+    EXPECT_EQ(delta.value("myOwnTool"), previous.value("myOwnTool"));
+}
+
+TEST(SettingsLayer, ProjectLayerSaveLeavesTheGlobalSettingsAlone)
+{
+    QTemporaryDir base;
+    QTemporaryDir overlay;
+    ASSERT_TRUE(base.isValid());
+    ASSERT_TRUE(overlay.isValid());
+    writeRealBaseConfig(base.path());
+
+    SettingsStore store;
+    store.setBaseDirectory(base.path());
+    store.setOverlayDirectories({overlay.path()});
+    ASSERT_TRUE(store.reload());
+    ASSERT_EQ(store.defaults().defaultKitId, QStringLiteral("msys2-ucrt64-gcc"));
+
+    // The dialog opens on the project layer, which has no documents of its
+    // own — so its state is the struct defaults, not the effective values.
+    const QJsonObject loadedDefaults = toJson(GlobalDefaults{});
+    const QJsonObject loadedPreferences = toJson(Preferences{});
+
+    // Apply with nothing edited: the layer has nothing to say, so it writes
+    // no file at all and the base keeps winning.
+    EXPECT_FALSE(SettingsStore::layerDeltaHasContent(SettingsStore::layerDelta(
+        loadedDefaults, loadedDefaults, {})));
+    EXPECT_FALSE(SettingsStore::layerDeltaHasContent(SettingsStore::layerDelta(
+        loadedPreferences, loadedPreferences, {})));
+    EXPECT_TRUE(QDir(overlay.path())
+                    .entryList(QStringList{QStringLiteral("*.json")}, QDir::Files)
+                    .isEmpty());
+
+    ASSERT_TRUE(store.reload());
+    EXPECT_EQ(store.defaults().defaultKitId, QStringLiteral("msys2-ucrt64-gcc"));
+    EXPECT_EQ(store.defaults().defaultBuildConfiguration, QStringLiteral("Debug"));
+    EXPECT_EQ(store.gitPath(), QStringLiteral("E:/msys64/ucrt64/bin/git.exe"));
+    EXPECT_EQ(store.clangdPath(), QStringLiteral("E:/msys64/ucrt64/bin/clangd.exe"));
+    EXPECT_EQ(store.clangFormatPath(),
+              QStringLiteral("E:/msys64/ucrt64/bin/clang-format.exe"));
+    EXPECT_EQ(store.preferences().defaultEncoding, QStringLiteral("GBK"));
+    EXPECT_EQ(store.lineEndingForSaving(), QStringLiteral("CRLF"));
+    EXPECT_EQ(store.preferences().recentFiles,
+              (QStringList{QStringLiteral("E:/demo/main.cpp")}));
+    EXPECT_EQ(store.preferences().disabledPlugins,
+              (QStringList{QStringLiteral("E:/demo/plugins/old.dll")}));
+
+    // Now the user changes exactly one project setting. That one wins, and
+    // nothing else moves.
+    Preferences layerPrefs;
+    layerPrefs.lineEndingDefault = "LF";
+    const QJsonObject delta = SettingsStore::layerDelta(
+        toJson(layerPrefs), loadedPreferences, {});
+    ASSERT_TRUE(SettingsStore::layerDeltaHasContent(delta));
+    writeJson(QDir(overlay.path()).filePath("preferences.json"), delta);
+
+    ASSERT_TRUE(store.reload());
+    EXPECT_EQ(store.lineEndingForSaving(), QStringLiteral("LF"));  // project wins
+    EXPECT_EQ(store.preferences().defaultEncoding, QStringLiteral("GBK"));
+    EXPECT_EQ(store.preferences().recentFiles,
+              (QStringList{QStringLiteral("E:/demo/main.cpp")}));
+    EXPECT_EQ(store.defaults().defaultKitId, QStringLiteral("msys2-ucrt64-gcc"));
+    EXPECT_EQ(store.gitPath(), QStringLiteral("E:/msys64/ucrt64/bin/git.exe"));
+}
+
+TEST(SettingsLayer, FullDefaultsDocumentWouldWipeTheBase)
+{
+    // The hazard the delta rule exists to avoid, stated as a fact about the
+    // merge so the two stay consistent: layers are later-wins, so a document
+    // that spells out every default really does erase what came before —
+    // including, notably, the recents list, which is an array and arrays do
+    // not merge field-wise.
+    QTemporaryDir base;
+    QTemporaryDir overlay;
+    ASSERT_TRUE(base.isValid());
+    ASSERT_TRUE(overlay.isValid());
+    writeRealBaseConfig(base.path());
+    writeJson(QDir(overlay.path()).filePath("defaults.json"),
+              toJson(GlobalDefaults{}));
+    writeJson(QDir(overlay.path()).filePath("preferences.json"),
+              toJson(Preferences{}));
+
+    SettingsStore store;
+    store.setBaseDirectory(base.path());
+    store.setOverlayDirectories({overlay.path()});
+    ASSERT_TRUE(store.reload());
+
+    EXPECT_EQ(store.defaults().defaultKitId, QString());   // gone
+    EXPECT_EQ(store.gitPath(), QString());                 // gone
+    EXPECT_EQ(store.clangdPath(), QString());
+    EXPECT_TRUE(store.preferences().recentFiles.isEmpty());  // gone
+    EXPECT_TRUE(store.preferences().disabledPlugins.isEmpty());
+}
+

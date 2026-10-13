@@ -1192,6 +1192,11 @@ void SettingsDialog::loadScopeStateFromDisk(Scope scope)
             absorb(document.object());
         }
     }
+    // Remember what this layer's own documents said, before the user has
+    // touched anything: saving compares against it to tell an edited field
+    // from one that merely still holds its struct default.
+    target.loadedDefaults = LightCpp::Settings::toJson(target.defaults);
+    target.loadedPreferences = LightCpp::Settings::toJson(target.preferences);
     if (!warnings.isEmpty()) {
         setStatus(tr("Config warnings: %1").arg(warnings.join(QLatin1String("; "))));
     }
@@ -2287,7 +2292,10 @@ void SettingsDialog::commitPreferencesPage(Settings::Preferences* prefs)
     prefs->autoSave = autoSave_->isChecked();
     prefs->autoSaveSeconds = autoSaveSeconds_->value();
     // recentFiles is not edited here: it is carried through from the loaded
-    // state, so saving the dialog never wipes the list.
+    // state, so saving the dialog never wipes the list *within this layer*.
+    // Across layers it is still an array, and arrays do not merge — an
+    // overlay that has no list of its own must not write an empty one, which
+    // is what saveScope()'s layerDelta() takes care of (R2-05).
     prefs->programOutput = runOutputMode_->currentData().toString();
     // Read the terminal table back. Rows keep the id generated for them
     // (or the one loaded from disk); a row without an id gets a fresh one.
@@ -2455,27 +2463,35 @@ bool SettingsDialog::saveScope(Scope scope, QString* errorMessage)
     };
     ScopeState& current = state(scope);
 
-    // The generated documents only carry the keys the model knows. A user
-    // who hand-added an unknown key to defaults.json or preferences.json
-    // (for a newer build, or for their own tooling) would lose it on the
-    // next save — the fresh document is grown from the previous file's
-    // content, keeping every key the model does not write itself. The
-    // toolchain/kit arrays are not merged: their entries are matched by id
-    // and the model owns their shape outright.
-    const auto documentWithPreviousKeys = [&](const char* fileName,
-                                              const QJsonObject& freshObject) {
-        QJsonObject merged = freshObject;
-        QFile previous(QDir(dir).filePath(QLatin1String(fileName)));
-        if (previous.open(QIODevice::ReadOnly)) {
+    // Only what this layer actually says gets written. A field the user
+    // never touched still holds its struct default (an empty string, an
+    // empty list), and writing those out would not read back as "unset":
+    // the layers are merged later-wins, so a project layer would blank
+    // every global setting it does not mention — the default kit, the
+    // clangd/git/clang-format paths, the encoding and line-ending choices,
+    // the recents list, the disabled plugins (R2-05).
+    //
+    // layerDelta() keeps a key when the layer's own document already had it
+    // or when its value differs from what this layer held when it was read,
+    // and carries over keys the model does not produce — the same courtesy
+    // mergeUnknownKeys() extends. The toolchain/kit arrays are whole
+    // documents matched by id, so they are written as they are.
+    const auto layerDocument = [&](const char* fileName, const QJsonObject& fresh,
+                                   const QJsonObject& loaded, bool* hasContent) {
+        QJsonObject previous;
+        QFile file(QDir(dir).filePath(QLatin1String(fileName)));
+        if (file.open(QIODevice::ReadOnly)) {
             const QJsonDocument parsed =
-                QJsonDocument::fromJson(previous.readAll());
-            previous.close();
+                QJsonDocument::fromJson(file.readAll());
+            file.close();
             if (parsed.isObject()) {
-                merged = Settings::SettingsStore::mergeUnknownKeys(
-                    freshObject, parsed.object());
+                previous = parsed.object();
             }
         }
-        return QJsonDocument(merged);
+        const QJsonObject delta =
+            Settings::SettingsStore::layerDelta(fresh, loaded, previous);
+        *hasContent = Settings::SettingsStore::layerDeltaHasContent(delta);
+        return QJsonDocument(delta);
     };
 
     QJsonArray toolchainArray;
@@ -2492,14 +2508,17 @@ bool SettingsDialog::saveScope(Scope scope, QString* errorMessage)
     if (!write("kits.json", QJsonDocument(kitArray))) {
         return false;
     }
-    if (!write("defaults.json",
-               documentWithPreviousKeys("defaults.json",
-                                        Settings::toJson(current.defaults)))) {
+    bool hasContent = false;
+    const QJsonDocument defaults =
+        layerDocument("defaults.json", Settings::toJson(current.defaults),
+                      current.loadedDefaults, &hasContent);
+    if (hasContent && !write("defaults.json", defaults)) {
         return false;
     }
-    if (!write("preferences.json",
-               documentWithPreviousKeys("preferences.json",
-                                        Settings::toJson(current.preferences)))) {
+    const QJsonDocument preferences =
+        layerDocument("preferences.json", Settings::toJson(current.preferences),
+                      current.loadedPreferences, &hasContent);
+    if (hasContent && !write("preferences.json", preferences)) {
         return false;
     }
     current.modified = false;

@@ -108,6 +108,76 @@ QJsonObject SettingsStore::mergeUnknownKeys(const QJsonObject& fresh,
     return grow(grow, fresh, previous);
 }
 
+namespace {
+
+/// The body of SettingsStore::layerDelta(): the fields, one level at a time,
+/// with no notion of a document header. Splitting it out keeps "type" and
+/// "id" from being treated as always-owned at every nesting level — only the
+/// document's own top level has a header.
+QJsonObject layerDeltaFields(const QJsonObject& fresh, const QJsonObject& loaded,
+                             const QJsonObject& previous)
+{
+    QJsonObject delta;
+    for (auto it = fresh.constBegin(); it != fresh.constEnd(); ++it) {
+        const QString& key = it.key();
+        const QJsonValue value = it.value();
+        const QJsonValue loadedValue = loaded.value(key);
+        if (value.isObject()) {
+            const QJsonValue previousValue = previous.value(key);
+            const QJsonObject nested = layerDeltaFields(
+                value.toObject(),
+                loadedValue.isObject() ? loadedValue.toObject() : QJsonObject{},
+                previousValue.isObject() ? previousValue.toObject()
+                                         : QJsonObject{});
+            if (!nested.isEmpty()) {
+                delta.insert(key, nested);
+            }
+            continue;
+        }
+        // Unmentioned before and unchanged since: not this layer's business.
+        if (previous.value(key).isUndefined() && loadedValue == value) {
+            continue;
+        }
+        delta.insert(key, value);
+    }
+    // Same courtesy as mergeUnknownKeys(): a key this build does not know
+    // about was put there by the user (or a newer build) and stays.
+    for (auto it = previous.constBegin(); it != previous.constEnd(); ++it) {
+        if (!fresh.contains(it.key())) {
+            delta.insert(it.key(), it.value());
+        }
+    }
+    return delta;
+}
+
+}  // namespace
+
+QJsonObject SettingsStore::layerDelta(const QJsonObject& fresh,
+                                      const QJsonObject& loaded,
+                                      const QJsonObject& previous)
+{
+    QJsonObject delta = layerDeltaFields(fresh, loaded, previous);
+    // The header is not a setting: whatever the fields say, the document
+    // must stay recognisable on the next load.
+    for (const char* key : {"type", "id"}) {
+        const QJsonValue value = fresh.value(QLatin1String(key));
+        if (!value.isUndefined()) {
+            delta.insert(QLatin1String(key), value);
+        }
+    }
+    return delta;
+}
+
+bool SettingsStore::layerDeltaHasContent(const QJsonObject& delta)
+{
+    for (auto it = delta.constBegin(); it != delta.constEnd(); ++it) {
+        if (it.key() != QLatin1String("type") && it.key() != QLatin1String("id")) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Layers
 // ---------------------------------------------------------------------------

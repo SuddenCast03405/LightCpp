@@ -4,6 +4,7 @@
 
 #include <QDialog>
 #include <QHash>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 
@@ -91,6 +92,14 @@ private:
         QList<LightCpp::Settings::Kit> kits;
         bool loaded = false;
         bool modified = false;
+        /// `defaults` / `preferences` exactly as this layer's own documents
+        /// had them when they were read. Saving compares against this, so a
+        /// field the user never touched is left out of the file instead of
+        /// being written as its struct default — which would override the
+        /// layer below it (R2-05: a project layer must not blank the global
+        /// settings it does not mention).
+        QJsonObject loadedDefaults;
+        QJsonObject loadedPreferences;
     };
 
     /// RAII over loading_: while >0, programmatic widget updates do not

@@ -53,6 +53,38 @@ public:
     [[nodiscard]] static QJsonObject mergeUnknownKeys(
         const QJsonObject& fresh, const QJsonObject& previous);
 
+    /// The part of `fresh` this layer is entitled to write.
+    ///
+    /// A layer's document is produced by serialising a whole model, and a
+    /// field the user never touched serialises as its struct default — an
+    /// empty string, an empty list. Written out, those defaults do not read
+    /// back as "unset": merging is "the later layer wins", so a project
+    /// layer that only meant to change one thing would blank every global
+    /// setting it did not mention (R2-05).
+    ///
+    /// A key therefore belongs to the layer only when
+    ///   * the layer's own document already had it — the layer said so
+    ///     before, and a save must not silently drop it, or
+    ///   * its value differs from `loaded`, the model as it stood when this
+    ///     layer was read — that is a field the user just edited.
+    /// Everything else is left out, so the layer below keeps winning.
+    /// Nested objects follow the same rule one level down, which keeps a
+    /// single changed field from handing over all of its siblings.
+    ///
+    /// The `type`/`id` header is always carried, so the result is a valid
+    /// document; use layerDeltaHasContent() to tell whether the layer has
+    /// anything to say at all. Keys `fresh` does not produce are carried
+    /// over from `previous` untouched, as in mergeUnknownKeys().
+    [[nodiscard]] static QJsonObject layerDelta(const QJsonObject& fresh,
+                                                const QJsonObject& loaded,
+                                                const QJsonObject& previous);
+
+    /// Whether `delta` says anything beyond its document header — i.e.
+    /// whether the layer has content and its file needs writing. A layer
+    /// with nothing to say leaves no file behind, so it cannot override the
+    /// layer underneath with its defaults.
+    [[nodiscard]] static bool layerDeltaHasContent(const QJsonObject& delta);
+
     /// Directories whose config documents are merged over the base, in the
     /// given order (later wins). Each entry is the config directory itself
     /// (…/config), not the workspace root.
