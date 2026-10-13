@@ -35,11 +35,15 @@ std::optional<BomSpec> bomFor(TextEncoding encoding) noexcept
 }
 
 #ifdef _WIN32
+/// GB18030's code page. Worth naming: it is the one code page here whose
+/// WideCharToMultiByte does not behave like the others (see encodeFromQString).
+constexpr UINT kGb18030CodePage = 54936;
+
 /// Windows code page for a legacy encoding.
 std::optional<UINT> codePageFor(TextEncoding encoding) noexcept
 {
     switch (encoding) {
-    case TextEncoding::Gb18030: return 54936;  // GB18030
+    case TextEncoding::Gb18030: return kGb18030CodePage;
     case TextEncoding::Gbk: return 936;        // GBK / CP936
     case TextEncoding::Big5: return 950;
     case TextEncoding::ShiftJis: return 932;
@@ -269,7 +273,15 @@ ConvertResult encodeFromQString(const QString& text, TextEncoding encoding, bool
         // With the flag every unmappable character sets `usedDefault` and
         // the conversion fails, which the caller reports to the user
         // instead of destroying their text on disk.
-        constexpr DWORD encodeFlags = WC_NO_BEST_FIT_CHARS;
+        //
+        // CP54936 (GB18030) is the exception: its converter refuses both the
+        // flag (ERROR_INVALID_FLAGS) and a non-null lpUsedDefaultChar
+        // (ERROR_INVALID_PARAMETER), so asking for either made *every*
+        // GB18030 save fail with "input is not valid in the encoding" —
+        // plain ASCII included. It gets flags = 0 and no out-parameter, and
+        // does its substitution check by decoding the result back below.
+        const bool selfChecking = (*codePage == kGb18030CodePage);
+        const DWORD encodeFlags = selfChecking ? 0 : WC_NO_BEST_FIT_CHARS;
         const int size = ::WideCharToMultiByte(
             *codePage, encodeFlags, src, srcLen, nullptr, 0, nullptr, nullptr);
         if (size <= 0) {
@@ -278,12 +290,26 @@ ConvertResult encodeFromQString(const QString& text, TextEncoding encoding, bool
         out.resize(size, '\0');
         BOOL usedDefault = FALSE;
         const int written = ::WideCharToMultiByte(
-            *codePage, encodeFlags, src, srcLen, out.data(), size,
-            nullptr, &usedDefault);
-        // usedDefault = some character had to be substituted with the code
-        // page's default char — the encoding cannot represent the text, so
-        // fail instead of silently corrupting it.
-        if (written != size || usedDefault) {
+            *codePage, encodeFlags, src, srcLen, out.data(), size, nullptr,
+            selfChecking ? nullptr : &usedDefault);
+        if (written != size) {
+            return ConvertResult::failure(ConvertError::InvalidInput);
+        }
+        if (selfChecking) {
+            // GB18030's converter also substitutes '?' without saying so:
+            // surrogate pairs it cannot map (U+20BB7 on this Windows build)
+            // come back as 0x3F. Decoding the bytes again is the only way to
+            // notice, and a character the encoding cannot carry must fail
+            // rather than replace the user's text with question marks.
+            const std::optional<QString> back =
+                winDecode(QByteArrayView(out), *codePage);
+            if (!back.has_value() || *back != text) {
+                return ConvertResult::failure(ConvertError::InvalidInput);
+            }
+        } else if (usedDefault) {
+            // usedDefault = some character had to be substituted with the code
+            // page's default char — the encoding cannot represent the text, so
+            // fail instead of silently corrupting it.
             return ConvertResult::failure(ConvertError::InvalidInput);
         }
 #else

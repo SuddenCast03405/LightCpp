@@ -1,5 +1,6 @@
 // LightCppText tests - readDetectedTextFile pipeline.
 
+#include "LightCpp/Text/Converter.hpp"
 #include "LightCpp/Text/TextFile.hpp"
 
 #include <gtest/gtest.h>
@@ -378,4 +379,109 @@ TEST(WriteFileErrorNames, DescribeEveryFailure)
     EXPECT_STRNE(LightCpp::Text::toString(WriteFileError::OpenFailed), "");
     EXPECT_STRNE(LightCpp::Text::toString(WriteFileError::WriteFailed), "");
     EXPECT_STRNE(LightCpp::Text::toString(WriteFileError::CommitFailed), "");
+}
+
+// ---------------------------------------------------------------------------
+// Forced-encoding round trips
+//
+// The status-bar encoding drop-down promises that picking an encoding
+// relabels the tab and the next save writes those bytes. That only holds if
+// encode -> decode really is a round trip for each codec the drop-down
+// offers, which is what these pin down.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+using LightCpp::Text::ConvertResult;
+using LightCpp::Text::convertToUtf8;
+using LightCpp::Text::encodeFromQString;
+
+void expectRoundTrip(const QString& text, TextEncoding encoding)
+{
+    const ConvertResult encoded = encodeFromQString(text, encoding);
+    ASSERT_TRUE(encoded.hasValue())
+        << "encode failed for " << LightCpp::Text::toName(encoding)
+        << ": " << LightCpp::Text::toString(encoded.error());
+    const ConvertResult decoded = convertToUtf8(encoded.value(), encoding);
+    ASSERT_TRUE(decoded.hasValue())
+        << "decode failed for " << LightCpp::Text::toName(encoding)
+        << ": " << LightCpp::Text::toString(decoded.error());
+    EXPECT_EQ(QString::fromUtf8(decoded.value()), text)
+        << "round trip changed the text for "
+        << LightCpp::Text::toName(encoding);
+}
+
+}  // namespace
+
+TEST(EncodingRoundTrip, LegacyCjkCodecs)
+{
+    expectRoundTrip(QString::fromUtf8("你好，世界——GBK 往返。"),
+                    TextEncoding::Gbk);
+    expectRoundTrip(QString::fromUtf8("這是繁體中文往返測試。"),
+                    TextEncoding::Big5);
+    expectRoundTrip(QString::fromUtf8("こんにちは、世界。"),
+                    TextEncoding::ShiftJis);
+}
+
+TEST(EncodingRoundTrip, Gb18030RoundTripsBmpText)
+{
+    // GB18030 saving used to fail outright: CP54936 rejects both
+    // WC_NO_BEST_FIT_CHARS (ERROR_INVALID_FLAGS) and a non-null
+    // lpUsedDefaultChar (ERROR_INVALID_PARAMETER), so every write came back
+    // as "input is not valid in the encoding" — plain ASCII included.
+    expectRoundTrip(QStringLiteral("plain ascii"), TextEncoding::Gb18030);
+    expectRoundTrip(QString::fromUtf8("你好，世界"), TextEncoding::Gb18030);
+    expectRoundTrip(QString::fromUtf8("€ 欧元符号"), TextEncoding::Gb18030);
+}
+
+TEST(EncodingRoundTrip, Gb18030PreservesBytesItCannotRender)
+{
+    // This Windows build's CP54936 has no support for the four-byte form:
+    // F0 A0 AE B7 (U+20BB7 in GB18030) comes back as the two BMP characters
+    // U+9989 U+E18E instead of a surrogate pair, so the glyph is wrong. The
+    // IDE cannot paper over that, but it must not *lose* anything: what the
+    // decode produced has to encode back to exactly the same bytes, or a
+    // load/save cycle would quietly rewrite the user's file.
+    const QByteArray bytes = QByteArray::fromHex("f0a0aeb7");
+    const ConvertResult decoded = convertToUtf8(bytes, TextEncoding::Gb18030);
+    ASSERT_TRUE(decoded.hasValue());
+    const ConvertResult reencoded = encodeFromQString(
+        QString::fromUtf8(decoded.value()), TextEncoding::Gb18030);
+    ASSERT_TRUE(reencoded.hasValue());
+    EXPECT_EQ(reencoded.value(), bytes)
+        << "a GB18030 load/save cycle changed the bytes";
+
+    // GBK reads the same bytes as two unrelated Han characters — no
+    // four-byte form exists there at all. Whatever it makes of them, it must
+    // be lossless in the same sense.
+    const ConvertResult asGbk = convertToUtf8(bytes, TextEncoding::Gbk);
+    if (asGbk.hasValue()) {
+        const ConvertResult back = encodeFromQString(
+            QString::fromUtf8(asGbk.value()), TextEncoding::Gbk);
+        ASSERT_TRUE(back.hasValue());
+        EXPECT_EQ(back.value(), bytes)
+            << "a GBK load/save cycle changed the bytes";
+    }
+}
+
+TEST(EncodingRoundTrip, NeverSilentlySubstitutes)
+{
+    // A codec that cannot carry a character must refuse, not write '?'.
+    // Windows' GB18030 encoder replaces U+20BB7 with 0x3F and reports
+    // nothing, so this pins the decode-back guard: either the call fails, or
+    // the bytes it produced really do carry the character.
+    const QString text = QString::fromUtf8("𠮷");
+    const TextEncoding codecs[] = {TextEncoding::Gbk, TextEncoding::Gb18030,
+                                   TextEncoding::Big5, TextEncoding::ShiftJis};
+    for (const TextEncoding encoding : codecs) {
+        const ConvertResult encoded = encodeFromQString(text, encoding);
+        if (!encoded.hasValue()) {
+            continue;  // refused: nothing written, nothing lost
+        }
+        const ConvertResult back = convertToUtf8(encoded.value(), encoding);
+        ASSERT_TRUE(back.hasValue()) << LightCpp::Text::toName(encoding);
+        EXPECT_EQ(QString::fromUtf8(back.value()), text)
+            << LightCpp::Text::toName(encoding)
+            << " replaced a character it cannot represent";
+    }
 }

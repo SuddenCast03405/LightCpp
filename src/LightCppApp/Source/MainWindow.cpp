@@ -4035,6 +4035,29 @@ void MainWindow::reloadWithEncoding(LightCpp::Text::TextEncoding encoding)
     }
 
     using namespace LightCpp::Text;
+
+    // Re-reading reads the bytes again: the buffer is replaced and the undo
+    // history goes with it. This used to happen without a word, so a stray
+    // touch on the status-bar drop-down sent the editor back to the on-disk
+    // version and the user only found out later. Ask first — and put the
+    // combo back when they decline, or the status bar would claim an
+    // encoding the buffer is not using.
+    if (ed->isModified()) {
+        const QMessageBox::StandardButton answer = QMessageBox::warning(
+            this, tr("Reload with a Different Encoding"),
+            tr("<p><b>%1</b> has unsaved changes.</p>"
+               "<p>Re-reading the file as %2 replaces the buffer and clears "
+               "the undo history, so those changes will be lost.</p>"
+               "<p>Reload and discard them?</p>")
+                .arg(QFileInfo(ed->filePath()).fileName(),
+                     QString::fromLatin1(toName(encoding))),
+            QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Cancel);
+        if (answer != QMessageBox::Discard) {
+            updateEncodingCombo(ed);
+            return;
+        }
+    }
+
     const TextFileResult result =
         readTextFileWithEncoding(ed->filePath(), encoding);
     if (!result.hasValue()) {
@@ -4143,8 +4166,11 @@ void MainWindow::reloadEditorFromDisk(CodeEditor* ed)
     ed->setReadOnly(!QFileInfo(ed->filePath()).isWritable());
     if (lsp_->isRunning() && isCppLikeFile(ed->lintPath())
         && !fileExceeds(ed->filePath(), largeFileParseMB_)) {
-        lsp_->openDocument(ed->lintPath(), languageIdForFile(ed->lintPath()),
-                           QString::fromUtf8(content.utf8));
+        // changeDocument(): the buffer changed under the server's feet, so
+        // didChange is the right notification; it opens the document if the
+        // server has not seen it yet, instead of a second didOpen for one it
+        // already has.
+        lsp_->changeDocument(ed->lintPath(), QString::fromUtf8(content.utf8));
     }
     outputPanel_->appendBuildOutput(
         tr("Reloaded (changed on disk): %1").arg(ed->filePath()));
