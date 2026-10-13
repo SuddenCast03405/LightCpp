@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -71,10 +72,24 @@ public:
     [[nodiscard]] bool hasValue() const noexcept { return file_.has_value(); }
     [[nodiscard]] explicit operator bool() const noexcept { return hasValue(); }
 
-    /// Access the payload; valid only when hasValue() is true.
-    [[nodiscard]] const TextFile& value() const& noexcept { return *file_; }
-    [[nodiscard]] TextFile& value() & noexcept { return *file_; }
-    [[nodiscard]] TextFile&& takeValue() noexcept { return std::move(*file_); }
+    /// Access the payload; valid only when hasValue() is true. Reading the
+    /// value of a failure is a caller bug, asserted in debug builds (as
+    /// Core::Result does) instead of silently dereferencing an empty optional.
+    [[nodiscard]] const TextFile& value() const& noexcept
+    {
+        assert(hasValue());
+        return *file_;
+    }
+    [[nodiscard]] TextFile& value() & noexcept
+    {
+        assert(hasValue());
+        return *file_;
+    }
+    [[nodiscard]] TextFile&& takeValue() noexcept
+    {
+        assert(hasValue());
+        return std::move(*file_);
+    }
 
     /// The failure reason; valid only when hasValue() is false.
     [[nodiscard]] ReadError error() const noexcept { return error_; }

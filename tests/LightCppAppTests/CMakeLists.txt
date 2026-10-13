@@ -10,8 +10,11 @@
 # the link fails on CodeFormatter::staticMetaObject and its two signals.
 add_executable(LightCppAppTests
     CodeFormatterTests.cpp
+    ConsoleDecoderTests.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CodeFormatter.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ConsoleDecoder.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CodeFormatter.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ConsoleDecoder.hpp
 )
 
 # The app target sets this on itself; CodeFormatter declares Q_OBJECT, so the

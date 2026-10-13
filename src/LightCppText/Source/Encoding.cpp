@@ -45,8 +45,12 @@ constexpr std::array kBoms{
     if (bytes.size() < 8 || bytes.size() % 2 != 0) {
         return false;
     }
-    int zeros = 0;
-    int checked = 0;
+    // qsizetype (not int): the buffers here are capped well below 2 GiB today,
+    // but scaling a count by 10 in `int` would overflow past ~214M units and
+    // silently flip the ratio test. Counting in the buffer's own width costs
+    // nothing and removes the trap.
+    qsizetype zeros = 0;
+    qsizetype checked = 0;
     for (qsizetype i = 0; i + 1 < bytes.size(); i += 2) {
         const char hi = bytes[static_cast<qsizetype>(i) + (stride == 2 ? 1 : 0)];
         const char lo = bytes[static_cast<qsizetype>(i) + (stride == 2 ? 0 : 1)];

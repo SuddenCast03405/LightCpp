@@ -3,6 +3,7 @@
 #include "LightCpp/Text/Converter.hpp"
 
 #include <cstring>
+#include <limits>
 
 #include <QStringConverter>
 #include <QStringDecoder>
@@ -58,6 +59,13 @@ std::optional<QString> winDecode(QByteArrayView bytes, UINT codePage)
 {
     if (bytes.isEmpty()) {
         return QString();
+    }
+    // MultiByteToWideChar takes the length as an int; a buffer larger than that
+    // cannot be passed faithfully, and truncating would decode only a prefix
+    // and silently drop the tail. The IDE caps reads far below this, so the
+    // guard is a correctness backstop rather than a reachable path.
+    if (bytes.size() > std::numeric_limits<int>::max()) {
+        return std::nullopt;
     }
     const int srcLen = static_cast<int>(bytes.size());
     const char* src = bytes.constData();
@@ -264,8 +272,14 @@ ConvertResult encodeFromQString(const QString& text, TextEncoding encoding, bool
         if (text.isEmpty()) {
             break;  // nothing to encode
         }
+        // WideCharToMultiByte takes the length as an int (see winDecode): a
+        // longer input cannot be converted faithfully, so fail rather than
+        // truncate it and save a prefix of the user's file over the whole.
+        if (text.size() > std::numeric_limits<int>::max()) {
+            return ConvertResult::failure(ConvertError::InvalidInput);
+        }
         const wchar_t* src = reinterpret_cast<const wchar_t*>(text.constData());
-        const int srcLen = text.size();
+        const int srcLen = static_cast<int>(text.size());
         // WC_NO_BEST_FIT_CHARS: without it Windows silently substitutes
         // look-alike characters ("best fit") for characters the code page
         // cannot represent, and `usedDefault` is NOT set for those — the

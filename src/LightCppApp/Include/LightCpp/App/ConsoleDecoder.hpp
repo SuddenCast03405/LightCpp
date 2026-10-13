@@ -30,6 +30,11 @@ public:
 
 private:
     QByteArray pending_;
+    /// True when the previous decode() ended on a bare '\r' and emitted its
+    /// line break. The next chunk may then open with the '\n' of that same
+    /// "\r\n" pair, split across the two calls; that '\n' is dropped so the
+    /// pair stays one break instead of becoming a blank line.
+    bool pendingCarriageReturn_ = false;
 };
 
 }  // namespace LightCpp::App

@@ -303,6 +303,13 @@ bool SettingsStore::mergeDocument(const QJsonObject& document, const QString& so
         // its contents are simply not consumed.
         return true;
     }
+    if (type == QLatin1String("session")) {
+        // Window/tab session state lives in the same directory but is written
+        // by MainWindow, not by this class. The *.json sweep still reads it, so
+        // accept it silently instead of reporting "unknown document type" on
+        // every start/reload, which read like a broken configuration.
+        return true;
+    }
     if (type == QLatin1String("defaults")) {
         mergedDefaults_ = mergeObjects(mergedDefaults_, document);
         return true;

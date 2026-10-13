@@ -70,6 +70,16 @@ QString decodeConsoleBlock(const QByteArray& block)
 QString ConsoleDecoder::decode(const QByteArray& chunk)
 {
     pending_ += chunk;
+    // A "\r\n" pair split across two calls: the previous call ended on the
+    // '\r', emitted its break and left nothing (a bare '\r' is a terminator
+    // on its own, see below). If this chunk then opens with that pair's '\n',
+    // counting it again would add a blank line the program never printed.
+    if (pendingCarriageReturn_) {
+        pendingCarriageReturn_ = false;
+        if (pending_.startsWith('\n')) {
+            pending_.remove(0, 1);
+        }
+    }
     // Consume only up to the last terminator: a multi-byte character split
     // across two chunks would otherwise be misjudged at the seam.
     // '\r' counts as a terminator too — progress bars and prompts carry
@@ -108,11 +118,15 @@ QString ConsoleDecoder::decode(const QByteArray& chunk)
         result += QLatin1Char('\n');
         start = i + 1;
     }
+    // A trailing bare '\r' inside this call emitted its break, but if its '\n'
+    // arrives with the next chunk we must not count that '\n' again.
+    pendingCarriageReturn_ = !complete.isEmpty() && complete.back() == '\r';
     return result;
 }
 
 QString ConsoleDecoder::flush()
 {
+    pendingCarriageReturn_ = false;
     if (pending_.isEmpty()) {
         return {};
     }
