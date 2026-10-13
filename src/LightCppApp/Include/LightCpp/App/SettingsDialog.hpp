@@ -7,6 +7,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <atomic>
+
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -17,9 +19,11 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
+class QPushButton;
 class QSpinBox;
 class QStackedWidget;
 class QTableWidget;
+class QThread;
 
 namespace LightCpp::App {
 
@@ -47,6 +51,7 @@ public:
     enum class Scope { Base, Overlay };
 
     explicit SettingsDialog(QWidget* parent = nullptr);
+    ~SettingsDialog() override;  // stops a running folder scan
 
     /// Required before exec(): the base layer directory (…/config). Resets
     /// anything loaded for the base layer and re-reads it from the new
@@ -141,6 +146,10 @@ private:
     void removeToolchain();
     void checkCurrentToolchain();
     void identifyToolchainFolder();
+    /// A background folder scan finished: fold its findings into the
+    /// toolchain list (or say that there was nothing to find).
+    void onToolchainScanFinished(
+        const QList<LightCpp::Settings::Toolchain>& found);
 
     // --- kit master-detail --------------------------------------------------
     void loadKitForm(int kitIndex);
@@ -209,6 +218,18 @@ private:
     /// Spec key ("cCompiler", ..., "cmake", ...) -> its path line edit.
     QHash<QString, QLineEdit*> toolchainToolEdits_;
     int currentToolchainIndex_ = -1;
+    /// The "Find Compilers…" button, disabled while a scan runs.
+    QPushButton* toolchainScanButton_ = nullptr;
+    /// The folder walk runs on its own thread — a deep scan of a big drive
+    /// takes far too long for the GUI thread. Null when nothing is running.
+    QThread* toolchainScanThread_ = nullptr;
+    /// Set when the dialog goes away so the walk gives up between
+    /// directories instead of holding the teardown for minutes.
+    std::atomic<bool> toolchainScanAbort_{false};
+    /// Where the running scan started and how deep it was asked to go —
+    /// kept for the completion message, which runs after the local scope.
+    QString toolchainScanRoot_;
+    int toolchainScanDepth_ = 0;
 
     // --- kits page: kit form -------------------------------------------------
     QListWidget* kitList_ = nullptr;

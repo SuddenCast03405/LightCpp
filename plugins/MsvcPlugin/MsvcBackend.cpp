@@ -359,7 +359,23 @@ private:
     /// IDE's own Msvc::detect does (preview installs do ship msbuild), and
     /// `-find` with a glob walks MSBuild\Current and the odd years where the
     /// directory layout differed, without any per-version guesswork here.
+    ///
+    /// Cached: the plugin interface is synchronous by contract (buildSteps()
+    /// returns the list), so this lookup runs on the GUI thread, and vswhere
+    /// costs its full 5s+15s timeouts on a machine where it is missing or
+    /// wedged. Paying that once per session instead of on every build is the
+    /// most this side can do without an asynchronous build-step interface.
     [[nodiscard]] QString locateMsBuild() const
+    {
+        if (msbuildProbed_) {
+            return msbuildPath_;
+        }
+        msbuildProbed_ = true;
+        msbuildPath_ = probeMsBuild();
+        return msbuildPath_;
+    }
+
+    [[nodiscard]] QString probeMsBuild() const
     {
         const QString programFilesX86 =
             qEnvironmentVariable("ProgramFiles(x86)");
@@ -440,6 +456,11 @@ private:
     }
 
     LightCpp::Plugin::IdeServices* services_ = nullptr;
+    /// Memoised MSBuild lookup (see locateMsBuild): the probe answers once
+    /// per session, failures included, so a missing MSBuild is not paid for
+    /// again on every build.
+    mutable QString msbuildPath_;
+    mutable bool msbuildProbed_ = false;
     /// The most recently opened project, kept for buildSteps(). The IDE
     /// opens one project at a time and always opens before building. The
     /// two shapes are mutually exclusive; hasDsp_ says which is live.

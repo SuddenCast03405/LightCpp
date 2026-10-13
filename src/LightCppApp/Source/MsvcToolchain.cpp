@@ -15,6 +15,7 @@
 #include <QJsonObject>
 #include <QProcess>
 #include <QSettings>
+#include <QThread>
 
 #include <array>
 #include <algorithm>
@@ -383,6 +384,54 @@ Toolchain detect()
 
     best.problem = bestProblem;
     return best;
+}
+
+ToolchainDetector::ToolchainDetector(QObject* parent) : QObject(parent)
+{
+    // The result crosses threads through a queued signal, so the meta-object
+    // system has to know the type by name.
+    qRegisterMetaType<LightCpp::App::Msvc::Toolchain>();
+}
+
+ToolchainDetector::~ToolchainDetector()
+{
+    if (thread_ == nullptr) {
+        return;
+    }
+    // detect() has no cancellation path — its blocking vswhere waits are the
+    // reason it runs here in the first place — so the only safe teardown is
+    // to let it finish. The worker below emits through `this`, which must
+    // therefore stay alive; the wait is bounded by vswhere's own timeouts.
+    thread_->wait();
+    delete thread_;
+    thread_ = nullptr;
+}
+
+void ToolchainDetector::start()
+{
+    if (thread_ != nullptr) {
+        return;
+    }
+    thread_ = QThread::create([this] {
+        result_ = LightCpp::App::Msvc::detect();
+        emit detected(result_);
+    });
+    thread_->start();
+}
+
+bool ToolchainDetector::isRunning() const
+{
+    return thread_ != nullptr && !thread_->isFinished();
+}
+
+bool ToolchainDetector::waitForFinished(int msecs)
+{
+    if (thread_ == nullptr) {
+        return true;
+    }
+    // Joining the thread publishes result_/finished_ to this thread, so the
+    // plain (non-atomic) members need no further synchronisation.
+    return thread_->wait(QDeadlineTimer(msecs)) || thread_->isFinished();
 }
 
 ToolchainHeaders clangdHeaders(const Toolchain& toolchain)

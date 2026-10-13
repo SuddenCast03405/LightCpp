@@ -41,6 +41,7 @@
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QThread>
 #include <QUuid>
 #include <QVBoxLayout>
 
@@ -449,6 +450,7 @@ QWidget* SettingsDialog::buildToolchainsPage()
            "is created for every directory that contains a compiler."));
     connect(scanButton, &QPushButton::clicked, this,
             [this] { identifyToolchainFolder(); });
+    toolchainScanButton_ = scanButton;
     listPane->addWidget(scanButton);
     auto* toolchainButtons = new QHBoxLayout;
     auto* add = new QPushButton(tr("Add"), this);
@@ -1547,18 +1549,60 @@ void SettingsDialog::identifyToolchainFolder()
         }
     }
 
-    const QList<Settings::Toolchain> found =
-        Settings::scanForToolchains(dir, scanOptions);
+    commitToolchainForm();
+    // The walk can take minutes on a big drive (depth 5 over C:\ is a lot of
+    // directories), so it runs on its own thread: the dialog stays usable and
+    // the button that started it says so until the answer arrives. Edits are
+    // committed first so the result is added to what the widgets show.
+    if (toolchainScanThread_ != nullptr) {
+        return;  // one scan at a time (the button is disabled meanwhile)
+    }
+    setStatus(tr("Searching for compilers in %1…")
+                  .arg(QDir::toNativeSeparators(dir)));
+    if (toolchainScanButton_ != nullptr) {
+        toolchainScanButton_->setEnabled(false);
+    }
+    toolchainScanAbort_ = false;
+    toolchainScanRoot_ = dir;
+    toolchainScanDepth_ = scanOptions.maxDepth;
+    scanOptions.abort = &toolchainScanAbort_;
+    const QString scanRoot = dir;
+    toolchainScanThread_ = QThread::create(
+        [this, scanRoot, scanOptions] {
+            const QList<Settings::Toolchain> found =
+                Settings::scanForToolchains(scanRoot, scanOptions);
+            // Deliberately not a signal on this dialog: a queued invocation
+            // keeps the payload off the header and needs no metatype. It is
+            // safe because the destructor waits for this thread.
+            QMetaObject::invokeMethod(
+                this, [this, found] { onToolchainScanFinished(found); },
+                Qt::QueuedConnection);
+        });
+    toolchainScanThread_->start();
+}
+
+void SettingsDialog::onToolchainScanFinished(
+    const QList<LightCpp::Settings::Toolchain>& found)
+{
+    if (toolchainScanThread_ != nullptr) {
+        toolchainScanThread_->wait();
+        delete toolchainScanThread_;
+        toolchainScanThread_ = nullptr;
+    }
+    if (toolchainScanButton_ != nullptr) {
+        toolchainScanButton_->setEnabled(true);
+    }
+    const int depth = toolchainScanDepth_;
     if (found.isEmpty()) {
+        setStatus(tr("No compilers found (depth %1).").arg(depth));
         QMessageBox::information(
             this, tr("Identify tools"),
             tr("No compilers were found under\n%1 (depth %2)")
-                .arg(QDir::toNativeSeparators(dir),
-                     QString::number(scanOptions.maxDepth)));
+                .arg(QDir::toNativeSeparators(toolchainScanRoot_),
+                     QString::number(depth)));
         return;
     }
 
-    commitToolchainForm();
     for (const Settings::Toolchain& scanned : found) {
         Settings::Toolchain toolchain = scanned;
         toolchain.id = uniqueToolchainId(QStringLiteral("found-toolchain"));
@@ -1573,7 +1617,20 @@ void SettingsDialog::identifyToolchainFolder()
     updateKitSuggestions();
     setStatus(tr("Created %1 toolchain(s) under %2")
                   .arg(found.size())
-                  .arg(QDir::toNativeSeparators(dir)));
+                  .arg(QDir::toNativeSeparators(toolchainScanRoot_)));
+}
+
+SettingsDialog::~SettingsDialog()
+{
+    if (toolchainScanThread_ == nullptr) {
+        return;
+    }
+    // The walk checks the flag between directories, so this wait is bounded
+    // by one directory listing — not by the depth the user asked for.
+    toolchainScanAbort_ = true;
+    toolchainScanThread_->wait();
+    delete toolchainScanThread_;
+    toolchainScanThread_ = nullptr;
 }
 
 // ---------------------------------------------------------------------------

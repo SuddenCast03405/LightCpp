@@ -1,9 +1,15 @@
 #pragma once
 
+#include <QObject>
 #include <QString>
 #include <QStringList>
 
 #include "LightCpp/App/ToolchainHeaders.hpp"
+
+// Forward declaration *outside* the namespace on purpose: inside
+// LightCpp::App::Msvc it would declare a nested class named QThread, and
+// every use of the real Qt class would fail with an incomplete type.
+class QThread;
 
 namespace LightCpp::App::Msvc {
 
@@ -57,7 +63,45 @@ struct Toolchain {
 /// Never returns an empty-handed result: when nothing is found, or what was
 /// found is unusable, `problem` says so and the caller can show that instead of
 /// a compiler failing with a wall of "cannot open include file".
+///
+/// Blocking: it shells out to vswhere and waits for it. Call it from a worker
+/// thread (ToolchainDetector does) or accept the wait.
 [[nodiscard]] Toolchain detect();
+
+/// Runs detect() on its own thread and reports the result through a signal.
+///
+/// detect() blocks on vswhere — which on a machine without it costs the full
+/// start/finish timeouts, tens of seconds — so calling it from the GUI thread
+/// froze the window before it was even shown. The result is delivered back on
+/// the receiver's thread as a queued signal; a caller that cannot wait (the
+/// build path, when a build is the first thing to need the answer) may block
+/// on waitForFinished() and then read result().
+class ToolchainDetector : public QObject {
+    Q_OBJECT
+public:
+    explicit ToolchainDetector(QObject* parent = nullptr);
+    ~ToolchainDetector() override;  // waits for a running detection
+
+    /// Starts the detection. Idempotent: does nothing once started.
+    void start();
+
+    [[nodiscard]] bool isRunning() const;
+
+    /// Blocks until the detection has finished. False when it timed out.
+    [[nodiscard]] bool waitForFinished(int msecs = 30000);
+
+    /// The finished result. Only meaningful after the detection finished —
+    /// waitForFinished() returned true, or detected() was delivered.
+    [[nodiscard]] Toolchain result() const { return result_; }
+
+signals:
+    /// Emitted once, when the detection finishes.
+    void detected(const LightCpp::App::Msvc::Toolchain& toolchain);
+
+private:
+    QThread* thread_ = nullptr;
+    Toolchain result_;
+};
 
 /// The headers clangd must resolve against for this toolchain.
 ///
@@ -69,3 +113,7 @@ struct Toolchain {
 [[nodiscard]] ToolchainHeaders clangdHeaders(const Toolchain& toolchain);
 
 }  // namespace LightCpp::App::Msvc
+
+/// The detector's result travels through a queued signal, which is only
+/// possible for types the meta-object system knows.
+Q_DECLARE_METATYPE(LightCpp::App::Msvc::Toolchain)

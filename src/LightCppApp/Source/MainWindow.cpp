@@ -663,10 +663,17 @@ MainWindow::MainWindow(QWidget* parent)
             &MainWindow::onGitCommandFinished);
     syncGitWorkingDirectory();
 
-    // Locate MSVC once. cl.exe needs INCLUDE/LIB built by hand, so this walks
-    // the installed toolsets and the Windows SDK up front rather than failing
-    // mid-build; a kit that names cl.exe reports the outcome either way.
-    msvcToolchain_ = LightCpp::App::Msvc::detect();
+    // Locate MSVC in the background. cl.exe needs INCLUDE/LIB built by hand,
+    // so the toolset and the Windows SDK are walked up front — but that walk
+    // shells out to vswhere, whose worst case is tens of seconds, which used
+    // to freeze the window before it was ever shown. onMsvcDetected() stores
+    // the result and re-applies the clangd headers when it arrives; a build
+    // that asks first waits for it (see the MSVC kit branch in the build
+    // path) instead of reporting "no toolchain".
+    msvcDetector_ = new LightCpp::App::Msvc::ToolchainDetector(this);
+    connect(msvcDetector_, &LightCpp::App::Msvc::ToolchainDetector::detected,
+            this, &MainWindow::onMsvcDetected);
+    msvcDetector_->start();
 
     // Load the config (writing the starter files on first run) *before*
     // anything consumes it: fonts, gates and the Kit combo below all read
@@ -5684,6 +5691,21 @@ void MainWindow::onCompileCurrentFile()
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
 
     if (kit.has_value() && isMsvcKit(*kit)) {
+        // The toolchain detection runs on its own thread from startup on; a
+        // build can be the first thing that needs its answer. Wait for it —
+        // bounded, and the status bar says why the window pauses — instead
+        // of reporting "no toolchain" for something still being looked up.
+        if (msvcDetector_ != nullptr && msvcDetector_->isRunning()) {
+            statusBar()->showMessage(tr("Looking for the MSVC toolchain…"));
+            const bool done = msvcDetector_->waitForFinished();
+            statusBar()->clearMessage();
+            if (done) {
+                // Blocking here means the queued detected() has not been
+                // delivered yet (that needs the event loop), so apply the
+                // result directly; the later copy is a no-op.
+                onMsvcDetected(msvcDetector_->result());
+            }
+        }
         if (!msvcToolchain_.isValid()) {
             outputPanel_->showChannel(OutputPanel::ChannelBuild);
             outputPanel_->appendBuildOutput(
@@ -6630,6 +6652,32 @@ QString MainWindow::resolveDebuggerPath() const
         }
     }
     return QString();
+}
+
+void MainWindow::onMsvcDetected(const LightCpp::App::Msvc::Toolchain& toolchain)
+{
+    // A build may have waited for the answer and applied it already; the
+    // queued copy of the same result then must not log or restart anything
+    // a second time.
+    if (msvcDetectionApplied_) {
+        msvcToolchain_ = toolchain;
+        return;
+    }
+    msvcDetectionApplied_ = true;
+    msvcToolchain_ = toolchain;
+
+    // Say what was found (or why nothing was): this runs in the background
+    // now, so unlike the old inline detect() the outcome would otherwise
+    // never reach the user until a build failed.
+    outputPanel_->appendBuildOutput(
+        toolchain.isValid()
+            ? tr("MSVC toolchain: %1").arg(toolchain.label)
+            : tr("No MSVC toolchain: %1").arg(toolchain.problem));
+
+    // clangd needs the MSVC headers to parse against; when the server is
+    // already up, applyToolchainHeaders() restarts it, which is exactly the
+    // path a late-arriving toolchain needs.
+    applyToolchainHeaders();
 }
 
 void MainWindow::applyToolchainHeaders()

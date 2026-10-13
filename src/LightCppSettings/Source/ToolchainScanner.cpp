@@ -119,6 +119,9 @@ bool isExcluded(const QString& name, const QStringList& excluded)
 void walk(const QString& dir, int depth, const ToolchainScanOptions& options,
           QList<Toolchain>* out)
 {
+    if (scanAborted(options)) {
+        return;  // the caller is tearing down; stop between directories
+    }
     Toolchain toolchain;
     const QStringList filled = fillFromDirectory(dir, &toolchain);
     const bool hostsCompilers =
@@ -161,8 +164,11 @@ QList<Toolchain> scanForToolchains(const QString& root,
         return result;
     }
     const int maxDepth = qMax(0, options.maxDepth);
-    walk(QDir(root).absolutePath(), 0,
-         ToolchainScanOptions{maxDepth, options.excludedDirectories}, &result);
+    // Copy rather than aggregate-initialise: a braced init here would drop
+    // any option added to the struct later (the abort flag was exactly that).
+    ToolchainScanOptions effective = options;
+    effective.maxDepth = maxDepth;
+    walk(QDir(root).absolutePath(), 0, effective, &result);
     return result;
 }
 

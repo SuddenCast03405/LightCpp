@@ -519,6 +519,9 @@ private:
     /// following the selected toolchain, and restart it when that changes —
     /// clangd reads its include paths once, at start-up.
     void applyToolchainHeaders();
+    /// The background MSVC detection finished: store it, report it in the
+    /// build channel, and hand clangd the MSVC headers it implies.
+    void onMsvcDetected(const LightCpp::App::Msvc::Toolchain& toolchain);
 
     // --- code-completion backends -----------------------------------------
     /// Route a completion request to the configured backend (clangd/ccls as
@@ -703,10 +706,15 @@ private:
     /// Binary the last project build produced, i.e. what "Run Project" starts.
     QString lastProjectExe_;
 
-    /// MSVC located once at start-up. cl.exe cannot be launched bare — it needs
-    /// INCLUDE/LIB pointing at both its own toolset and the Windows SDK, which
-    /// normally vcvarsall.bat would set up. See MsvcToolchain.hpp.
+    /// MSVC located at start-up, in the background. cl.exe cannot be launched
+    /// bare — it needs INCLUDE/LIB pointing at both its own toolset and the
+    /// Windows SDK, which normally vcvarsall.bat would set up. See
+    /// MsvcToolchain.hpp; the detector must outlive the window because its
+    /// worker thread emits through itself.
+    LightCpp::App::Msvc::ToolchainDetector* msvcDetector_ = nullptr;
     LightCpp::App::Msvc::Toolchain msvcToolchain_;
+    /// The detection result has been stored (and reported) once already.
+    bool msvcDetectionApplied_ = false;
     /// Compiler launched by the most recent build, so the failure message can
     /// name the path that was actually missing.
     QString lastCompilerPath_;

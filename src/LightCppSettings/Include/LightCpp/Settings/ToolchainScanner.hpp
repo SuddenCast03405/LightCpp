@@ -11,6 +11,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <atomic>
+
 #include "LightCpp/Settings/SettingsTypes.hpp"
 
 namespace LightCpp::Settings {
@@ -30,7 +32,20 @@ struct ToolchainScanOptions {
         QStringLiteral("libexec"),
         QStringLiteral("var"),
     };
+
+    /// Optional cancellation flag. When it is set to true the walk stops at
+    /// the next directory and returns what it has found so far — which is
+    /// what lets a caller run a deep scan on a worker thread and still tear
+    /// itself down promptly (the scan of a whole drive can take minutes).
+    /// Owned by the caller and read from the scanning thread.
+    std::atomic<bool>* abort = nullptr;
 };
+
+/// True when the caller asked for the scan to stop.
+[[nodiscard]] inline bool scanAborted(const ToolchainScanOptions& options)
+{
+    return options.abort != nullptr && options.abort->load();
+}
 
 /// Walk `root` and collect one toolchain per directory that hosts a
 /// compiler (gcc/g++, clang/clang++, cl). Each toolchain is named after
