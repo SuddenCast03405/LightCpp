@@ -6,9 +6,10 @@
 // (path, line) pair when the user activates a hit.
 #include "LightCpp/App/ProjectSearchDialog.hpp"
 
+#include "LightCpp/Text/TextFile.hpp"
+
 #include <QCheckBox>
 #include <QDirIterator>
-#include <QFile>
 #include <QFileInfo>
 #include <QFont>
 #include <QHBoxLayout>
@@ -97,23 +98,11 @@ bool ProjectSearchThread::isSearchableFile(const QString& fileName)
 std::optional<QString> ProjectSearchThread::readTextFile(
     const QString& path) const
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        return std::nullopt;
-    }
-    // Binary guard: a NUL byte in the first 4 KiB means this is not text.
-    const QByteArray head = file.read(4096);
-    if (head.contains('\0')) {
-        return std::nullopt;
-    }
-    const qint64 size = file.size();
-    if (size <= qint64(head.size())) {
-        return QString::fromUtf8(head);
-    }
-    if (size > kMaxFileBytes) {
-        return std::nullopt;
-    }
-    return QString::fromUtf8(file.readAll());
+    // LightCppText owns the "is this a file we may scan" policy (binary sniff,
+    // size limit, no lossy decoding) and is unit-tested there. Doing it here
+    // by hand is how the scan lost the first 4 KiB of every file: the NUL sniff
+    // read a prefix, and the readAll() that followed returned only the rest.
+    return LightCpp::Text::readSearchableTextFile(path, kMaxFileBytes);
 }
 
 void ProjectSearchThread::run()

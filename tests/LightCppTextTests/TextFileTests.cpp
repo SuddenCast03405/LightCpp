@@ -485,3 +485,103 @@ TEST(EncodingRoundTrip, NeverSilentlySubstitutes)
             << " replaced a character it cannot represent";
     }
 }
+
+// ---------------------------------------------------------------------------
+// readSearchableTextFile — the whole-file read behind "Search in Project"
+// ---------------------------------------------------------------------------
+
+TEST_F(TextFileTest, SearchReadKeepsTheStartOfAFileBiggerThanTheSniffBlock)
+{
+    // The scan sniffed the first 4 KiB for NUL bytes and then called
+    // readAll(), which returns what is left *after* the bytes already read —
+    // so every file larger than 4 KiB was searched without its opening block:
+    // the #include lines and the file header were simply not there, and every
+    // reported line number was off by the size of the missing prefix.
+    QByteArray content("// needle_at_the_very_top\n#include <vector>\n");
+    while (content.size() < 4096 + 128) {
+        content += "// padding, to push this file past the sniff block\n";
+    }
+    const QString path = writeFile("big.cpp", content);
+    ASSERT_GT(content.size(), 4096);
+
+    const auto text =
+        LightCpp::Text::readSearchableTextFile(path, 8 * 1024 * 1024);
+
+    ASSERT_TRUE(text.has_value());
+    EXPECT_TRUE(text->startsWith(QStringLiteral("// needle_at_the_very_top")));
+    EXPECT_TRUE(text->contains(QStringLiteral("#include <vector>")));
+    // Nothing was dropped: same number of lines as the file has.
+    EXPECT_EQ(text->count(QLatin1Char('\n')), content.count('\n'));
+    EXPECT_EQ(*text, QString::fromUtf8(content));
+}
+
+TEST_F(TextFileTest, SearchReadRejectsNulBytesInTheOpeningBlock)
+{
+    QByteArray content("plain text at the start\n");
+    content.append(4000 - content.size(), '.');
+    content.append('\0');
+    content.append("more bytes after the NUL\n");
+    const QString path = writeFile("binary.bin", content);
+
+    EXPECT_FALSE(
+        LightCpp::Text::readSearchableTextFile(path, 8 * 1024 * 1024).has_value());
+}
+
+TEST_F(TextFileTest, SearchReadOnlySniffsTheOpeningBlock)
+{
+    // The guard is a header check, not a whole-file scan: a NUL past the
+    // sniff block is tolerated so that a stray byte late in a large file does
+    // not make the whole file unsearchable. Pinned here so the boundary is a
+    // decision rather than an accident.
+    QByteArray content("text, then a long stretch without NUL\n");
+    content.append(5000 - content.size(), '.');
+    content.append('\0');
+    const QString path = writeFile("late-nul.txt", content);
+
+    const auto text =
+        LightCpp::Text::readSearchableTextFile(path, 8 * 1024 * 1024);
+    ASSERT_TRUE(text.has_value());
+    EXPECT_EQ(text->size(), content.size());
+}
+
+TEST_F(TextFileTest, SearchReadRejectsFilesAboveTheLimit)
+{
+    const QByteArray content("0123456789");
+    const QString path = writeFile("small.txt", content);
+
+    EXPECT_TRUE(LightCpp::Text::readSearchableTextFile(path, 1024).has_value());
+    EXPECT_TRUE(LightCpp::Text::readSearchableTextFile(path, 10).has_value());
+    EXPECT_FALSE(LightCpp::Text::readSearchableTextFile(path, 9).has_value());
+    // 0 means "no limit" rather than "nothing fits".
+    EXPECT_TRUE(LightCpp::Text::readSearchableTextFile(path, 0).has_value());
+}
+
+TEST_F(TextFileTest, SearchReadReturnsEachFileOfItsOwnAccord)
+{
+    // Two consecutive reads must not depend on each other: the old code left
+    // the position at 4096, so a second read of a longer file was short by a
+    // block as well.
+    QByteArray content("first line marker\n");
+    content.append(6000, 'x');
+    const QString path = writeFile("repeat.cpp", content);
+
+    const auto first =
+        LightCpp::Text::readSearchableTextFile(path, 8 * 1024 * 1024);
+    const auto second =
+        LightCpp::Text::readSearchableTextFile(path, 8 * 1024 * 1024);
+    ASSERT_TRUE(first.has_value());
+    ASSERT_TRUE(second.has_value());
+    EXPECT_EQ(*first, *second);
+    EXPECT_EQ(*first, QString::fromUtf8(content));
+}
+
+TEST_F(TextFileTest, SearchReadRefusesWhatItCannotOpen)
+{
+    EXPECT_FALSE(LightCpp::Text::readSearchableTextFile(
+                     dir_.filePath("no-such-file.cpp"), 8 * 1024 * 1024)
+                     .has_value());
+    // A directory is not a file.
+    EXPECT_FALSE(
+        LightCpp::Text::readSearchableTextFile(dir_.path(), 8 * 1024 * 1024)
+            .has_value());
+}

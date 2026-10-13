@@ -9,6 +9,14 @@
 #include "LightCpp/Text/Converter.hpp"
 
 namespace LightCpp::Text {
+namespace {
+
+/// How much of a file is inspected for a NUL byte before deciding it is not
+/// text. Long enough to catch a binary's header or a UTF-16 file, short
+/// enough that the check never dominates the read.
+constexpr qsizetype kBinarySniffBytes = 4096;
+
+}  // namespace
 
 const char* toString(TextFileError error) noexcept
 {
@@ -182,6 +190,29 @@ TextFileResult readTextFileWithEncoding(
     content.lineEndings = detectLineEndings(data);
 
     return TextFileResult::success(std::move(content));
+}
+
+std::optional<QString> readSearchableTextFile(const QString& path,
+                                              std::int64_t maxBytes)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return std::nullopt;
+    }
+    const QByteArray bytes = file.readAll();
+    if (maxBytes > 0 && bytes.size() > maxBytes) {
+        return std::nullopt;
+    }
+    // Binary guard: a NUL byte in the first block means this is not text. The
+    // sniff looks at the bytes already in hand instead of reading a prefix
+    // first — a prefix read moves the file position, and readAll() afterwards
+    // would then return the file *minus* that prefix.
+    const qsizetype sniffLength =
+        qMin<qsizetype>(bytes.size(), kBinarySniffBytes);
+    if (bytes.first(sniffLength).contains('\0')) {
+        return std::nullopt;
+    }
+    return QString::fromUtf8(bytes);
 }
 
 const char* toString(WriteFileError error) noexcept

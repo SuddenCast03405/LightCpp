@@ -67,6 +67,17 @@ private:
     void onFinished(int exitCode, QProcess::ExitStatus status);
     void onError();
 
+    /// Stop the run in progress and throw the process object away.
+    ///
+    /// Killing and disconnecting is not enough. format() only (re)connects
+    /// when `process_` is null, so a process left alive but disconnected can
+    /// never answer again: from then on every request runs, says nothing, and
+    /// dies on the 15 s timeout with a message blaming clang-format. Dropping
+    /// the object restores the invariant the next format() call relies on, and
+    /// a deleted QProcess cannot deliver a stale signal from the abandoned run
+    /// either. Sets inFlightId_ to 0 before the process goes.
+    void discardProcess();
+
     QProcess* process_ = nullptr;
     QTimer* timeout_ = nullptr;
     /// Settings-provided overrides; empty = the compiled-in defaults.

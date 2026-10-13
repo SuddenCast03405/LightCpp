@@ -78,10 +78,26 @@ CodeFormatter::CodeFormatter(QObject* parent)
 
 CodeFormatter::~CodeFormatter()
 {
-    if (process_ != nullptr && process_->state() != QProcess::NotRunning) {
+    discardProcess();
+}
+
+void CodeFormatter::discardProcess()
+{
+    inFlightId_ = 0;
+    if (process_ == nullptr) {
+        return;
+    }
+    process_->disconnect(this);
+    if (process_->state() != QProcess::NotRunning) {
         process_->kill();
         process_->waitForFinished(1000);
     }
+    // Deleted rather than kept: a fresh QProcess is what lets the next
+    // request reconnect, and it cannot report anything about the run we just
+    // abandoned. Safe here because nothing in this path runs from inside the
+    // process's own signal emission.
+    delete process_;
+    process_ = nullptr;
 }
 
 int CodeFormatter::format(const QString& text, const QString& assumeFileName)
@@ -91,10 +107,7 @@ int CodeFormatter::format(const QString& text, const QString& assumeFileName)
     // Supersede whatever is running: its answer describes text that no longer
     // exists, and delivering it would undo the newer request.
     if (process_ != nullptr && process_->state() != QProcess::NotRunning) {
-        inFlightId_ = 0;
-        process_->disconnect(this);  // the finished handler must not touch state
-        process_->kill();
-        process_->waitForFinished(1000);
+        discardProcess();
     }
 
     const QString tool = resolvedToolPath();
@@ -107,6 +120,9 @@ int CodeFormatter::format(const QString& text, const QString& assumeFileName)
         return id;
     }
 
+    // Reconnects after every supersede and timeout: discardProcess() deletes
+    // the object rather than leaving a disconnected one behind, so this is a
+    // normal path, not a one-off construction.
     if (process_ == nullptr) {
         process_ = new QProcess(this);
         process_->setProcessChannelMode(QProcess::SeparateChannels);
@@ -126,9 +142,9 @@ int CodeFormatter::format(const QString& text, const QString& assumeFileName)
                 return;
             }
             const int id = inFlightId_;
-            inFlightId_ = 0;
-            process_->disconnect(this);
-            process_->kill();
+            // Drop the process, not just its connections, or the next request
+            // would run against a silent one and fail the same way again.
+            discardProcess();
             emit failed(id, tr("clang-format did not finish within %1 seconds.")
                                 .arg(kFormatTimeoutMs / 1000));
         });

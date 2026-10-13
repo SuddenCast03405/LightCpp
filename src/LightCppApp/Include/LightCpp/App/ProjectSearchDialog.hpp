@@ -49,7 +49,8 @@ signals:
 private:
     /// True when `fileName` is a text/source file worth scanning.
     [[nodiscard]] static bool isSearchableFile(const QString& fileName);
-    /// Read the file as text; nullopt when it is binary or too large.
+    /// Read the file as text; nullopt when it is binary or too large. The
+    /// policy and the reading live in LightCppText, where they are tested.
     [[nodiscard]] std::optional<QString> readTextFile(const QString& path) const;
 
     QString root_;

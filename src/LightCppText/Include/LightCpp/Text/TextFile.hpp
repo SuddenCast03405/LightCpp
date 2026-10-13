@@ -96,6 +96,25 @@ struct TextFileOptions {
     TextEncoding encoding,
     const TextFileOptions& options = {});
 
+/// Read the whole file at `path` as UTF-8 for a whole-file text scan.
+///
+/// A scan is not an editor: it wants every byte of a file or none of it, and
+/// it must not report hits on text it had to guess at. So the file is read in
+/// one piece and rejected outright when it is not plainly UTF-8 text — a NUL
+/// byte in the first block (see the binary sniff below), or more bytes than
+/// `maxBytes` (0 means no limit).
+///
+/// The sniff reads the file before looking at it rather than peeking at a
+/// prefix and then reading "the rest": reading a prefix advances the position,
+/// and a reader that forgets that loses exactly that prefix from the returned
+/// text — the first 4 KiB of every file, which is where the includes and the
+/// file header are.
+///
+/// Returns std::nullopt when the file cannot be opened, is too large or is not
+/// plain text. Safe to call from background threads (never touches the GUI).
+[[nodiscard]] std::optional<QString> readSearchableTextFile(
+    const QString& path, std::int64_t maxBytes);
+
 /// Why writing a text file failed.
 enum class WriteFileError {
     OpenFailed,    ///< the temporary file could not be created
