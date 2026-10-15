@@ -17,6 +17,7 @@
 #include <QMap>
 
 #include "LightCpp/App/ToolchainHeaders.hpp"
+#include "LightCpp/Core/ReadyGate.hpp"
 
 namespace LightCpp::App {
 
@@ -154,6 +155,27 @@ public:
     void stop();
 
     [[nodiscard]] bool isRunning() const;
+
+    /// True between start() launching the process and the initialize response
+    /// landing — "coming up", as opposed to isRunning()'s "usable". The
+    /// difference matters: start() is asynchronous, so isRunning() is false for
+    /// the whole handshake, and reading that as "start() failed" is R2-08.
+    [[nodiscard]] bool isStarting() const;
+
+    /// Run `callback` as soon as the initialize handshake has completed: on the
+    /// spot when the server is already up, otherwise queued until
+    /// serverStarted() fires.
+    ///
+    /// This is the await form of "is the server usable yet?", for callers that
+    /// have work to hand over and cannot sit in an event loop to wait (a
+    /// completion retry, for instance). Callers that would otherwise test
+    /// isRunning() right after start() should use this instead — that test is
+    /// false for the whole handshake, and treating it as failure is how the
+    /// retry budget got spent without ever asking the server anything.
+    ///
+    /// Queued callbacks are dropped, never run, when the server fails or is
+    /// stopped: they were waiting for a handshake that is not coming.
+    void whenReady(LightCpp::Core::ReadyGate::Callback callback);
 
     /// Choose which compiler's headers the server resolves includes against.
     ///
@@ -345,6 +367,10 @@ private:
     QMap<int, int> renameRequests_;               // requestId -> 0 (pending)
     QMap<int, int> codeActionRequests_;           // requestId -> 0 (pending)
     bool initialized_ = false;          // handshake done
+    /// Callbacks waiting for the handshake to land (see whenReady). Opened by
+    /// the initialize response, dropped by stop() / reportServerFailure() /
+    /// process exit so a stale request never fires on a later handshake.
+    LightCpp::Core::ReadyGate readyGate_;
     bool everInitialized_ = false;      // handshake completed at least once —
                                         // separates "exited during start-up"
                                         // (serverFailed) from a later exit

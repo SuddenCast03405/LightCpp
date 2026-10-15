@@ -544,6 +544,13 @@ private:
     /// Run the last completion request against libclang and show the popup.
     /// The parse itself runs on the completer's worker thread.
     void deliverLibClangCompletion();
+    /// Push the buffer and ask the language server for a completion at the
+    /// position remembered in `lastCompletion_`. The server must already be
+    /// initialized; callers that have to wait for the handshake go through
+    /// LanguageServerClient::whenReady() first (R2-08). Shared by the first
+    /// attempt and the retry so both take the same protocol path
+    /// (changeDocument before requestCompletion).
+    void requestLspCompletion(CodeEditor* editor);
     /// The libclang answer, back from the worker thread. Answers whose token
     /// is not the newest request describe text the caret has left behind and
     /// are dropped.
@@ -569,6 +576,12 @@ private:
         int line = 0;
         int column = 0;
         QString triggerChar;
+        /// Which user-initiated request this is. A retry keeps the generation it
+        /// was scheduled under, so a queued (ready-edge) callback from an older
+        /// request can tell that the user has typed on and dropped it — without
+        /// this it would ask at a position nobody is looking at and spend the
+        /// newer request's retry budget.
+        quint64 generation = 0;
     };
     /// preferences.completion.*: which engine answers completions, and how
     /// many times a failed request is retried.
@@ -576,6 +589,8 @@ private:
     int completionRetryCount_ = 2;
     int completionAttempts_ = 0;
     PendingCompletion lastCompletion_;
+    /// Bumped for every request the user starts; see PendingCompletion.
+    quint64 completionGeneration_ = 0;
     /// In-process completion engine (libclang.dll), used when the
     /// preferences name it as the backend. Created in the constructor.
     LightCpp::App::LibClangCompleter* libClang_ = nullptr;

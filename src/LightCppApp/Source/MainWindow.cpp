@@ -6909,7 +6909,8 @@ void MainWindow::requestCompletionFor(CodeEditor* ed, int line, int column,
         return;
     }
     // Remember the request so a failure can be retried at the same spot.
-    lastCompletion_ = PendingCompletion{ed, lintPath, line, column, triggerChar};
+    lastCompletion_ = PendingCompletion{ed, lintPath, line, column, triggerChar,
+                                        ++completionGeneration_};
     completionAttempts_ = 0;
 
     if (completionBackend_ == QStringLiteral("libclang")) {
@@ -6926,24 +6927,55 @@ void MainWindow::requestCompletionFor(CodeEditor* ed, int line, int column,
     }
 
     // --- language-server backends (clangd / ccls) -------------------------
-    if (!lsp_->isRunning()) {
-        // The server is down. One retry budget entry: bring it up and
-        // re-issue. If it cannot be started, the bounded retry loop ends
-        // with the error in the log — and not with a hung editor. When the
-        // user turned syntax check off, respect that and just drop the
-        // request (completion has always required the server to be up).
-        if (actSyntaxCheck_ != nullptr && actSyntaxCheck_->isChecked()) {
-            scheduleCompletionRetry();
-        }
+    if (lsp_ == nullptr) {
         return;
     }
-    // Push the current text first: the lint didChange is debounced
-    // (300ms), so without this the completion request would arrive while
-    // the server still has stale content and return nothing (or results
-    // for the wrong prefix).
-    lsp_->changeDocument(lintPath, ed->toPlainText());
-    const int reqId = lsp_->requestCompletion(lintPath, line, column,
-                                              triggerChar);
+    if (lsp_->isRunning()) {
+        requestLspCompletion(ed);
+        return;
+    }
+    // The server is down or still hand-shaking, so there is nothing to ask yet.
+    // Do not test isRunning() here and give up: start() is an asynchronous
+    // handshake, isRunning() stays false until the initialize response lands,
+    // and the request itself would be dropped by the client in the meantime
+    // (R2-08 — that is why the first Ctrl+Space after a clangd restart used to
+    // do nothing at all). Hand it to the ready edge instead.
+    //
+    // When the user turned syntax check off, respect that: completion has
+    // always required the server to be up, so the request is just dropped.
+    if (actSyntaxCheck_ == nullptr || !actSyntaxCheck_->isChecked()) {
+        return;
+    }
+    if (!lsp_->isStarting()) {
+        lsp_->start();
+    }
+    const quint64 generation = lastCompletion_.generation;
+    const QPointer<CodeEditor> editor(ed);
+    lsp_->whenReady([this, editor, generation] {
+        // A newer request (the user typed on) or a closed tab makes this one
+        // stale: it must not ask on behalf of a popup it no longer owns.
+        if (editor.isNull() || generation != lastCompletion_.generation) {
+            return;
+        }
+        if (lsp_->isRunning()) {
+            requestLspCompletion(editor.data());
+        }
+    });
+}
+
+void MainWindow::requestLspCompletion(CodeEditor* ed)
+{
+    if (ed == nullptr || lsp_ == nullptr) {
+        return;
+    }
+    // Push the current text first: the lint didChange is debounced (300ms), so
+    // without this the completion request would arrive while the server still
+    // has stale content and return nothing (or results for the wrong prefix).
+    lsp_->changeDocument(lastCompletion_.lintPath, ed->toPlainText());
+    const int reqId = lsp_->requestCompletion(lastCompletion_.lintPath,
+                                              lastCompletion_.line,
+                                              lastCompletion_.column,
+                                              lastCompletion_.triggerChar);
     if (reqId > 0) {
         latestCompletionId_ = reqId;
         pendingCompletions_[reqId] = ed;
@@ -6991,6 +7023,16 @@ bool MainWindow::scheduleCompletionRetry()
 {
     if (completionRetryCount_ <= 0
         || completionAttempts_ >= completionRetryCount_) {
+        // Out of budget. Say so when the reason we were retrying is still
+        // there — a server that never came back up. An empty popup with no
+        // explanation is the other half of R2-08.
+        if (lsp_ != nullptr && completionBackend_ != QStringLiteral("libclang")
+            && !lsp_->isRunning() && !lsp_->isStarting()) {
+            statusBar()->showMessage(
+                tr("Completion unavailable: the language server is not "
+                   "running"),
+                5000);
+        }
         return false;  // budget spent — let the empty result stand
     }
     ++completionAttempts_;
@@ -7000,29 +7042,48 @@ bool MainWindow::scheduleCompletionRetry()
     if (ed == nullptr) {
         return false;
     }
-    QTimer::singleShot(400, this, [this, ed] {
-        if (ed.isNull()) {
-            return;  // tab closed in the meantime
+    const quint64 generation = lastCompletion_.generation;
+    QTimer::singleShot(400, this, [this, ed, generation] {
+        // Superseded (the user typed on and owns a newer request) or the tab is
+        // gone: asking now would spend the newer request's budget on a position
+        // nobody is looking at.
+        if (ed.isNull() || generation != lastCompletion_.generation) {
+            return;
         }
         CodeEditor* editor = ed.data();
         if (completionBackend_ == QStringLiteral("libclang")) {
             deliverLibClangCompletion();
             return;
         }
-        if (!lsp_->isRunning()) {
+        if (lsp_ == nullptr) {
+            return;
+        }
+        // Bring the server back up if it is gone — but leave a process that is
+        // already hand-shaking alone, or start() would tear it down and begin
+        // again.
+        if (!lsp_->isStarting()) {
             lsp_->start();
         }
-        if (!lsp_->isRunning()) {
-            return;  // start() failed again; serverFailed already logged it
+        if (lsp_->isRunning()) {
+            requestLspCompletion(editor);
+            return;
         }
-        lsp_->changeDocument(lastCompletion_.lintPath, editor->toPlainText());
-        const int reqId = lsp_->requestCompletion(
-            lastCompletion_.lintPath, lastCompletion_.line,
-            lastCompletion_.column, lastCompletion_.triggerChar);
-        if (reqId > 0) {
-            latestCompletionId_ = reqId;
-            pendingCompletions_[reqId] = editor;
-        }
+        // Still hand-shaking. This is where the old code gave up: it tested
+        // isRunning() straight after start(), which is false for the whole
+        // asynchronous handshake, and returned — so the retry burned an attempt
+        // and the server was never asked, leaving an empty popup and no
+        // explanation (R2-08). Wait for the ready edge instead.
+        statusBar()->showMessage(
+            tr("Waiting for the language server to finish starting"), 3000);
+        const QPointer<CodeEditor> editorPtr(editor);
+        lsp_->whenReady([this, editorPtr, generation] {
+            if (editorPtr.isNull() || generation != lastCompletion_.generation) {
+                return;
+            }
+            if (lsp_->isRunning()) {
+                requestLspCompletion(editorPtr.data());
+            }
+        });
     });
     return true;
 }

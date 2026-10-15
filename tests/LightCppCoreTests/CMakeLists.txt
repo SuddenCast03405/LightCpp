@@ -3,6 +3,7 @@
 add_executable(LightCppCoreTests
     EditorMarksTests.cpp
     FoldModelTests.cpp
+    ReadyGateTests.cpp
     Utf8FileTests.cpp
     Utf8Tests.cpp
 )

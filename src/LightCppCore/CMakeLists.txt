@@ -3,6 +3,7 @@
 add_library(LightCppCore STATIC
     Source/BracketMatch.cpp
     Source/FoldModel.cpp
+    Source/ReadyGate.cpp
     Source/Utf8File.cpp
     Source/WordOccurrences.cpp
 )

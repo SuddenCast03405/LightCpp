@@ -3,6 +3,7 @@
 #include "LightCpp/App/LanguageServerClient.hpp"
 
 #include <cstring>
+#include <utility>
 
 #include <QDir>
 #include <QFile>
@@ -288,6 +289,9 @@ void LanguageServerClient::start()
 
     initialized_ = false;
     everInitialized_ = false;
+    // Drop, not close: callbacks queued for the previous handshake belong to a
+    // request nobody is waiting for any more, and must not fire on this one.
+    readyGate_.drop();
     documentVersions_.clear();
     buffer_.clear();
 
@@ -335,6 +339,7 @@ void LanguageServerClient::start()
         // Process ended (possibly on its own).
         if (process_ != nullptr) {
             initialized_ = false;
+            readyGate_.drop();  // no handshake is coming from this process
         }
     });
     connect(process_, &QProcess::finished, this, [this] {
@@ -352,10 +357,16 @@ void LanguageServerClient::start()
         // stop() and free this very object.
         const int exitCode = p->exitCode();
         const bool duringStartup = !everInitialized_;
-        if (process_ == p) {
+        const bool wasCurrent = process_ == p;
+        if (wasCurrent) {
             process_ = nullptr;
+            // Only the current process owns the handshake state. A stale
+            // process finishing after a restart must not un-initialize the new
+            // one (that would leave a live server the client cannot talk to)
+            // nor drop the requests now queued for its handshake.
+            initialized_ = false;
+            readyGate_.drop();
         }
-        initialized_ = false;
         p->deleteLater();
         if (duringStartup) {
             // A server that dies before the LSP handshake completes would
@@ -481,6 +492,9 @@ void LanguageServerClient::stop()
         return;
     }
     initialized_ = false;
+    // Nobody is going to answer a queued request now: dropped, not left to be
+    // run by whatever handshake happens next.
+    readyGate_.drop();
 
     // Disconnect all our signal handlers first. waitForFinished() spins
     // a local event loop, which can deliver queued signals (finished,
@@ -531,6 +545,7 @@ void LanguageServerClient::reportServerFailure(const QString& message)
     QProcess* proc = process_;
     process_ = nullptr;
     initialized_ = false;
+    readyGate_.drop();  // the handshake this queue was waiting for just failed
     if (proc != nullptr) {
         // Mute our own slots first: readyRead would keep parsing a dead
         // handshake, and errorOccurred/finished would re-enter this
@@ -559,6 +574,24 @@ bool LanguageServerClient::isRunning() const
 {
     return process_ != nullptr && process_->state() == QProcess::Running
            && initialized_;
+}
+
+bool LanguageServerClient::isStarting() const
+{
+    // A process that exists but is not initialized: the handshake is in flight,
+    // or about to fail. Either way "start it" is the wrong answer — start()
+    // returns early while process_ is set, but a caller that saw Running here
+    // would think the server is usable.
+    //
+    // Deliberately not `state() == Running`: start() does not wait for the
+    // process, so for the first event-loop turns the state is still Starting —
+    // exactly the window this predicate exists for.
+    return process_ != nullptr && !initialized_;
+}
+
+void LanguageServerClient::whenReady(LightCpp::Core::ReadyGate::Callback callback)
+{
+    readyGate_.whenReady(std::move(callback));
 }
 
 void LanguageServerClient::setToolchainHeaders(const ToolchainHeaders& headers)
@@ -1091,6 +1124,11 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
             initialized.insert("params", QJsonObject());
             sendJsonRpc(initialized);
             emit serverStarted();
+            // Serve the callers that were waiting instead of polling: they run
+            // after the ordinary "started" bookkeeping (this signal opens the
+            // documents already in tabs), so a queued request sees a server
+            // that has been told about the buffer it is asking about.
+            readyGate_.open();
             return;
         }
         if (completionRequests_.contains(id)) {
