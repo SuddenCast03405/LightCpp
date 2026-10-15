@@ -47,7 +47,16 @@ enum class LineEnding {
 /// their own default rather than guessing from nothing. A tie between LF and
 /// CRLF reports Lf: rewriting to CRLF would add a byte to every line, so the
 /// less destructive answer wins.
-[[nodiscard]] LineEnding detectLineEndings(QByteArrayView bytes) noexcept;
+///
+/// Pass the encoding the bytes are in. For the single-byte encodings (and
+/// Unknown, which treats them as bytes) a '\n' byte only ever appears as a
+/// line feed, so counting raw bytes is exact. UTF-16/32 are different: a line
+/// feed is a two- or four-byte code unit, and U+0A0D-style characters put a
+/// 0x0A byte *inside* a character, so the scan walks whole code units in the
+/// right byte order instead.
+[[nodiscard]] LineEnding detectLineEndings(
+    QByteArrayView bytes,
+    TextEncoding encoding = TextEncoding::Unknown) noexcept;
 
 /// Payload of a successful read.
 struct TextFileContent {

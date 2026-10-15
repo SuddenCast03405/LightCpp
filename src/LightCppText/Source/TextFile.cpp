@@ -43,22 +43,60 @@ const char* toString(LineEnding ending) noexcept
     return "";
 }
 
-LineEnding detectLineEndings(QByteArrayView bytes) noexcept
+LineEnding detectLineEndings(QByteArrayView bytes, TextEncoding encoding) noexcept
 {
-    // Multi-byte encodings (GBK/UTF-16...) cannot produce a 0x0A or 0x0D0A
-    // sequence as part of a character code, so counting raw bytes is safe
-    // regardless of the file's encoding: UTF-16 pairs the NUL with the \n
-    // but the \n byte still only ever appears as a line feed, and GBK trail
-    // bytes never reach 0x0A.
+    // Pick the code-unit width and byte order. A '\n' byte only ever means a
+    // line feed in the single-byte encodings (GBK trail bytes never reach
+    // 0x0A), so there the raw byte scan is exact. UTF-16/32 need the unit
+    // boundaries: the line feed is a whole unit, and a character like U+0Axx
+    // carries a 0x0A byte inside itself that must not be counted.
+    int stride = 1;
+    bool littleEndian = true;
+    switch (encoding) {
+    case TextEncoding::Utf16Le: stride = 2; littleEndian = true; break;
+    case TextEncoding::Utf16Be: stride = 2; littleEndian = false; break;
+    case TextEncoding::Utf32Le: stride = 4; littleEndian = true; break;
+    case TextEncoding::Utf32Be: stride = 4; littleEndian = false; break;
+    default: break;
+    }
+
     qsizetype lf = 0;
     qsizetype crlf = 0;
-    for (qsizetype i = 0; i < bytes.size(); ++i) {
-        if (bytes[i] != '\n') {
-            continue;
+    if (stride == 1) {
+        for (qsizetype i = 0; i < bytes.size(); ++i) {
+            if (bytes[i] != '\n') {
+                continue;
+            }
+            ++lf;
+            if (i > 0 && bytes[i - 1] == '\r') {
+                ++crlf;
+            }
         }
-        ++lf;
-        if (i > 0 && bytes[i - 1] == '\r') {
-            ++crlf;
+    } else {
+        const qsizetype units = bytes.size() / stride;
+        const auto codeUnit = [&](qsizetype unit) -> quint32 {
+            quint32 value = 0;
+            if (littleEndian) {
+                for (int k = stride - 1; k >= 0; --k) {
+                    value = (value << 8)
+                            | static_cast<unsigned char>(bytes[unit * stride + k]);
+                }
+            } else {
+                for (int k = 0; k < stride; ++k) {
+                    value = (value << 8)
+                            | static_cast<unsigned char>(bytes[unit * stride + k]);
+                }
+            }
+            return value;
+        };
+        for (qsizetype unit = 0; unit < units; ++unit) {
+            if (codeUnit(unit) != 0x0Au) {
+                continue;
+            }
+            ++lf;
+            if (unit > 0 && codeUnit(unit - 1) == 0x0Du) {
+                ++crlf;
+            }
         }
     }
     if (lf == 0) {
@@ -120,7 +158,7 @@ TextFileResult readDetectedTextFile(const QString& path, const TextFileOptions& 
     content.byteSize = data.size();
     content.detectionScore = detection.score;
     content.detectionReliable = detection.reliable;
-    content.lineEndings = detectLineEndings(data);
+    content.lineEndings = detectLineEndings(data, detection.encoding);
 
     return TextFileResult::success(std::move(content));
 }
@@ -187,7 +225,7 @@ TextFileResult readTextFileWithEncoding(
     content.byteSize = data.size();
     content.detectionScore = 1000;  // user override is authoritative
     content.detectionReliable = true;
-    content.lineEndings = detectLineEndings(data);
+    content.lineEndings = detectLineEndings(data, encoding);
 
     return TextFileResult::success(std::move(content));
 }

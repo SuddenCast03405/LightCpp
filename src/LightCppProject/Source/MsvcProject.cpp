@@ -22,6 +22,21 @@ QString resolveFilePath(const QString& projectDir, const QString& reference)
     return QDir::cleanPath(QDir(projectDir).absoluteFilePath(native));
 }
 
+/// The key a resolved path is de-duplicated by.
+///
+/// Windows paths are case-insensitive, so ".\Main.cpp" and "main.cpp" name
+/// the same file; comparing the raw strings kept both, so the file appeared
+/// twice in the tree and its compile count doubled. QDir::cleanPath does not
+/// fold case, hence the explicit lower-casing.
+QString dedupKey(const QString& path)
+{
+#ifdef Q_OS_WIN
+    return path.toLower();
+#else
+    return path;
+#endif
+}
+
 /// Where a file reference lands in the source/header/resource/other split.
 enum class FileSlot { Source, Header, Resource, Other };
 
@@ -219,10 +234,10 @@ void readVcxprojFileGroup(const QDomElement& group, const QString& groupConditio
             }();
             const QString path =
                 resolveFilePath(project.projectDir, entry.trimmed());
-            if (seenPaths.contains(path)) {
+            if (seenPaths.contains(dedupKey(path))) {
                 continue;  // the other spelling already covered this file
             }
-            seenPaths.insert(path);
+            seenPaths.insert(dedupKey(path));
             // ExcludedFromBuild (and a group condition nothing matches) keep
             // the file in the tree but out of the compile set.
             if ((slot == FileSlot::Source || slot == FileSlot::Resource)
@@ -425,8 +440,8 @@ std::optional<MsvcProject> parseVcproj(const QString& filePath,
                     }
                     const QString path = resolveFilePath(
                         project.projectDir, relative.trimmed());
-                    if (!seenPaths.contains(path)) {
-                        seenPaths.insert(path);
+                    if (!seenPaths.contains(dedupKey(path))) {
+                        seenPaths.insert(dedupKey(path));
                         appendProjectFile(project, slotForFile(relative), path);
                     }
                 }

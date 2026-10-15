@@ -321,6 +321,37 @@ TEST(EncodingConvert, UnpairedSurrogateRejected)
     EXPECT_FALSE(converted.hasValue());
 }
 
+TEST(EncodingConvert, WellFormedSurrogatePairIsAccepted)
+{
+    // U+1F600 (😀) is D8 3D DE 00 in UTF-16LE — a high/low surrogate pair.
+    // The strict pass used to reject the whole D800-DFFF range, which made
+    // every UTF-16 file containing an emoji (or 𠮷, or any astral character)
+    // impossible to open.
+    const auto converted = LightCpp::Text::convertToUtf8(
+        QByteArray::fromHex("3DD800DE"), TextEncoding::Utf16Le);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(utf8(converted.value()), QString::fromUtf8("\xF0\x9F\x98\x80"));
+}
+
+TEST(EncodingConvert, HighSurrogateWithoutALowIsStillRejected)
+{
+    // A high surrogate that is not followed by a low one is invalid and must
+    // keep failing.
+    const auto converted = LightCpp::Text::convertToUtf8(
+        QByteArray::fromHex("3DD8"), TextEncoding::Utf16Le);
+    EXPECT_FALSE(converted.hasValue());
+}
+
+TEST(EncodingConvert, Utf32AstralCharacterIsAccepted)
+{
+    // U+1F600 in UTF-32LE; Qt decodes it to a surrogate pair internally, so
+    // the same pairing rule has to let it through.
+    const auto converted = LightCpp::Text::convertToUtf8(
+        QByteArray::fromHex("00F60100"), TextEncoding::Utf32Le);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(utf8(converted.value()), QString::fromUtf8("\xF0\x9F\x98\x80"));
+}
+
 TEST(EncodingConvert, InvalidUtf8Rejected)
 {
     // 0xFF is never valid UTF-8. A manual "reopen as UTF-8" override on a

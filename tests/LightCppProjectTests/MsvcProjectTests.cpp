@@ -515,6 +515,26 @@ TEST(MsvcProject, VcxprojDeduplicatesFilesAcrossGroups)
     EXPECT_EQ(project->sourceFiles.count(QStringLiteral("E:/proj/main.cpp")), 1);
 }
 
+TEST(MsvcProject, VcxprojDeduplicatesTheSameFileUnderAnotherSpelling)
+{
+    // Windows paths are case-insensitive, so ".\MAIN.CPP" and "main.cpp"
+    // name the same file. Comparing the resolved strings verbatim kept both:
+    // the file was shown twice in the tree and its compile count doubled.
+    // (Q_OS_WIN only — a case-sensitive file system really does have two.) 
+#ifdef Q_OS_WIN
+    const QString xml = QString(kVcxprojTwoConfigs).arg(
+        "  <ItemGroup>\n"
+        "    <ClCompile Include=\"main.cpp\" />\n"
+        "  </ItemGroup>\n"
+        "  <ItemGroup>\n"
+        "    <ClCompile Include=\".\\MAIN.CPP\" />\n"
+        "  </ItemGroup>\n");
+    const auto project = parseVcxproj(xml.toUtf8().constData());
+    ASSERT_TRUE(project.has_value()) << lastError.toStdString();
+    EXPECT_EQ(project->sourceFiles.size(), 1);
+#endif
+}
+
 TEST(MsvcProject, VcxprojConditionedGroupMatchingNoConfiguration)
 {
     // A condition nothing selects (a tool-specific property) must not

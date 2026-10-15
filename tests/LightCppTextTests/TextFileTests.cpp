@@ -216,15 +216,61 @@ TEST(DetectLineEndings, LoneCarriageReturnsAreIgnored)
               LightCpp::Text::LineEnding::None);
 }
 
-TEST(DetectLineEndings, Utf16NewlinesAreCountedByteWise)
+TEST(DetectLineEndings, Utf16LeCrLfIsCrLf)
 {
-    // UTF-16LE "a\n" is 61 00 0A 00: the 0x0A byte still only ever appears
-    // as a line feed, so the byte-wise scan works regardless of encoding.
-    const unsigned char utf16le[] = {'a', 0x00, '\n', 0x00,
-                                     'b', 0x00, '\n', 0x00};
+    // UTF-16LE "a\r\n" is 61 00 0D 00 0A 00. Counting raw bytes sees the
+    // 0x0A with a 0x00 before it (not 0x0D) and wrongly reports LF — which
+    // also rewrote the whole file to LF on the next save. The code-unit scan
+    // pairs 0D 00 with the 0A 00 that follows it and reports CRLF.
+    const unsigned char utf16leCrLf[] = {'a', 0x00, '\r', 0x00, '\n', 0x00};
     EXPECT_EQ(LightCpp::Text::detectLineEndings(
-                  QByteArray(reinterpret_cast<const char*>(utf16le), 8)),
+                  QByteArray(reinterpret_cast<const char*>(utf16leCrLf), 6),
+                  LightCpp::Text::TextEncoding::Utf16Le),
+              LightCpp::Text::LineEnding::CrLf);
+
+    // Same bytes with no encoding hint keep the old byte-wise answer; that is
+    // the bug the encoding argument exists to avoid.
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(
+                  QByteArray(reinterpret_cast<const char*>(utf16leCrLf), 6)),
               LightCpp::Text::LineEnding::Lf);
+}
+
+TEST(DetectLineEndings, Utf16LeLfAndNoneAreCorrect)
+{
+    const unsigned char lf[] = {'a', 0x00, '\n', 0x00, 'b', 0x00, '\n', 0x00};
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(
+                  QByteArray(reinterpret_cast<const char*>(lf), 8),
+                  LightCpp::Text::TextEncoding::Utf16Le),
+              LightCpp::Text::LineEnding::Lf);
+
+    // A character whose code unit merely *contains* a 0x0A byte (U+8C0A is
+    // 0A 8C in little-endian) is not a line feed.
+    const unsigned char insideACodeUnit[] = {0x0A, 0x8C};
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(
+                  QByteArray(reinterpret_cast<const char*>(insideACodeUnit), 2),
+                  LightCpp::Text::TextEncoding::Utf16Le),
+              LightCpp::Text::LineEnding::None);
+}
+
+TEST(DetectLineEndings, Utf16BeCrLfIsCrLf)
+{
+    const unsigned char beCrLf[] = {0x00, 'a', 0x00, '\r', 0x00, '\n'};
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(
+                  QByteArray(reinterpret_cast<const char*>(beCrLf), 6),
+                  LightCpp::Text::TextEncoding::Utf16Be),
+              LightCpp::Text::LineEnding::CrLf);
+}
+
+TEST(DetectLineEndings, Utf32CrLfIsCrLf)
+{
+    // UTF-32LE "a\r\n": 61 00 00 00 | 0D 00 00 00 | 0A 00 00 00.
+    const unsigned char leCrLf[] = {'a', 0x00, 0x00, 0x00,
+                                    0x0D, 0x00, 0x00, 0x00,
+                                    0x0A, 0x00, 0x00, 0x00};
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(
+                  QByteArray(reinterpret_cast<const char*>(leCrLf), 12),
+                  LightCpp::Text::TextEncoding::Utf32Le),
+              LightCpp::Text::LineEnding::CrLf);
 }
 
 // --- readDetectedTextFile carries the detection ------------------------

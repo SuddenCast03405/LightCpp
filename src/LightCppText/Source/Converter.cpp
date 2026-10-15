@@ -159,12 +159,28 @@ std::optional<QString> decodeToQString(
             return std::nullopt;
         }
         // Qt's decoder is lenient with lone surrogates (it may silently
-        // pass them through instead of reporting an error). Reject any
-        // unpaired surrogate to enforce strict UTF-16/32 conformance.
-        for (const QChar ch : decoded) {
-            const char16_t cu = ch.unicode();
-            if (cu >= 0xD800u && cu <= 0xDFFFu) {
-                return std::nullopt;
+        // pass them through instead of reporting an error). Reject the
+        // *unpaired* ones to enforce strict UTF-16/32 conformance.
+        //
+        // A well-formed pair is not an error: it is how UTF-16 spells every
+        // code point above U+FFFF (an emoji, 𠮷, …), and Qt keeps it as two
+        // QChars with the same D800-DFFF range. Rejecting the whole range —
+        // rather than only the unpaired half — used to make every file
+        // containing such a character fail to open.
+        for (qsizetype i = 0; i < decoded.size(); ++i) {
+            const char16_t cu = decoded[i].unicode();
+            if (cu >= 0xDC00u && cu <= 0xDFFFu) {
+                return std::nullopt;  // low surrogate with nothing before it
+            }
+            if (cu >= 0xD800u && cu <= 0xDBFFu) {
+                if (i + 1 >= decoded.size()) {
+                    return std::nullopt;  // high surrogate at end of text
+                }
+                const char16_t low = decoded[i + 1].unicode();
+                if (low < 0xDC00u || low > 0xDFFFu) {
+                    return std::nullopt;  // high surrogate not paired
+                }
+                ++i;  // skip the low half of a well-formed pair
             }
         }
         return decoded;
