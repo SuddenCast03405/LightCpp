@@ -2694,6 +2694,10 @@ QWidget* MainWindow::createKitWidget()
         applyToolchainHeaders();
         applyPreferences();  // kit styles (clang-format/clangd) follow the kit
         syncConfigCombo();
+        // A different kit means a different compiler, so whatever was built
+        // is no longer the thing this kit produces. syncConfigCombo() blocks
+        // its own signals, so the configuration combo cannot report this.
+        invalidateBuiltExecutables();
     });
     layout->addWidget(kitCombo_);
     return container;
@@ -2749,6 +2753,10 @@ QWidget* MainWindow::createBuildConfigurationWidget()
     connect(configCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
         outputPanel_->appendBuildOutput(
             tr("Build configuration: %1").arg(currentBuildConfigurationName()));
+        // The binaries on disk belong to the configuration that was selected
+        // when they were built. Keeping them cached here is how Run/Debug(F4)
+        // ends up starting the old Debug build while the toolbar says Release.
+        invalidateBuiltExecutables();
     });
     syncConfigCombo();
     layout->addWidget(configCombo_);
@@ -2819,15 +2827,61 @@ std::optional<LightCpp::Settings::Kit> MainWindow::activeKit() const
 
 bool MainWindow::isMsvcKit(const LightCpp::Settings::Kit& kit) const
 {
-    // cl.exe is the MSVC front end; anything else is treated as GNU-style.
-    return kit.cppCompiler.endsWith(QLatin1String("cl.exe"),
-                                    Qt::CaseInsensitive);
+    // The family the kit declares is authoritative; a kit that names cl.exe
+    // outright (no family, or one that does not cover MSVC) is MSVC too.
+    // Anything else is treated as GNU/clang-style.
+    return kit.compilerFamily.compare(QLatin1String("msvc"),
+                                      Qt::CaseInsensitive) == 0
+           || kit.cppCompiler.endsWith(QLatin1String("cl.exe"),
+                                       Qt::CaseInsensitive);
 }
 
 bool MainWindow::activeKitIsMsvc() const
 {
     const auto kit = activeKit();
     return kit.has_value() && isMsvcKit(*kit);
+}
+
+QString MainWindow::kitToolchainDirectory() const
+{
+    const auto kit = activeKit();
+    if (!kit.has_value() || kit->cCompiler.isEmpty()) {
+        return {};
+    }
+    return QFileInfo(kit->cCompiler).absolutePath();
+}
+
+void MainWindow::ensureMsvcToolchainDetected()
+{
+    // The detection runs on its own thread from startup on; a build can be the
+    // first thing that needs its answer. Wait for it — bounded, and the status
+    // bar says why the window pauses — instead of reporting "no toolchain" for
+    // something still being looked up.
+    if (msvcDetector_ == nullptr || !msvcDetector_->isRunning()) {
+        return;
+    }
+    statusBar()->showMessage(tr("Looking for the MSVC toolchain…"));
+    const bool done = msvcDetector_->waitForFinished();
+    statusBar()->clearMessage();
+    if (done) {
+        // Blocking here means the queued detected() has not been delivered yet
+        // (that needs the event loop), so apply the result directly; the later
+        // copy is a no-op.
+        onMsvcDetected(msvcDetector_->result());
+    }
+}
+
+void MainWindow::invalidateBuiltExecutables()
+{
+    const bool hadOne = !lastProjectExe_.isEmpty() || !lastBuildExe_.isEmpty();
+    lastProjectExe_.clear();
+    lastBuildExe_.clear();
+    if (hadOne && outputPanel_ != nullptr) {
+        outputPanel_->appendBuildOutput(
+            tr("Build output for the previous selection dropped — build again "
+               "before running."));
+    }
+    updateProjectActions();
 }
 
 void MainWindow::createStatusBar()
@@ -5298,12 +5352,46 @@ void MainWindow::runNextProjectStep()
     outputPanel_->appendBuildOutput(
         QStringLiteral("> %1 %2").arg(step.program, step.arguments.join(QLatin1Char(' '))));
 
-    // The toolchain's own bin directory has to be on PATH: cmake looks for the
-    // compiler through it, and the binaries it produces need the runtime DLLs
-    // that live there too.
+    // PATH, in this order: for an MSVC kit the toolset's own bin directory
+    // (cl.exe is unusable without it), then the kit's compiler directory (so
+    // CMake's compiler detection picks the compiler the kit names — otherwise
+    // it finds whatever g++ the IDE's tool directory happens to hold and the
+    // project builds with a different toolchain than F7 and clangd use), then
+    // the IDE's build-tool directory (cmake/ninja/make plus the MinGW runtime
+    // DLLs the binaries it produces need), then everything already on PATH.
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("PATH"),
-               kMingwBin + QDir::listSeparator() + env.value(QStringLiteral("PATH")));
+    QStringList pathParts;
+
+    if (activeKitIsMsvc()) {
+        // Exactly what vcvarsall.bat would otherwise have computed, and the
+        // same environment the single-file compile builds: cl.exe gets
+        // INCLUDE/LIB and its own bin directory, so F7 and Build Project agree
+        // on the toolset instead of the project quietly compiling with the
+        // IDE's MinGW.
+        ensureMsvcToolchainDetected();
+        if (!msvcToolchain_.isValid()) {
+            outputPanel_->showChannel(OutputPanel::ChannelBuild);
+            outputPanel_->appendBuildOutput(
+                tr("No MSVC toolchain available: %1").arg(msvcToolchain_.problem));
+            finishProjectBuild(false, -1);
+            return;
+        }
+        pathParts.append(msvcToolchain_.binDir);
+        // Set rather than appended: a stale environment inherited from a VS
+        // developer prompt must not point the compiler at another toolset.
+        env.insert(QStringLiteral("INCLUDE"),
+                   msvcToolchain_.includeDirs.join(QLatin1Char(';')));
+        env.insert(QStringLiteral("LIB"),
+                   msvcToolchain_.libDirs.join(QLatin1Char(';')));
+    }
+
+    const QString kitBin = kitToolchainDirectory();
+    if (!kitBin.isEmpty()) {
+        pathParts.append(kitBin);
+    }
+    pathParts.append(kMingwBin);
+    pathParts.append(env.value(QStringLiteral("PATH")));
+    env.insert(QStringLiteral("PATH"), pathParts.join(QDir::listSeparator()));
     projectProcess_->setProcessEnvironment(env);
     projectProcess_->setWorkingDirectory(step.workingDirectory);
     projectProcess_->start(step.program, step.arguments);
@@ -5783,21 +5871,7 @@ void MainWindow::onCompileCurrentFile()
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
 
     if (kit.has_value() && isMsvcKit(*kit)) {
-        // The toolchain detection runs on its own thread from startup on; a
-        // build can be the first thing that needs its answer. Wait for it —
-        // bounded, and the status bar says why the window pauses — instead
-        // of reporting "no toolchain" for something still being looked up.
-        if (msvcDetector_ != nullptr && msvcDetector_->isRunning()) {
-            statusBar()->showMessage(tr("Looking for the MSVC toolchain…"));
-            const bool done = msvcDetector_->waitForFinished();
-            statusBar()->clearMessage();
-            if (done) {
-                // Blocking here means the queued detected() has not been
-                // delivered yet (that needs the event loop), so apply the
-                // result directly; the later copy is a no-op.
-                onMsvcDetected(msvcDetector_->result());
-            }
-        }
+        ensureMsvcToolchainDetected();
         if (!msvcToolchain_.isValid()) {
             outputPanel_->showChannel(OutputPanel::ChannelBuild);
             outputPanel_->appendBuildOutput(

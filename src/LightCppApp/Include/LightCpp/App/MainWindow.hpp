@@ -257,6 +257,19 @@ private:
     /// no selection and the legacy default applies — it does not).
     [[nodiscard]] bool isMsvcKit(const LightCpp::Settings::Kit& kit) const;
     [[nodiscard]] bool activeKitIsMsvc() const;
+    /// The directory holding the active kit's compiler, empty when no kit is
+    /// selected or it names no C compiler. Put first on the build steps' PATH
+    /// so CMake's compiler detection finds the kit's compiler instead of
+    /// whichever one the IDE's own tool directory happens to hold.
+    [[nodiscard]] QString kitToolchainDirectory() const;
+    /// Wait for the background MSVC detection when it is still running and
+    /// apply its result. Every path that needs msvcToolchain_ calls this
+    /// first, so F7 and Build Project cannot disagree about the toolset.
+    void ensureMsvcToolchainDetected();
+    /// Drop the remembered project/single-file binaries. The files on disk
+    /// were produced for the previous configuration (or kit), so running them
+    /// would silently start the wrong build.
+    void invalidateBuiltExecutables();
 
     /// Load the configuration: write the starter files on first run, then
     /// read base + overlays. Runs before anything else reads the store.
