@@ -393,18 +393,20 @@ QString objectFileFor(const DevCppProject& project, const DevCppUnit& unit)
 {
     const QString source = pathRelativeTo(
         project.projectDir, absoluteFrom(project.projectDir, unit.fileName));
-    if (project.objectOutput.trimmed().isEmpty()) {
-        return withExtension(source, QStringLiteral(".o"));
-    }
-    const QString base = QFileInfo(source).fileName();
     const QFileInfo info(source);
-    QString name = withExtension(base, QStringLiteral(".o"));
-    // ObjectOutput= collects every unit in one directory, so two sources in
-    // different folders with the same file name would overwrite each other's
-    // object file. Only those units fold their sub-path into the name
-    // (src/foo.cpp -> src_foo.cpp.o): everything else keeps the original
-    // IDE's classic flat name, so existing projects build identically.
-    int sameBase = 0;
+    const QString base = info.fileName();
+    // Generating the object name drops the source's own extension, so a.c and
+    // a.cpp both want a.o: their file names differ but their targets do not.
+    const QString objectName = withExtension(base, QStringLiteral(".o"));
+    const bool collected = !project.objectOutput.trimmed().isEmpty();
+
+    // Count the units whose object target would equal ours, and how many of
+    // those live in our own folder — a folded sub-path only separates units
+    // that sit apart. Without ObjectOutput= the objects stay next to their
+    // sources, so units in other folders never meet; only same-folder clashes
+    // count there.
+    int collisions = 0;
+    int sameFolder = 0;
     for (const DevCppUnit& other : project.units) {
         if (&other == &unit || (!other.compile && !other.link)) {
             continue;  // not an object participant
@@ -414,18 +416,53 @@ QString objectFileFor(const DevCppProject& project, const DevCppUnit& unit)
         if (isHeaderSuffix(otherSuffix) || otherSuffix == QLatin1String("rc")) {
             continue;
         }
-        const QString otherBase = QFileInfo(pathRelativeTo(
+        const QFileInfo otherInfo(pathRelativeTo(
             project.projectDir,
-            absoluteFrom(project.projectDir, other.fileName))).fileName();
-        if (QString::compare(otherBase, base, Qt::CaseInsensitive) == 0) {
-            ++sameBase;
+            absoluteFrom(project.projectDir, other.fileName)));
+        const bool sameDir =
+            QString::compare(otherInfo.path(), info.path(), Qt::CaseInsensitive)
+            == 0;
+        if (!collected && !sameDir) {
+            continue;
+        }
+        if (QString::compare(
+                withExtension(otherInfo.fileName(), QStringLiteral(".o")),
+                objectName, Qt::CaseInsensitive)
+            != 0) {
+            continue;
+        }
+        ++collisions;
+        if (sameDir) {
+            ++sameFolder;
         }
     }
-    if (sameBase > 0) {
-        QString dir = info.path();
-        if (dir != QStringLiteral(".")) {
-            name = dir.replace(QChar(u'/'), QChar(u'_')) + u'_' + name;
+
+    // ObjectOutput= collects every unit in one directory, so two sources with
+    // the same target would overwrite each other's object file. Only the
+    // colliding units fold their sub-path into the name (src/util.cpp ->
+    // src_util.o): everything else keeps the original IDE's classic flat name,
+    // so existing projects build identically.
+    QString name = objectName;
+    if (collisions > 0) {
+        QString prefix;
+        if (collected) {
+            QString dir = info.path();
+            if (dir != QStringLiteral(".")) {
+                prefix = dir.replace(QChar(u'/'), QChar(u'_')) + u'_';
+            }
         }
+        if (sameFolder > 0) {
+            // Same folder: the folded path is identical for both units, so it
+            // separates nothing — fold the source's own name too, keeping a.c
+            // and a.cpp from both becoming a.o (src/a.c -> src_a.c.o).
+            name = prefix + base + QStringLiteral(".o");
+        } else {
+            name = prefix + name;
+        }
+    }
+    if (!collected) {
+        const QString dir = info.path();
+        return dir == QStringLiteral(".") ? name : dir + u'/' + name;
     }
     return QDir::fromNativeSeparators(
                pathRelativeTo(project.projectDir,

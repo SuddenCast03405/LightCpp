@@ -105,32 +105,41 @@ MsvcTargetKind targetKindFromVcproj(const QString& digit)
     return MsvcTargetKind::Application;
 }
 
+/// True when `condition` contains an `=='<value>'` (or `=="<value>"`) test —
+/// MSBuild's textual equality comparison, in either quote style. A `!=`
+/// comparison is deliberately not matched: the pattern includes the `==`.
+bool conditionComparesTo(const QString& condition, const QString& value)
+{
+    return condition.contains(QStringLiteral("=='%1'").arg(value))
+        || condition.contains(QStringLiteral("==\"%1\"").arg(value));
+}
+
 /// True when the Condition attribute selects exactly this configuration.
 ///
-/// Matched textually rather than evaluated: the condition shape is fixed by
-/// the tooling (`'$(Configuration)|$(Platform)'=='Debug|Win32'`), and a
-/// `!=` comparison must not match — so the pattern includes the `==`.
+/// Matched textually rather than evaluated, because the condition shape is
+/// fixed by the tooling. The full `'$(Configuration)|$(Platform)'=='Debug|Win32'`
+/// form is the common one, but generators and hand-written projects also emit
+/// the looser `'$(Configuration)'=='Debug'` and `'$(Platform)'=='Win32'`
+/// conditions, and any of the three quotes may appear in either style — so all
+/// are recognised. Anything else (a tool-version test, an `Exists(...)` probe)
+/// selects no configuration and never matches.
 bool conditionMatches(const QString& condition, const MsvcConfiguration& config)
 {
-    const QString wanted = QStringLiteral("=='%1|%2'")
-                               .arg(config.name, config.platform);
-    return condition.contains(wanted);
+    return conditionComparesTo(condition, config.name + u'|' + config.platform)
+        || conditionComparesTo(condition, config.name)
+        || conditionComparesTo(condition, config.platform);
 }
 
 /// True when an MSBuild condition names at least one of the project's known
-/// configurations. Matched textually, like conditionMatches(), but loose on
-/// the platform half: conditions that only compare $(Configuration) are
-/// common enough to warrant the second shape. Used to decide whether a
+/// configurations. Same shape as conditionMatches() — deliberately, so the two
+/// never disagree about what a condition selects. Used to decide whether a
 /// conditioned ItemGroup or a conditioned ExcludedFromBuild child still
 /// describes the default compile set.
 bool conditionMentionsAnyConfiguration(const QString& condition,
                                        const MsvcProject& project)
 {
     for (const MsvcConfiguration& config : project.configurations) {
-        if (condition.contains(
-                QStringLiteral("=='%1|%2'").arg(config.name, config.platform))
-            || condition.contains(
-                QStringLiteral("=='%1'").arg(config.name))) {
+        if (conditionMatches(condition, config)) {
             return true;
         }
     }

@@ -557,6 +557,37 @@ TEST(MsvcProject, VcxprojConditionedGroupMatchingNoConfiguration)
               QStringList({QStringLiteral("E:/proj/v16only.cpp")}));
 }
 
+TEST(MsvcProject, ConditionMatchingAcceptsLooseAndDoubleQuotedForms)
+{
+    // The same selection reaches the parser spelled several ways: the whole
+    // '$(Configuration)|$(Platform)' pair, only $(Configuration), or only
+    // $(Platform); and the comparison may use either quote style. A
+    // double-quoted or trimmed condition used to be dropped on the floor,
+    // mislabelling the config dropdown and the output banner.
+    const QString xml = QString(kVcxprojTwoConfigs).arg(
+        // '$(Configuration)'=="Debug" — outer quotes are XML delimiters, the
+        // inner double quotes belong to the condition itself.
+        "  <PropertyGroup Condition=\"&apos;$(Configuration)&apos;==&quot;Debug&quot;\">\n"
+        "    <TargetName>dbg</TargetName>\n"
+        "  </PropertyGroup>\n"
+        "  <PropertyGroup Condition=\"'$(Platform)'=='Win32'\">\n"
+        "    <OutDir>$(SolutionDir)w32\\</OutDir>\n"
+        "  </PropertyGroup>\n");
+    const auto project = parseVcxproj(xml.toUtf8().constData());
+    ASSERT_TRUE(project.has_value()) << lastError.toStdString();
+    ASSERT_EQ(project->configurations.size(), 2);
+
+    // Configuration-only, double-quoted: Debug and nobody else.
+    EXPECT_EQ(project->configurations[0].targetName, QStringLiteral("dbg"));
+    EXPECT_TRUE(project->configurations[1].targetName.isEmpty());
+
+    // Platform-only: both configurations are Win32.
+    EXPECT_EQ(project->configurations[0].outDir,
+              QStringLiteral("$(SolutionDir)w32\\"));
+    EXPECT_EQ(project->configurations[1].outDir,
+              QStringLiteral("$(SolutionDir)w32\\"));
+}
+
 TEST(MsvcProject, VcprojDeduplicatesFilesAcrossFilters)
 {
     const auto project = parseVcproj(

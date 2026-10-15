@@ -637,6 +637,49 @@ TEST(DevCppProject, MakefileDisambiguatesCollidingObjectNames)
     EXPECT_FALSE(lines.contains(QStringLiteral("obj/util.o: src/util.cpp")));
 }
 
+TEST(DevCppProject, MakefileDisambiguatesSameStemObjectNames)
+{
+    // a.c and a.cpp share a stem, so both compile to a.o even though their file
+    // names differ — the collision check used to compare file names and miss
+    // this, letting one object silently overwrite the other. Same-folder units
+    // fold the source's own name (a.c -> a.c.o); the sub-path fold still
+    // applies on top when the sources sit in a shared sub-directory.
+    const auto project = parse(
+        "[Project]\n"
+        "Name=stem\n"
+        "Type=0\n"
+        "UnitCount=4\n"
+        "ObjectOutput=obj\n"
+        "[Unit1]\n"
+        "FileName=a.c\n"
+        "Compile=1\n"
+        "Link=1\n"
+        "[Unit2]\n"
+        "FileName=a.cpp\n"
+        "Compile=1\n"
+        "Link=1\n"
+        "[Unit3]\n"
+        "FileName=src/b.c\n"
+        "Compile=1\n"
+        "Link=1\n"
+        "[Unit4]\n"
+        "FileName=src/b.cpp\n"
+        "Compile=1\n"
+        "Link=1\n");
+    ASSERT_TRUE(project.has_value());
+    const DevCppMakefilePlan plan =
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain());
+    const QStringList lines = makefileLines(plan);
+
+    EXPECT_TRUE(lines.contains(QStringLiteral("obj/a.c.o: a.c")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("obj/a.cpp.o: a.cpp")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("obj/src_b.c.o: src/b.c")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("obj/src_b.cpp.o: src/b.cpp")));
+    // No unit may claim the bare stem target the other one also wants.
+    EXPECT_FALSE(lines.contains(QStringLiteral("obj/a.o: a.c")));
+    EXPECT_FALSE(lines.contains(QStringLiteral("obj/src_b.o: src/b.c")));
+}
+
 TEST(DevCppProject, MakefileForACProjectLinksThroughCC)
 {
     const auto project = parse(
