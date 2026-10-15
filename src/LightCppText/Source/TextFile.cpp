@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
+#include <QSet>
 
 #include "LightCpp/Text/Converter.hpp"
 
@@ -251,6 +252,31 @@ std::optional<QString> readSearchableTextFile(const QString& path,
         return std::nullopt;
     }
     return QString::fromUtf8(bytes);
+}
+
+bool isUnderSkippedDirectory(QStringView relativePath)
+{
+    // Names of the directories a source scan never descends into.
+    static const QSet<QString> kSkipped = {
+        QStringLiteral(".git"),            QStringLiteral(".svn"),
+        QStringLiteral(".hg"),             QStringLiteral(".vs"),
+        QStringLiteral("build"),           QStringLiteral("cmake-build-debug"),
+        QStringLiteral("cmake-build-release"),
+        QStringLiteral(".ccls-cache"),     QStringLiteral(".workbuddy"),
+        QStringLiteral("node_modules"),
+    };
+    // Compare whole path segments, not substrings: `mybuild/` must not match
+    // `build`, and the check must see every segment, not just the first one.
+    const QString normalised =
+        relativePath.toString().replace(QLatin1Char('\\'), QLatin1Char('/'));
+    for (const QString& name : kSkipped) {
+        const QString segment = name + QLatin1Char('/');
+        if (normalised.startsWith(segment)
+            || normalised.contains(QLatin1Char('/') + segment)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 const char* toString(WriteFileError error) noexcept

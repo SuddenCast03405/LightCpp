@@ -35,6 +35,16 @@ public:
     /// takes effect within milliseconds even on huge trees.
     void abort() { aborted_.store(true); }
 
+    /// The regular expression the worker would run for these inputs —
+    /// literal escaping, whole-word wrapping and flags applied. The dialog
+    /// validates with it before starting a scan: an expression the engine
+    /// cannot compile matches nothing at all, which would otherwise surface
+    /// as "No matches" and read as "the text is not in the project".
+    [[nodiscard]] static QRegularExpression buildPattern(const QString& pattern,
+                                                         bool caseSensitive,
+                                                         bool wholeWord,
+                                                         bool useRegex);
+
     void run() override;
 
 signals:
@@ -81,6 +91,12 @@ private slots:
 
 private:
     void updateStatus();
+
+    /// Stops the running scan and releases the worker. Never destroys a live
+    /// QThread — Qt terminates the whole process ("QThread: Destroyed while
+    /// thread is still running") when one is deleted mid-flight, which is how
+    /// closing the dialog during a scan used to take the IDE down with it.
+    void stopThread();
 
     QString root_;
     QLineEdit* pattern_ = nullptr;

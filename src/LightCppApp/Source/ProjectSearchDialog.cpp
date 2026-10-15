@@ -28,18 +28,6 @@
 
 namespace {
 
-/// Skip directories that are generated or VCS-internal — they are noise in
-/// a source search and can be enormous.
-QStringList skipDirNames()
-{
-    return {QStringLiteral(".git"), QStringLiteral(".svn"),
-            QStringLiteral(".hg"), QStringLiteral("build"),
-            QStringLiteral("cmake-build-debug"),
-            QStringLiteral("cmake-build-release"),
-            QStringLiteral(".ccls-cache"), QStringLiteral(".workbuddy"),
-            QStringLiteral("node_modules"), QStringLiteral(".vs")};
-}
-
 /// Files bigger than this are treated as unscannable (binary blobs, dumps).
 constexpr qint64 kMaxFileBytes = 8 * 1024 * 1024;
 
@@ -55,11 +43,10 @@ constexpr int kMaxHitTextLength = 240;
 // ---------------------------------------------------------------------------
 // ProjectSearchThread
 // ---------------------------------------------------------------------------
-ProjectSearchThread::ProjectSearchThread(const QString& root,
-                                         const QString& pattern,
-                                         bool caseSensitive, bool wholeWord,
-                                         bool useRegex, QObject* parent)
-    : QThread(parent), root_(root)
+QRegularExpression ProjectSearchThread::buildPattern(const QString& pattern,
+                                                     bool caseSensitive,
+                                                     bool wholeWord,
+                                                     bool useRegex)
 {
     QString effective = useRegex ? pattern
                                  : QRegularExpression::escape(pattern);
@@ -71,7 +58,17 @@ ProjectSearchThread::ProjectSearchThread(const QString& root,
     if (!caseSensitive) {
         options |= QRegularExpression::CaseInsensitiveOption;
     }
-    regex_ = QRegularExpression(effective, options);
+    return QRegularExpression(effective, options);
+}
+
+ProjectSearchThread::ProjectSearchThread(const QString& root,
+                                         const QString& pattern,
+                                         bool caseSensitive, bool wholeWord,
+                                         bool useRegex, QObject* parent)
+    : QThread(parent),
+      root_(root),
+      regex_(buildPattern(pattern, caseSensitive, wholeWord, useRegex))
+{
 }
 
 bool ProjectSearchThread::isSearchableFile(const QString& fileName)
@@ -109,7 +106,6 @@ void ProjectSearchThread::run()
 {
     int filesScanned = 0;
     int totalHits = 0;
-    const QStringList skipDirs = skipDirNames();
 
     QDirIterator it(root_, QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext()) {
@@ -117,20 +113,14 @@ void ProjectSearchThread::run()
             break;
         }
         const QString path = it.next();
-        const QFileInfo info(path);
         const QString relative = QDir::fromNativeSeparators(
             QDir(root_).relativeFilePath(path));
 
-        // Skip generated directories: check the path segments between the
-        // root and the file, which is cheaper than stat-ing each level.
-        bool skipped = false;
-        for (const QString& skip : skipDirs) {
-            if (relative.startsWith(skip + QLatin1Char('/'))) {
-                skipped = true;
-                break;
-            }
-        }
-        if (skipped || !isSearchableFile(path)) {
+        // Skip generated and VCS-internal directories at *any* depth: a search
+        // that only recognised "build/" at the root still walked src/build and
+        // .git, and those files could spend the whole hit cap between them.
+        if (LightCpp::Text::isUnderSkippedDirectory(relative)
+            || !isSearchableFile(path)) {
             continue;
         }
 
@@ -226,28 +216,44 @@ ProjectSearchDialog::ProjectSearchDialog(const QString& root,
 
 ProjectSearchDialog::~ProjectSearchDialog()
 {
-    // The dialog can close (Esc, parent destroyed) while the scan runs:
-    // stop it and wait — the worker checks the flag between files, so the
-    // wait is bounded by one file read.
-    if (thread_ != nullptr && thread_->isRunning()) {
-        thread_->abort();
-        thread_->wait(10000);
+    // The dialog can close (Esc, parent destroyed) while the scan runs. Hand
+    // the worker over before the QObject tree goes down, so it is never
+    // destroyed mid-flight.
+    stopThread();
+}
+
+void ProjectSearchDialog::stopThread()
+{
+    ProjectSearchThread* worker = thread_;
+    thread_ = nullptr;
+    if (worker == nullptr) {
+        return;
+    }
+    // Whatever the old query still has queued belongs to a stale pattern.
+    worker->disconnect(this);
+    if (!worker->isRunning()) {
+        worker->deleteLater();
+        return;
+    }
+    worker->abort();
+    if (worker->wait(10000)) {
+        worker->deleteLater();
+        return;
+    }
+    // A read is wedged (a network drive, a blocking FIFO…). Deleting a running
+    // QThread calls qFatal — "QThread: Destroyed while thread is still
+    // running" takes the whole IDE down — so let the worker go instead: it is
+    // no longer a child of this dialog, and it will delete itself on finish.
+    worker->setParent(nullptr);
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    if (worker->isFinished()) {
+        worker->deleteLater();  // it slipped through between wait() and here
     }
 }
 
 void ProjectSearchDialog::startSearch()
 {
-    if (thread_ != nullptr) {
-        if (thread_->isRunning()) {
-            // A restart: the previous scan's queued results belong to a
-            // stale query, so drop them by disconnecting before aborting.
-            thread_->disconnect(this);
-            thread_->abort();
-            thread_->wait(10000);
-        }
-        thread_->deleteLater();
-        thread_ = nullptr;
-    }
+    stopThread();
 
     results_->clear();
     filesScanned_ = 0;
@@ -255,7 +261,21 @@ void ProjectSearchDialog::startSearch()
 
     const QString pattern = pattern_->text();
     if (pattern.isEmpty()) {
+        searchButton_->setEnabled(true);
         status_->setText(tr("Type something to search for."));
+        return;
+    }
+
+    // Validate before starting a scan: a pattern the engine cannot compile
+    // matches nothing at all, and "No matches" for a broken expression reads
+    // as "the text is not in the project".
+    const QRegularExpression engine = ProjectSearchThread::buildPattern(
+        pattern, caseSensitive_->isChecked(), wholeWord_->isChecked(),
+        useRegex_->isChecked());
+    if (!engine.isValid()) {
+        searchButton_->setEnabled(true);
+        status_->setText(
+            tr("Invalid regular expression: %1").arg(engine.errorString()));
         return;
     }
 
@@ -268,8 +288,8 @@ void ProjectSearchDialog::startSearch()
     connect(worker, &ProjectSearchThread::scanFinished,
             this, &ProjectSearchDialog::onScanFinished);
     searchButton_->setEnabled(false);
-    updateStatus();
     worker->start();
+    updateStatus();
 }
 
 void ProjectSearchDialog::onFileHits(

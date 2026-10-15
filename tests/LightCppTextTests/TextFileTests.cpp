@@ -631,3 +631,56 @@ TEST_F(TextFileTest, SearchReadRefusesWhatItCannotOpen)
         LightCpp::Text::readSearchableTextFile(dir_.path(), 8 * 1024 * 1024)
             .has_value());
 }
+
+// isUnderSkippedDirectory — the policy behind "Search in Project"'s decision
+// never to descend into generated or VCS-internal directories.
+
+TEST(SkippedScanDirectories, MatchesTheDirectorySegmentAtAnyDepth)
+{
+    using LightCpp::Text::isUnderSkippedDirectory;
+
+    // At the scan root.
+    EXPECT_TRUE(isUnderSkippedDirectory(QStringLiteral("build/out.cpp")));
+    EXPECT_TRUE(isUnderSkippedDirectory(QStringLiteral(".git/HEAD")));
+    // Nested — the scan only used to look at the first segment, so src/build
+    // and sub/.git were walked anyway and could spend the whole hit cap.
+    EXPECT_TRUE(isUnderSkippedDirectory(QStringLiteral("src/build/out.cpp")));
+    EXPECT_TRUE(isUnderSkippedDirectory(QStringLiteral("sub/.git/index")));
+    EXPECT_TRUE(isUnderSkippedDirectory(
+        QStringLiteral("a/b/node_modules/x/y.js")));
+    // The rest of the configured names.
+    EXPECT_TRUE(isUnderSkippedDirectory(QStringLiteral(".svn/entries")));
+    EXPECT_TRUE(isUnderSkippedDirectory(QStringLiteral(".hg/store")));
+    EXPECT_TRUE(isUnderSkippedDirectory(QStringLiteral(".vs/x.vcxproj")));
+    EXPECT_TRUE(
+        isUnderSkippedDirectory(QStringLiteral("cmake-build-debug/x.cpp")));
+    EXPECT_TRUE(isUnderSkippedDirectory(QStringLiteral(".ccls-cache/@x/y.hpp")));
+    EXPECT_TRUE(isUnderSkippedDirectory(QStringLiteral(".workbuddy/memory/x.md")));
+}
+
+TEST(SkippedScanDirectories, ComparesWholeSegmentsOnly)
+{
+    using LightCpp::Text::isUnderSkippedDirectory;
+
+    // `mybuild` is not `build`, and a source whose *name* merely contains a
+    // skipped word must stay in the scan.
+    EXPECT_FALSE(isUnderSkippedDirectory(QStringLiteral("mybuild/out.cpp")));
+    EXPECT_FALSE(isUnderSkippedDirectory(QStringLiteral("src/buildable/x.cpp")));
+    EXPECT_FALSE(isUnderSkippedDirectory(QStringLiteral("src/rebuild.cpp")));
+    EXPECT_FALSE(isUnderSkippedDirectory(QStringLiteral("build.cpp")));
+    EXPECT_FALSE(isUnderSkippedDirectory(QStringLiteral("git/HEAD")));
+    // A *file* named like a skipped directory is still a file: only the
+    // segments above the last one are directories.
+    EXPECT_FALSE(isUnderSkippedDirectory(QStringLiteral("build")));
+    EXPECT_FALSE(isUnderSkippedDirectory(QStringLiteral("src/build")));
+}
+
+TEST(SkippedScanDirectories, AcceptsNativeSeparators)
+{
+    using LightCpp::Text::isUnderSkippedDirectory;
+
+    // The dialog hands over '/' separators, but a caller passing Windows ones
+    // straight through must get the same answer.
+    EXPECT_TRUE(isUnderSkippedDirectory(QStringLiteral("src\\build\\out.cpp")));
+    EXPECT_FALSE(isUnderSkippedDirectory(QStringLiteral("src\\real\\out.cpp")));
+}

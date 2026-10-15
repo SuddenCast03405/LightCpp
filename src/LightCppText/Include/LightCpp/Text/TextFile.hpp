@@ -9,6 +9,7 @@
 #include <QByteArray>
 #include <QByteArrayView>
 #include <QString>
+#include <QStringView>
 
 #include "LightCpp/Core/Result.hpp"
 #include "LightCpp/Text/Encoding.hpp"
@@ -125,6 +126,18 @@ struct TextFileOptions {
 /// plain text. Safe to call from background threads (never touches the GUI).
 [[nodiscard]] std::optional<QString> readSearchableTextFile(
     const QString& path, std::int64_t maxBytes);
+
+/// True when `relativePath` — relative to a scan root, with either '\' or '/'
+/// separators — names a file inside a directory a source scan never looks at:
+/// version-control metadata (`.git`, `.svn`, `.hg`, `.vs`) and build or cache
+/// output (`build`, `cmake-build-*`, `.ccls-cache`, `.workbuddy`,
+/// `node_modules`).
+///
+/// Every segment above the file name is checked, so `src/build/out.cpp` is
+/// excluded exactly like `build/out.cpp`. Matching only the first segment is
+/// how a scan ends up walking `.git` internals and spending its result cap on
+/// generated files, leaving the real hits unreported.
+[[nodiscard]] bool isUnderSkippedDirectory(QStringView relativePath);
 
 /// Why writing a text file failed.
 enum class WriteFileError {
