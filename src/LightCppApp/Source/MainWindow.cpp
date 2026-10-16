@@ -539,10 +539,26 @@ MainWindow::MainWindow(QWidget* parent)
         appendServerProcessLog(tr("language server error: %1").arg(message));
         // Surface the reason instead of leaving the user with a silent pane.
         outputPanel_->showChannel(serverProcessLogChannel());
-        actSyntaxCheck_->setChecked(false);
+        // Deliberately does NOT clear the Syntax Check toggle (R2-23). The
+        // toggle is the user's wish and the engine follows it, not the other
+        // way round: unchecking here ran stop(), which wiped every diagnostic
+        // marker and both Problems trees, and then the retry below brought the
+        // server back up anyway — leaving the menu claiming "off" while clangd
+        // was alive and answering. Nothing in the UI could ever correct that,
+        // because only the menu is *supposed* to drive the server, so the two
+        // stayed inconsistent for the rest of the session. A failure here is
+        // usually transient (a restart, a killed process) and the restart
+        // republishes diagnostics on its own; when it is not, the error line
+        // above and the status bar say so while the setting still means what
+        // the user set it to.
+        if (completionBackend_ == QStringLiteral("libclang")) {
+            return;
+        }
         // A completion was on its way: burn one retry attempt on bringing
-        // the server back up. Bounded by preferences.completion.retryCount.
-        if (completionBackend_ != QStringLiteral("libclang")) {
+        // the server back up. Bounded by preferences.completion.retryCount —
+        // and only when syntax check is still switched on, since a restart
+        // now has to be what the user asked for.
+        if (actSyntaxCheck_ != nullptr && actSyntaxCheck_->isChecked()) {
             scheduleCompletionRetry();
         }
     });
@@ -7056,6 +7072,13 @@ bool MainWindow::scheduleCompletionRetry()
             return;
         }
         if (lsp_ == nullptr) {
+            return;
+        }
+        // The toggle may have been switched off during these 400 ms, and the
+        // toggle is what decides whether a server runs (R2-23): restarting it
+        // now would leave an engine running behind an unchecked menu entry,
+        // which is the same lie in the other direction.
+        if (actSyntaxCheck_ == nullptr || !actSyntaxCheck_->isChecked()) {
             return;
         }
         // Bring the server back up if it is gone — but leave a process that is
