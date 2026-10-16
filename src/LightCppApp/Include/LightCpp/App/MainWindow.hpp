@@ -975,6 +975,10 @@ private:
     /// Owns the loaded C++ plugins (QPluginLoader) and the Lua host's
     /// script adapters. Created in the constructor; loads once, no hot reload.
     LightCpp::Plugin::PluginManager* pluginManager_ = nullptr;
+    /// The resolved plugins directory, cached by loadPlugins() so every
+    /// consumer — the panel list, the enable/disable/uninstall actions —
+    /// uses exactly the directory the plugins were loaded from (R2-17).
+    QString pluginDir_;
     /// The Plugins menu, created lazily by the first registered command.
     class QMenu* pluginsMenu_ = nullptr;
     /// Set by onRestartIde(): the accepted closeEvent spawns a fresh
@@ -1002,6 +1006,12 @@ private:
     /// Discover and load plugins (shared libraries + Lua scripts) and log
     /// what came up. Called once, from the constructor.
     void loadPlugins();
+    /// The plugins directory in use: what loadPlugins() resolved, or — when
+    /// that has not run yet — a fresh LightCpp::Plugin::resolvePluginsDirectory
+    /// lookup. The panel list and the enable/disable/uninstall actions all
+    /// go through here; each of them rebuilding `<exeDir>/plugins` by hand
+    /// was R2-17, and running the raw build-tree exe then listed nothing.
+    [[nodiscard]] QString pluginDirectory() const;
 
     /// One plugin file in the plugins directory — loaded, disabled or
     /// simply unloadable. The plugin panel shows all three.

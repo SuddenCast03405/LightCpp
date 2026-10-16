@@ -18,6 +18,7 @@
 #include "LightCpp/App/SettingsDialog.hpp"
 #include "LightCpp/App/StartupPage.hpp"
 #include "LightCpp/App/ToolchainPaths.hpp"
+#include "LightCpp/Plugin/PluginPaths.hpp"
 #include "LightCpp/Plugin/ProjectBackend.hpp"
 #include "LightCpp/Project/CompilerDiagnostics.hpp"
 
@@ -106,6 +107,26 @@ constexpr char kConsolePauserFallback[] = "E:/Cpp/ConsolePauser.exe";
 /// language server (ms). 300ms keeps up with fast typing without spamming
 /// clangd on every keystroke.
 constexpr int kLintDebounceMs = 300;
+
+/// Read a config document through a scope of its own.
+///
+/// The handle has to be gone before the replacement is written:
+/// SettingsStore::writeDocument() commits a QSaveFile, which lands the new
+/// contents by renaming over the target, and on Windows Qt opens files without
+/// FILE_SHARE_DELETE — so a reader that is still open makes the commit fail.
+/// Both callers below ignore the returned bool, which made that failure
+/// invisible in exactly the worst way: a plugin disabled in the UI was never
+/// remembered (the panel went on showing it as enabled) and the recent-files
+/// list never survived a restart. Keeping the read in here means there is no
+/// handle in the caller's scope to forget about.
+QByteArray readDocumentBytes(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    return file.readAll();
+}
 
 /// Determine a human-readable language label from the file extension.
 QString languageFromSuffix(const QString& path)
@@ -821,12 +842,7 @@ bool MainWindow::persistPluginLists(const QStringList& disabled,
     // Surgical update: read the document, replace only the "plugins" key of
     // the preferences document, leave everything else exactly as it is.
     // The file may be a single document or an array of documents.
-    QByteArray raw;
-    QFile file(path);
-    if (file.open(QIODevice::ReadOnly)) {
-        raw = file.readAll();
-    }
-    const QJsonDocument doc = QJsonDocument::fromJson(raw);
+    const QJsonDocument doc = QJsonDocument::fromJson(readDocumentBytes(path));
     const auto apply = [](const QJsonObject& obj, const QStringList& dis,
                           const QStringList& pend) {
         QJsonArray disabledArr;
@@ -1116,12 +1132,7 @@ bool MainWindow::persistGeneralPrefs(const QStringList& recentFiles,
     // Surgical update: read the document, replace only the "general" key of
     // the preferences document, leave everything else exactly as it is.
     // The file may be a single document or an array of documents.
-    QByteArray raw;
-    QFile file(path);
-    if (file.open(QIODevice::ReadOnly)) {
-        raw = file.readAll();
-    }
-    const QJsonDocument doc = QJsonDocument::fromJson(raw);
+    const QJsonDocument doc = QJsonDocument::fromJson(readDocumentBytes(path));
     QJsonArray recentArray;
     for (const QString& entry : recentFiles) {
         recentArray.append(entry);
@@ -1170,8 +1181,7 @@ QList<MainWindow::PluginCandidate> MainWindow::pluginCandidates() const
 {
     using LoadedKind = LightCpp::Plugin::PluginManager::Loaded::Kind;
     QList<PluginCandidate> candidates;
-    const QString pluginDir =
-        QCoreApplication::applicationDirPath() + QStringLiteral("/plugins");
+    const QString pluginDir = pluginDirectory();
     const auto loadedList =
         pluginManager_ != nullptr ? pluginManager_->loaded()
                                   : QList<LightCpp::Plugin::PluginManager::Loaded>{};
@@ -1228,9 +1238,7 @@ void MainWindow::onPluginDisable(const QString& relPath)
     QStringList disabled = prefs.disabledPlugins;
     disabled.append(relPath);
 
-    const QString absolute = QDir(QCoreApplication::applicationDirPath()
-                                  + QStringLiteral("/plugins"))
-                                 .filePath(relPath);
+    const QString absolute = QDir(pluginDirectory()).filePath(relPath);
     // Lua plugins can leave right now; shared-library plugins keep running
     // until the restart (their dll stays mapped into this process).
     const QString normalized = QDir::fromNativeSeparators(absolute);
@@ -1272,10 +1280,7 @@ void MainWindow::onPluginEnable(const QString& relPath)
     // A Lua plugin comes back right away: load and register it now.
     if (relPath.startsWith(QLatin1String("lua/"), Qt::CaseInsensitive)
         && pluginManager_ != nullptr) {
-        const QString absolute =
-            QDir(QCoreApplication::applicationDirPath()
-                 + QStringLiteral("/plugins"))
-                .filePath(relPath);
+        const QString absolute = QDir(pluginDirectory()).filePath(relPath);
         auto loaded = LightCpp::Lua::LuaPluginHost::loadPlugin(
             absolute, this);
         if (loaded.error.isEmpty()) {
@@ -1292,10 +1297,7 @@ void MainWindow::onPluginEnable(const QString& relPath)
         // the plugin panel shows the restart banner for it. One that is
         // still loaded (it was disabled a moment ago and the dll cannot
         // leave) keeps running, so no restart is needed for it.
-        const QString absolute =
-            QDir(QCoreApplication::applicationDirPath()
-                 + QStringLiteral("/plugins"))
-                .filePath(relPath);
+        const QString absolute = QDir(pluginDirectory()).filePath(relPath);
         const QString normalized = QDir::fromNativeSeparators(absolute);
         bool currentlyLoaded = false;
         if (pluginManager_ != nullptr) {
@@ -1317,9 +1319,7 @@ void MainWindow::onPluginEnable(const QString& relPath)
 void MainWindow::onPluginUninstall(const QString& relPath)
 {
     const LightCpp::Settings::Preferences prefs = pluginPrefsSnapshot();
-    const QString absolute = QDir(QCoreApplication::applicationDirPath()
-                                  + QStringLiteral("/plugins"))
-                                 .filePath(relPath);
+    const QString absolute = QDir(pluginDirectory()).filePath(relPath);
     const QString normalized = QDir::fromNativeSeparators(absolute);
     const bool wasLoaded =
         pluginManager_ != nullptr
@@ -1351,39 +1351,38 @@ void MainWindow::onPluginUninstall(const QString& relPath)
     refreshPluginPanel();
 }
 
+QString MainWindow::pluginDirectory() const
+{
+    if (!pluginDir_.isEmpty()) {
+        return pluginDir_;
+    }
+    // loadPlugins() has not run yet — resolve it anyway so a caller can
+    // never end up on a different directory than the one the plugins will
+    // be loaded from.
+    return LightCpp::Plugin::resolvePluginsDirectory(
+        QCoreApplication::applicationDirPath());
+}
+
 void MainWindow::loadPlugins()
 {
     pluginManager_ = new LightCpp::Plugin::PluginManager(this);
-    QString pluginDir =
-        QCoreApplication::applicationDirPath() + QStringLiteral("/plugins");
-    if (!QFileInfo::exists(pluginDir)) {
-        // Build-tree layout: the raw exe sits deep inside the build directory
-        // (.../src/LightCppApp), while the plugin dlls land in
-        // <build>/plugins — only the staged dist/ copy gets a plugins/
-        // directory next to the executable. Walking up a bounded number of
-        // levels, and only accepting a directory that actually holds plugin
-        // dlls, keeps a build-tree binary working instead of silently
-        // starting with no plugins. The check also keeps an unrelated
-        // ancestor "plugins" folder (an IDE's, a browser's) from hijacking.
-        QDir probe = QDir(QCoreApplication::applicationDirPath());
-        for (int up = 0; up < 4; ++up) {
-            if (!probe.cdUp()) {
-                break;
-            }
-            const QString candidate = probe.filePath(QStringLiteral("plugins"));
-            const QDir candidateDir(candidate);
-            if (candidateDir.exists()
-                && !candidateDir.entryList(
-                       QStringList{QStringLiteral("*Plugin*.dll")},
-                       QDir::Files).isEmpty()) {
-                pluginDir = candidate;
-                outputPanel_->appendPluginOutput(
-                    tr("No plugins directory next to the executable — using "
-                       "the build tree one: %1")
-                        .arg(QDir::toNativeSeparators(pluginDir)));
-                break;
-            }
-        }
+    // Resolve once, here, and hand the result to everyone else: the panel
+    // list and the enable/disable/uninstall actions all read it back
+    // through pluginDirectory() (R2-17 — they used to rebuild
+    // <exeDir>/plugins, which is not where a build-tree exe finds them).
+    const QString defaultDir = LightCpp::Plugin::defaultPluginsDirectory(
+        QCoreApplication::applicationDirPath());
+    pluginDir_ = LightCpp::Plugin::resolvePluginsDirectory(
+        QCoreApplication::applicationDirPath());
+    const QString pluginDir = pluginDir_;
+    if (pluginDir != defaultDir) {
+        // Build-tree layout: the raw exe sits deep inside the build
+        // directory (.../src/LightCppApp) while the plugin dlls land in
+        // <build>/plugins — see resolvePluginsDirectory().
+        outputPanel_->appendPluginOutput(
+            tr("No plugins directory next to the executable — using "
+               "the build tree one: %1")
+                .arg(QDir::toNativeSeparators(pluginDir)));
     }
     if (!QFileInfo::exists(pluginDir)) {
         outputPanel_->appendPluginOutput(

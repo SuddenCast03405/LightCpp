@@ -1,8 +1,10 @@
-# LightCppPluginTests — PluginManager behaviour and a real QPluginLoader
-# round-trip against the built DevCppPlugin DLL.
+# LightCppPluginTests — PluginManager behaviour, the plugins-directory
+# resolution, and a real QPluginLoader round-trip against the built
+# DevCppPlugin DLL.
 
 add_executable(LightCppPluginTests
     PluginManagerTests.cpp
+    PluginPathsTests.cpp
 )
 
 target_compile_definitions(LightCppPluginTests PRIVATE
