@@ -21,6 +21,11 @@ class StubServices final : public LightCpp::Plugin::IdeServices {
 public:
     QStringList logs;
     QList<QString> commandIds;
+    /// Owner names passed to removePluginCommands(), in order. A script that
+    /// fails mid-load must be rolled back under its file stem: its command
+    /// callbacks capture internals that die with the load scope, so a menu
+    /// entry left behind points at freed memory.
+    QStringList removedCommands;
     std::vector<std::function<void()>> callbacks;
 
     QString editorPath = QStringLiteral("E:/tmp/main.cpp");
@@ -69,6 +74,10 @@ public:
     {
         commandIds.append(id);
         callbacks.push_back(std::move(callback));
+    }
+    void removePluginCommands(const QString& pluginName) override
+    {
+        removedCommands.append(pluginName);
     }
 };
 
@@ -337,6 +346,13 @@ TEST(LuaPluginHost, BrokenScriptsAreRejectedWithReasons)
         syntax, &services, tightLimits());
     EXPECT_TRUE(loaded.plugin == nullptr);
     EXPECT_TRUE(loaded.error.contains(QStringLiteral("script failed")));
+    // The rollback: a script that dies mid-load may already have registered
+    // menu entries (LuaPluginHost.cpp's `services->removePluginCommands(stem)`),
+    // and those callbacks point into the load scope that is about to go away.
+    // The stub used to be silent here, so this half of the fix had no
+    // assertion at all.
+    ASSERT_EQ(services.removedCommands.size(), 1);
+    EXPECT_EQ(services.removedCommands.first(), QStringLiteral("broken"));
 
     const QString runtime = writeScript(
         dir, "runtime.lua",
@@ -345,6 +361,10 @@ TEST(LuaPluginHost, BrokenScriptsAreRejectedWithReasons)
         runtime, &services, tightLimits());
     EXPECT_TRUE(failed.plugin == nullptr);
     EXPECT_TRUE(failed.error.contains(QStringLiteral("boom at load time")));
+    // Rolled back under the *file* stem, not under plugin.name — the name is
+    // only known after the script has run, and this one never got that far.
+    ASSERT_EQ(services.removedCommands.size(), 2);
+    EXPECT_EQ(services.removedCommands.at(1), QStringLiteral("runtime"));
 }
 
 TEST(LuaPluginHost, DirectoryScanRegistersEveryScript)

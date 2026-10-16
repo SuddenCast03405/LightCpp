@@ -45,15 +45,22 @@ QStringList PluginManager::loadSharedPlugins(
         const QString path = dir.filePath(file);
         auto loader = std::make_unique<QPluginLoader>(path);
 
-        // QPluginLoader itself refuses a plugin built against another Qt or
-        // with an incompatible metadata version; what reaches this branch is
-        // a file that is not a plugin at all, or one whose dependencies are
-        // missing.
+        // What reaches this branch is a file that is not a plugin at all, or
+        // one whose dependencies are missing. (The Qt build and the plugin's
+        // IID are checked by Qt itself: an IID mismatch never produces a
+        // Plugin* and falls out of the qobject_cast below.)
         if (!loader->load()) {
-            // Read the reason *after* the attempt: errorString() is empty
-            // before load() runs, and the old code read it first and then fell
-            // back to that empty string — the panel showed a bare
-            // "broken.dll: " with nothing after it.
+            // Ask for the reason *after* the attempt, from one place. The old
+            // expression read errorString() up front into `loadError`, called
+            // it twice more inside a ternary whose two branches were meant to
+            // be the same value, and fell back to the pre-load snapshot. It
+            // happened to report the truth — measured with
+            // .workbuddy/_errprobe.cpp, a constructed QPluginLoader whose path
+            // exists has already tried to read the file's metadata, so
+            // errorString() is not empty even before load() and the post-load
+            // branch is the one that wins — but nothing about it said so, and
+            // the fallback only ever activated when the answer was empty
+            // anyway. One read, one explicit fallback.
             const QString reason = loader->errorString();
             errors_.append(QStringLiteral("%1: %2").arg(
                 file, reason.isEmpty()
