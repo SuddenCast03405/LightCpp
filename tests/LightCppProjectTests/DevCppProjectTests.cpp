@@ -586,16 +586,25 @@ TEST(DevCppProject, MakefileCarriesThePerUnitRules)
         devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain());
     const QStringList lines = makefileLines(plan);
 
-    // The standard target chain, in Dev-C++'s own order.
+    // The standard target chain, in Dev-C++'s own order. The target and the
+    // prerequisite are the make-syntax twins (`$(BIN_MK)`/`$(OBJ_MK)`); the
+    // recipes keep the Dev-C++ variables. For this project — no space in any
+    // path — the two forms are the same string.
     const int phony = lines.indexOf(QStringLiteral(
         ".PHONY: all all-before all-after clean clean-custom"));
     ASSERT_GE(phony, 0);
-    EXPECT_EQ(lines.at(phony + 2), QStringLiteral("all: all-before $(BIN) all-after"));
+    EXPECT_EQ(lines.at(phony + 2),
+              QStringLiteral("all: all-before $(BIN_MK) all-after"));
     EXPECT_TRUE(lines.contains(QStringLiteral("clean: clean-custom")));
     EXPECT_TRUE(lines.contains(QStringLiteral("\t${RM} $(OBJ) $(BIN)")));
-    EXPECT_TRUE(lines.contains(QStringLiteral("$(BIN): $(OBJ)")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("$(BIN_MK): $(OBJ_MK)")));
     EXPECT_TRUE(lines.contains(
         QStringLiteral("\t$(CPP) $(LINKOBJ) -o $(BIN) $(LIBS)")));
+    // Nothing to escape, so the twins are literally the same lists.
+    EXPECT_EQ(variableValue(lines, QStringLiteral("OBJ_MK")),
+              variableValue(lines, QStringLiteral("OBJ")));
+    EXPECT_EQ(variableValue(lines, QStringLiteral("BIN_MK")),
+              variableValue(lines, QStringLiteral("BIN")));
 
     // One rule per compilable unit: object target, source dependency, then
     // the compile line through $(CPP) with the project's flags.
@@ -717,7 +726,7 @@ TEST(DevCppProject, MakefileForStaticAndDynamicLibrariesMatchesDevCpp)
     const QStringList staticLines =
         makefileLines(devCppMakefilePlan(*staticLib, BuildConfiguration::Debug,
                                          testToolchain()));
-    EXPECT_TRUE(staticLines.contains(QStringLiteral("$(BIN): $(OBJ)")));
+    EXPECT_TRUE(staticLines.contains(QStringLiteral("$(BIN_MK): $(OBJ_MK)")));
     EXPECT_TRUE(staticLines.contains(QStringLiteral("\tar r $(BIN) $(LINKOBJ)")));
     EXPECT_TRUE(staticLines.contains(QStringLiteral("\tranlib $(BIN)")));
 
@@ -944,4 +953,217 @@ TEST(DevCppProject, MakefileRoutesNonAsciiLibrariesThroughAnIntermediate)
         "\tcmd /c move /y _lightcpp_link.def \"lib\x9879\x76EE" "1.def\"")));
     EXPECT_TRUE(dynamicLines.contains(QStringLiteral(
         "\tcmd /c move /y _lightcpp_link.a \"lib\x9879\x76EE" "1.a\"")));
+}
+
+// ---------------------------------------------------------------------------
+// Paths with spaces (R2-27) and units the project refuses to compile (R2-28)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// The entries of a makefile variable, with the layer each form adds removed:
+/// `"my out"` (the recipes' quoting) and `my\ out` (make's escaping) both come
+/// back as `my out`, so the two lists can be compared as file sets.
+QStringList entries(const QString& value)
+{
+    QStringList out;
+    QString current;
+    for (qsizetype i = 0; i < value.size(); ++i) {
+        const QChar ch = value.at(i);
+        if (ch == u'"') {
+            // A quoted run is one entry however many spaces it holds, which is
+            // the whole point of quoting it.
+            for (++i; i < value.size() && value.at(i) != u'"'; ++i) {
+                current.append(value.at(i));
+            }
+            continue;
+        }
+        if (ch == u'\\' && i + 1 < value.size() && value.at(i + 1) == u' ') {
+            current.append(u' ');
+            ++i;
+            continue;
+        }
+        if (ch == u' ') {
+            if (!current.isEmpty()) {
+                out.append(current);
+                current.clear();
+            }
+            continue;
+        }
+        current.append(ch);
+    }
+    if (!current.isEmpty()) {
+        out.append(current);
+    }
+    return out;
+}
+
+/// The spelling make needs for a path: spaces escaped, because make splits its
+/// targets and prerequisites on whitespace and does not strip quotes.
+QString asMakeName(const QString& path)
+{
+    return QString(path).replace(u' ', QStringLiteral("\\ "));
+}
+
+/// True when some rule in the makefile is for exactly `target`.
+bool hasRuleFor(const QStringList& lines, const QString& target)
+{
+    for (const QString& line : lines) {
+        if (line.startsWith(target + QLatin1Char(':'))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+TEST(DevCppProject, SpacesInObjectPathsUseTheFormMakeNeeds)
+{
+    // The object folder has a space in it. make matches targets and
+    // prerequisites by name and treats a quote as an ordinary character, so a
+    // quoted prerequisite list against an escaped rule target made make report
+    // `No rule to make target '"my'` — measured with a real mingw32-make -n
+    // before the fix. The recipes go to cmd.exe, which keeps backslashes, so
+    // they need the quoted form. Both forms must name the same files, and the
+    // rules must be written in the same form as the prerequisite list.
+    const auto project = parse(
+        "[Project]\n"
+        "Name=hello\n"
+        "ObjectOutput=my out\n"
+        "UnitCount=1\n"
+        "[Unit1]\n"
+        "FileName=main.cpp\n");
+    ASSERT_TRUE(project.has_value());
+    const QStringList lines = makefileLines(
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain()));
+
+    // The recipes' copy keeps the quotes: the program needs them.
+    EXPECT_EQ(variableValue(lines, QStringLiteral("OBJ")),
+              QStringLiteral("\"my out/main.o\""));
+    EXPECT_EQ(variableValue(lines, QStringLiteral("LINKOBJ")),
+              QStringLiteral("\"my out/main.o\""));
+    // make's copy escapes the space.
+    EXPECT_EQ(variableValue(lines, QStringLiteral("OBJ_MK")),
+              QStringLiteral("my\\ out/main.o"));
+    // Both spellings name the same file.
+    EXPECT_EQ(entries(variableValue(lines, QStringLiteral("OBJ_MK"))),
+              entries(variableValue(lines, QStringLiteral("OBJ"))));
+
+    // The rule is written the way the prerequisite list is, so the two meet.
+    EXPECT_TRUE(hasRuleFor(lines, asMakeName(QStringLiteral("my out/main.o"))));
+    EXPECT_TRUE(lines.contains(QStringLiteral("$(BIN_MK): $(OBJ_MK)")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("all: all-before $(BIN_MK) all-after")));
+    // ...and the compile line still hands the program a quoted path.
+    EXPECT_TRUE(lines.contains(QStringLiteral(
+        "\t$(CPP) -c main.cpp -o \"my out/main.o\" $(CXXFLAGS)")));
+}
+
+TEST(DevCppProject, SpacesInTheOutputPathUseTheFormMakeNeeds)
+{
+    // The same for the rule's target. `BIN = "bin out/hello.exe"` made make
+    // read two targets — `"bin` and `out/hello.exe"` — so it ran the link
+    // recipe twice and never considered the real file up to date.
+    const auto project = parse(
+        "[Project]\n"
+        "Name=hello\n"
+        "ExeOutput=bin out\n"
+        "UnitCount=1\n"
+        "[Unit1]\n"
+        "FileName=main.cpp\n");
+    ASSERT_TRUE(project.has_value());
+    const QStringList lines = makefileLines(
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain()));
+
+    EXPECT_EQ(variableValue(lines, QStringLiteral("BIN")),
+              QStringLiteral("\"bin out/hello.exe\""));
+    EXPECT_EQ(variableValue(lines, QStringLiteral("BIN_MK")),
+              QStringLiteral("bin\\ out/hello.exe"));
+    // The target is spelled the escaped way wherever make reads it as a name,
+    // and never as the quoted one — `BIN = "bin out/hello.exe"` as a target
+    // made make see two targets and run the link recipe twice (measured).
+    EXPECT_TRUE(lines.contains(QStringLiteral("all: all-before $(BIN_MK) all-after")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("$(BIN_MK): $(OBJ_MK)")));
+    EXPECT_FALSE(lines.contains(QStringLiteral("$(BIN): $(OBJ)")));
+    // The recipe is unchanged: it is handed to a program, not to make.
+    EXPECT_TRUE(lines.contains(
+        QStringLiteral("\t$(CPP) $(LINKOBJ) -o $(BIN) $(LIBS)")));
+    EXPECT_TRUE(lines.contains(QStringLiteral("\t${RM} $(OBJ) $(BIN)")));
+}
+
+TEST(DevCppProject, SpacesInMakeIncludesUseTheFormMakeNeeds)
+{
+    // An `include` line is make's own syntax too: a quoted name is a file name
+    // containing quote characters, and make looks for `"my` and `file.mk"`.
+    // (The .dev file needs its own quotes around the value, or the list reader
+    // splits it on the space — that is the format's rule, not make's.)
+    const auto project = parse(
+        "[Project]\n"
+        "Name=hello\n"
+        "MakeIncludes=\"extra my.mk\"\n"
+        "UnitCount=1\n"
+        "[Unit1]\n"
+        "FileName=main.cpp\n");
+    ASSERT_TRUE(project.has_value());
+    const QStringList lines = makefileLines(
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain()));
+    EXPECT_TRUE(lines.contains(QStringLiteral("include extra\\ my.mk")));
+    EXPECT_FALSE(lines.contains(QStringLiteral("include \"extra my.mk\"")));
+}
+
+TEST(DevCppProject, AnUncompiledUnitIsLinkedUnderItsOwnName)
+{
+    // Compile=0 / Link=1 says "do not build this, but link it". Naming such a
+    // unit after an object file we never generate (icon.res -> icon.o) left the
+    // prerequisite list pointing at a target nothing could make, and make
+    // refused the whole build (R2-28).
+    const auto project = parse(
+        "[Project]\n"
+        "Name=hello\n"
+        "UnitCount=2\n"
+        "[Unit1]\n"
+        "FileName=main.cpp\n"
+        "[Unit2]\n"
+        "FileName=res/icon.res\n"
+        "Compile=0\n"
+        "Link=1\n");
+    ASSERT_TRUE(project.has_value());
+    const QStringList lines = makefileLines(
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain()));
+
+    EXPECT_EQ(entries(variableValue(lines, QStringLiteral("OBJ"))),
+              (QStringList{QStringLiteral("main.o"),
+                           QStringLiteral("res/icon.res")}));
+    EXPECT_EQ(entries(variableValue(lines, QStringLiteral("LINKOBJ"))),
+              (QStringList{QStringLiteral("main.o"),
+                           QStringLiteral("res/icon.res")}));
+    EXPECT_EQ(entries(variableValue(lines, QStringLiteral("OBJ_MK"))),
+              entries(variableValue(lines, QStringLiteral("LINKOBJ"))));
+    // No rule is invented for it: it is not ours to build.
+    EXPECT_FALSE(hasRuleFor(lines, QStringLiteral("res/icon.res")));
+    EXPECT_TRUE(hasRuleFor(lines, QStringLiteral("main.o")));
+}
+
+TEST(DevCppProject, AnUncompiledSourceIsStillLinkedThroughItsObject)
+{
+    // The other half: Compile=0 on a *source* file can only mean "link the
+    // object some other build produced", so that unit keeps the object name.
+    const auto project = parse(
+        "[Project]\n"
+        "Name=hello\n"
+        "UnitCount=2\n"
+        "[Unit1]\n"
+        "FileName=main.cpp\n"
+        "[Unit2]\n"
+        "FileName=prebuilt.cpp\n"
+        "Compile=0\n"
+        "Link=1\n");
+    ASSERT_TRUE(project.has_value());
+    const QStringList lines = makefileLines(
+        devCppMakefilePlan(*project, BuildConfiguration::Debug, testToolchain()));
+
+    EXPECT_EQ(entries(variableValue(lines, QStringLiteral("LINKOBJ"))),
+              (QStringList{QStringLiteral("main.o"),
+                           QStringLiteral("prebuilt.o")}));
+    EXPECT_FALSE(hasRuleFor(lines, QStringLiteral("prebuilt.o")));
 }
