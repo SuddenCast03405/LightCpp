@@ -45,15 +45,20 @@ QStringList PluginManager::loadSharedPlugins(
         const QString path = dir.filePath(file);
         auto loader = std::make_unique<QPluginLoader>(path);
 
-        // Refuse plugins built against a different Qt or an incompatible
-        // metadata version instead of loading them half-way.
-        const QString loadError = loader->errorString();
+        // QPluginLoader itself refuses a plugin built against another Qt or
+        // with an incompatible metadata version; what reaches this branch is
+        // a file that is not a plugin at all, or one whose dependencies are
+        // missing.
         if (!loader->load()) {
-            errors_.append(
-                QStringLiteral("%1: %2").arg(file,
-                                             loader->errorString().isEmpty()
-                                                 ? loadError
-                                                 : loader->errorString()));
+            // Read the reason *after* the attempt: errorString() is empty
+            // before load() runs, and the old code read it first and then fell
+            // back to that empty string — the panel showed a bare
+            // "broken.dll: " with nothing after it.
+            const QString reason = loader->errorString();
+            errors_.append(QStringLiteral("%1: %2").arg(
+                file, reason.isEmpty()
+                          ? QStringLiteral("the loader gave no reason")
+                          : reason));
             continue;
         }
 
@@ -92,6 +97,10 @@ QStringList PluginManager::loadSharedPlugins(
             if (record.hasBackend) {
                 backends_.removeLast();
             }
+            // Anything the plugin registered before refusing would outlive
+            // it: a menu entry whose callback points into the plugin's code.
+            // It cannot clean up after returning false, so the host does.
+            removeCommandsFor(plugin->name());
             continue;
         }
 
@@ -114,6 +123,11 @@ void PluginManager::registerPlugin(std::unique_ptr<Plugin> plugin,
     record.publisher = plugin->publisher();
     if (!plugin->initialize(services_)) {
         errors_.append(QStringLiteral("%1: initialize() failed").arg(source));
+        // Same reason as the shared-library path. The Lua host also cleans up
+        // under the script's file name from inside its own initialize(); this
+        // second call covers a script whose plugin.name differs from that
+        // stem, and removing nothing is a no-op.
+        removeCommandsFor(plugin->name());
         return;  // unique_ptr drops the failed plugin here
     }
     // Note: dynamically registered plugins (the Lua host's script adapters)
@@ -121,6 +135,13 @@ void PluginManager::registerPlugin(std::unique_ptr<Plugin> plugin,
     // libraries, where qobject_cast across the plugin boundary works.
     registeredEntries_.push_back(RegisteredEntry{std::move(plugin), source});
     loaded_.append(record);
+}
+
+void PluginManager::removeCommandsFor(const QString& pluginName)
+{
+    if (services_ != nullptr) {
+        services_->removePluginCommands(pluginName);
+    }
 }
 
 void PluginManager::shutdownPlugins()

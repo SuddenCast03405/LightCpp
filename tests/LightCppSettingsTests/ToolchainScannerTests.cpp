@@ -11,6 +11,7 @@
 
 using LightCpp::Settings::Toolchain;
 using LightCpp::Settings::ToolchainScanOptions;
+using LightCpp::Settings::sameTools;
 using LightCpp::Settings::scanForToolchains;
 
 namespace {
@@ -98,19 +99,53 @@ TEST(ToolchainScannerTests, DepthLimitIsRespected)
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
     const QString root = dir.filePath("root");
-    // root -> 1 -> 2 -> 3 -> 4 -> 5 -> 6: the compiler sits six levels
-    // below the root.
-    ASSERT_TRUE(touch(root + "/1/2/3/4/5/6/gcc.exe"));
-    ASSERT_TRUE(touch(root + "/1/2/3/4/5/6/g++.exe"));
+    // root -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10: the compiler
+    // sits ten levels below the root, one past the default depth (9) that
+    // exists to reach the Visual Studio layout.
+    ASSERT_TRUE(touch(root + "/1/2/3/4/5/6/7/8/9/10/gcc.exe"));
+    ASSERT_TRUE(touch(root + "/1/2/3/4/5/6/7/8/9/10/g++.exe"));
 
     EXPECT_TRUE(scanForToolchains(root).isEmpty());
 
     ToolchainScanOptions options;
-    options.maxDepth = 6;
+    options.maxDepth = 10;
     const QList<Toolchain> found = scanForToolchains(root, options);
     ASSERT_EQ(found.size(), 1);
     EXPECT_EQ(found[0].compilers.value("gcc"),
-              root + "/1/2/3/4/5/6/gcc.exe");
+              root + "/1/2/3/4/5/6/7/8/9/10/gcc.exe");
+}
+
+TEST(ToolchainScannerTests, TheDefaultDepthReachesAVisualStudioInstall)
+{
+    // The layout that actually ships: the user picks the "Microsoft Visual
+    // Studio" folder as the root, and cl.exe sits nine levels down. The old
+    // default of 5 answered "no compilers found" for every VS install
+    // (R2-34), so this pins the depth that the default has to cover.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString root = dir.filePath("Microsoft Visual Studio");
+    const QString clDir = root
+                          + "/2022/Community/VC/Tools/MSVC/14.44.35207/bin"
+                            "/Hostx64/x64";
+    ASSERT_TRUE(touch(clDir + "/cl.exe"));
+
+    const QList<Toolchain> found = scanForToolchains(root);
+    ASSERT_EQ(found.size(), 1);
+    EXPECT_EQ(found[0].compilers.value("cl"), clDir + "/cl.exe");
+    // One level less and the walk must stop short: the depth is what makes
+    // the difference, not a lucky exclusion rule.
+    ToolchainScanOptions shallower;
+    shallower.maxDepth = 8;
+    EXPECT_TRUE(scanForToolchains(root, shallower).isEmpty());
+
+    // An msys2-style install, for contrast, is only three levels down and
+    // was already reachable at the old default.
+    const QString msysRoot = dir.filePath("msys64");
+    ASSERT_TRUE(touch(msysRoot + "/ucrt64/bin/g++.exe"));
+    const QList<Toolchain> msys = scanForToolchains(msysRoot);
+    ASSERT_EQ(msys.size(), 1);
+    EXPECT_EQ(msys[0].compilers.value("g++"),
+              msysRoot + "/ucrt64/bin/g++.exe");
 }
 
 TEST(ToolchainScannerTests, MultipleDirectoriesProduceMultipleToolchains)
@@ -125,12 +160,12 @@ TEST(ToolchainScannerTests, MultipleDirectoriesProduceMultipleToolchains)
     const QList<Toolchain> found = scanForToolchains(root);
     ASSERT_EQ(found.size(), 2);
     // Walk order follows the directory listing; match by path, not index.
+    QStringList names;
     for (const Toolchain& toolchain : found) {
+        names.append(toolchain.name);
         if (toolchain.compilers.value("g++").endsWith("mingw32/bin/g++.exe")) {
             // A directory with only a C++ compiler still counts.
             EXPECT_TRUE(toolchain.compilers.value("gcc").isEmpty());
-            EXPECT_TRUE(toolchain.name.isEmpty()
-                        || toolchain.name == QLatin1String("bin"));
         } else {
             EXPECT_EQ(toolchain.compilers.value("gcc"),
                       root + "/ucrt64/bin/gcc.exe");
@@ -138,6 +173,140 @@ TEST(ToolchainScannerTests, MultipleDirectoriesProduceMultipleToolchains)
                       root + "/ucrt64/bin/g++.exe");
         }
     }
+    // Both folders are called "bin"; the picker has to tell them apart, so
+    // each name carries one parent segment (R2-35).
+    names.sort();
+    EXPECT_EQ(names, (QStringList{QStringLiteral("mingw32/bin"),
+                                  QStringLiteral("ucrt64/bin")}));
+}
+
+TEST(ToolchainScannerTests, OnlyCollidingNamesAreQualified)
+{
+    // Three toolchains, two of them in a folder called `bin` and one in a
+    // folder whose name nobody else uses. Disambiguation must touch the
+    // collision only: an untouched name is what the user already knows.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString root = dir.filePath("sdk");
+    ASSERT_TRUE(touch(root + "/ucrt64/bin/gcc.exe"));
+    ASSERT_TRUE(touch(root + "/clang64/bin/clang.exe"));
+    ASSERT_TRUE(touch(root + "/vendor-llvm/g++.exe"));
+
+    const QList<Toolchain> found = scanForToolchains(root);
+    ASSERT_EQ(found.size(), 3);
+    QStringList names;
+    for (const Toolchain& toolchain : found) {
+        names.append(toolchain.name);
+    }
+    names.sort();
+    EXPECT_EQ(names, (QStringList{QStringLiteral("clang64/bin"),
+                                  QStringLiteral("ucrt64/bin"),
+                                  QStringLiteral("vendor-llvm")}));
+}
+
+TEST(ToolchainScannerTests, NamesAreExtendedOneSegmentAtATime)
+{
+    // Two `bin` folders whose parents happen to match as well: the first
+    // segment that differs is the third one, so the qualified names are
+    // "sdk/x/bin" and "y/x/bin" — not the whole path, and not a bare "bin".
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString root = dir.filePath("sdk");
+    ASSERT_TRUE(touch(root + "/x/bin/gcc.exe"));
+    ASSERT_TRUE(touch(root + "/y/x/bin/gcc.exe"));
+
+    const QList<Toolchain> found = scanForToolchains(root);
+    ASSERT_EQ(found.size(), 2);
+    QStringList names;
+    for (const Toolchain& toolchain : found) {
+        names.append(toolchain.name);
+    }
+    names.sort();
+    EXPECT_EQ(names, (QStringList{QStringLiteral("sdk/x/bin"),
+                                  QStringLiteral("y/x/bin")}));
+}
+
+TEST(ToolchainScannerTests, SameToolsIgnoresIdNameAndEmptyValues)
+{
+    // A stored toolchain versus a freshly scanned one: same executables, but
+    // the id and the display name differ by construction. Empty entries are
+    // "not there" on either side, never "different" (R2-35).
+    Toolchain stored;
+    stored.id = QStringLiteral("user-toolchain-1");
+    stored.name = QStringLiteral("My MSYS2");
+    stored.compilers.insert(QStringLiteral("gcc"),
+                            QStringLiteral("E:/msys64/ucrt64/bin/gcc.exe"));
+    stored.compilers.insert(QStringLiteral("g++"),
+                            QStringLiteral("E:/msys64/ucrt64/bin/g++.exe"));
+    stored.buildTools.insert(QStringLiteral("cmake"),
+                             QStringLiteral("E:/msys64/ucrt64/bin/cmake.exe"));
+    stored.buildTools.insert(QStringLiteral("ninja"), QString());
+
+    Toolchain scanned;
+    scanned.id = QStringLiteral("found-toolchain-1");
+    scanned.name = QStringLiteral("bin");
+    scanned.compilers.insert(QStringLiteral("gcc"),
+                             QStringLiteral("E:/msys64/ucrt64/bin/gcc.exe"));
+    scanned.compilers.insert(QStringLiteral("g++"),
+                             QStringLiteral("E:/msys64/ucrt64/bin/g++.exe"));
+    scanned.buildTools.insert(QStringLiteral("cmake"),
+                              QStringLiteral("E:/msys64/ucrt64/bin/cmake.exe"));
+
+    EXPECT_TRUE(sameTools(stored, scanned));
+    EXPECT_TRUE(sameTools(scanned, stored));
+    // A toolchain compares equal to itself whatever it holds.
+    EXPECT_TRUE(sameTools(stored, stored));
+
+    Toolchain otherPath = scanned;
+    otherPath.compilers.insert(QStringLiteral("gcc"),
+                               QStringLiteral("E:/other/bin/gcc.exe"));
+    EXPECT_FALSE(sameTools(stored, otherPath));
+
+    Toolchain missingTool = scanned;
+    missingTool.buildTools.remove(QStringLiteral("cmake"));
+    EXPECT_FALSE(sameTools(stored, missingTool));
+
+    Toolchain extraDebugger = scanned;
+    extraDebugger.compilers.insert(
+        QStringLiteral("gdb"), QStringLiteral("E:/msys64/ucrt64/bin/gdb.exe"));
+    EXPECT_FALSE(sameTools(stored, extraDebugger));
+
+    Toolchain differentClangd = scanned;
+    differentClangd.clangd = QStringLiteral("E:/msys64/ucrt64/bin/clangd.exe");
+    EXPECT_FALSE(sameTools(stored, differentClangd));
+}
+
+TEST(ToolchainScannerTests, ARescanOfTheSameTreeMatchesTheStoredToolchain)
+{
+    // End to end for the "Identify tools…" dedup: scan, store the result
+    // (letting the caller assign its own id and let the user rename it),
+    // scan again, and the two must compare equal. Otherwise every rescan
+    // appends another copy of the same toolchain.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString root = dir.filePath("msys64");
+    ASSERT_TRUE(touch(root + "/ucrt64/bin/gcc.exe"));
+    ASSERT_TRUE(touch(root + "/ucrt64/bin/g++.exe"));
+    ASSERT_TRUE(touch(root + "/ucrt64/bin/gdb.exe"));
+
+    const QList<Toolchain> first = scanForToolchains(root);
+    ASSERT_EQ(first.size(), 1);
+    Toolchain stored = first.first();
+    stored.id = QStringLiteral("found-toolchain-1");
+    stored.name = QStringLiteral("renamed by the user");
+
+    const QList<Toolchain> second = scanForToolchains(root);
+    ASSERT_EQ(second.size(), 1);
+    EXPECT_TRUE(sameTools(stored, second.first()));
+
+    // ...and a *different* tree is not mistaken for it.
+    const QTemporaryDir otherDir;
+    const QString otherRoot = otherDir.filePath("msys64");
+    ASSERT_TRUE(touch(otherRoot + "/ucrt64/bin/gcc.exe"));
+    ASSERT_TRUE(touch(otherRoot + "/ucrt64/bin/g++.exe"));
+    const QList<Toolchain> other = scanForToolchains(otherRoot);
+    ASSERT_EQ(other.size(), 1);
+    EXPECT_FALSE(sameTools(stored, other.first()));
 }
 
 TEST(ToolchainScannerTests, DirectoryWithoutCompilerIsNotAToolchain)

@@ -18,8 +18,9 @@
 
 namespace {
 
-/// The quietest possible services: plugins initialize against it.
-class SilentServices final : public LightCpp::Plugin::IdeServices {
+/// The quietest possible services: plugins initialize against it, and tests
+/// that care about one specific call derive from it.
+class SilentServices : public LightCpp::Plugin::IdeServices {
 public:
     void log(const QString&) override {}
     [[nodiscard]] QString activeEditorPath() const override { return {}; }
@@ -239,4 +240,155 @@ TEST(PluginManager, DisabledSharedPluginsAreSkipped)
     EXPECT_TRUE(errors.isEmpty());
     EXPECT_TRUE(manager.loaded().isEmpty());
     EXPECT_TRUE(manager.backends().isEmpty());
+}
+
+// ---------------------------------------------------------------------------
+// Failure paths (R2-47)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// SilentServices plus a record of every removePluginCommands() call: the
+/// host is supposed to clean up after a plugin whose initialize() refused.
+class RecordingServices final : public SilentServices {
+public:
+    void removePluginCommands(const QString& pluginName) override
+    {
+        removals.append(pluginName);
+    }
+
+    QStringList removals;
+};
+
+/// A plugin that refuses to initialize after registering a menu entry —
+/// the shape of a script that failed halfway through. It cannot undo its
+/// registrations itself, so the host has to.
+class RefusingPlugin final : public LightCpp::Plugin::Plugin {
+public:
+    explicit RefusingPlugin(QString name) : name_(std::move(name)) {}
+
+    [[nodiscard]] QString name() const override { return name_; }
+    [[nodiscard]] QString version() const override { return "1.0"; }
+    bool initialize(LightCpp::Plugin::IdeServices*) override { return false; }
+    void shutdown() override { ++shutdownCalls; }
+
+    int shutdownCalls = 0;
+
+private:
+    QString name_;
+};
+
+}  // namespace
+
+TEST(PluginManager, ARefusedPluginLosesTheCommandsItRegistered)
+{
+    RecordingServices services;
+    LightCpp::Plugin::PluginManager manager;
+
+    // The name deliberately differs from the source's stem: the Lua host
+    // already cleans up under the *file* name from inside its own
+    // initialize(), so this second call is the only thing covering a
+    // plugin.name() that does not match the script file.
+    auto plugin = std::make_unique<RefusingPlugin>(QStringLiteral("broken-script"));
+    manager.registerPlugin(std::move(plugin), &services,
+                           QStringLiteral("C:/plugins/lua/some-other-stem.lua"));
+
+    EXPECT_TRUE(manager.loaded().isEmpty());
+    ASSERT_EQ(services.removals.size(), 1);
+    EXPECT_EQ(services.removals.first(), QStringLiteral("broken-script"));
+}
+
+TEST(PluginManager, APluginThatInitializesKeepsItsCommands)
+{
+    // The counterpart: a successful initialize() must not have its commands
+    // torn down under it.
+    RecordingServices services;
+    LightCpp::Plugin::PluginManager manager;
+
+    int shutdownCalls = 0;
+    auto plugin = std::make_unique<TrackedPlugin>(QStringLiteral("alpha"),
+                                                  &shutdownCalls);
+    manager.registerPlugin(std::move(plugin), &services,
+                           QStringLiteral("C:/plugins/lua/a.lua"));
+
+    ASSERT_EQ(manager.loaded().size(), 1);
+    EXPECT_TRUE(services.removals.isEmpty());
+}
+
+TEST(PluginManager, AnUnloadableDllReportsWhyItFailed)
+{
+    // A text file wearing a .dll name: the path check passes and the load
+    // itself fails, which is the shape of a plugin with missing
+    // dependencies. The message has to name the reason — the old code read
+    // errorString() *before* load() ran, so it was always empty and the
+    // panel showed a bare "broken.dll: " with nothing after it.
+    const QTemporaryDir dir;
+    QFile broken(dir.filePath(QStringLiteral("broken.dll")));
+    ASSERT_TRUE(broken.open(QIODevice::WriteOnly));
+    broken.write("this is not a plugin");
+    broken.close();
+
+    SilentServices services;
+    LightCpp::Plugin::PluginManager manager;
+    const QStringList errors = manager.loadSharedPlugins(dir.path(), &services);
+
+    ASSERT_EQ(errors.size(), 1);
+    const QString prefix = QStringLiteral("broken.dll: ");
+    EXPECT_TRUE(errors.first().startsWith(prefix))
+        << errors.first().toStdString();
+    // Something was said about the failure, not just the file name.
+    EXPECT_GT(errors.first().size(), prefix.size() + 8)
+        << errors.first().toStdString();
+    EXPECT_TRUE(manager.loaded().isEmpty());
+}
+
+// ---------------------------------------------------------------------------
+// A failed reopen must not leave the previous project behind (R2-29)
+// ---------------------------------------------------------------------------
+
+TEST(PluginManager, AFailedReopenDropsThePreviousProject)
+{
+    SilentServices services;
+    LightCpp::Plugin::PluginManager manager;
+    const QStringList errors = manager.loadSharedPlugins(
+        QStringLiteral(LIGHTCPP_BUILT_PLUGIN_DIR), &services);
+    ASSERT_TRUE(errors.isEmpty())
+        << errors.join(QStringLiteral("; ")).toStdString();
+    auto* backend = manager.backendFor(QStringLiteral("anything.dev"));
+    ASSERT_NE(backend, nullptr);
+
+    LightCpp::Plugin::BuildRequest request;
+    request.configuration = QStringLiteral("Debug");
+    request.compiler = QStringLiteral("E:/toolchain/g++.exe");
+    request.make = QStringLiteral("E:/toolchain/mingw32-make.exe");
+
+    // A good project opens and builds.
+    const QTemporaryDir goodDir;
+    const QString good = writeDevProject(goodDir, kDevFixture);
+    LightCpp::Plugin::ProjectSummary summary;
+    QString error;
+    ASSERT_TRUE(backend->openProject(good, &summary, &error))
+        << error.toStdString();
+    ASSERT_FALSE(backend->buildSteps(request).isEmpty());
+
+    // A truncated file: valid text, but it lists no units, so the parse
+    // fails. Asking to build afterwards must not regenerate the makefile of
+    // the project that is no longer open — buildSteps() reads project_ and
+    // would happily do exactly that if the failed open left it alive.
+    const QTemporaryDir brokenDir;
+    const QString brokenPath = brokenDir.filePath(QStringLiteral("broken.dev"));
+    QFile broken(brokenPath);
+    ASSERT_TRUE(broken.open(QIODevice::WriteOnly | QIODevice::Text));
+    broken.write("[Project]\nFileName=broken.dev\nName=broken\n");
+    broken.close();
+
+    EXPECT_FALSE(backend->openProject(brokenPath, &summary, &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(backend->buildSteps(request).isEmpty());
+    EXPECT_TRUE(backend->configureSteps(request).isEmpty());
+
+    // And reopening the good one still works: the backend is not wedged.
+    ASSERT_TRUE(backend->openProject(good, &summary, &error))
+        << error.toStdString();
+    EXPECT_FALSE(backend->buildSteps(request).isEmpty());
 }

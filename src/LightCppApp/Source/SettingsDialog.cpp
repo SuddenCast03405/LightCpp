@@ -45,6 +45,8 @@
 #include <QUuid>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace LightCpp::App {
 
 namespace Settings = LightCpp::Settings;
@@ -1507,7 +1509,9 @@ void SettingsDialog::identifyToolchainFolder()
     }
 
     // Scan options first: how deep to look and which folder names never
-    // to enter. The defaults mirror ToolchainScanOptions.
+    // to enter. Both defaults are read from ToolchainScanOptions itself
+    // rather than copied: the depth copy is what made the dialog offer 5
+    // while the scan used something else (R2-34).
     QDialog optionsDialog(this);
     optionsDialog.setObjectName(QStringLiteral("toolchains.scanOptions"));
     optionsDialog.setWindowTitle(tr("Scan options"));
@@ -1515,13 +1519,17 @@ void SettingsDialog::identifyToolchainFolder()
     auto* depth = new QSpinBox(&optionsDialog);
     depth->setObjectName(QStringLiteral("toolchains.scanDepth"));
     depth->setRange(1, 32);
-    depth->setValue(5);
+    // The scan's own default, not a second copy of the number: the two used
+    // to disagree (5 here, and the Visual Studio layout needs more).
+    depth->setValue(Settings::ToolchainScanOptions{}.maxDepth);
     auto* excludedLabel =
         new QLabel(tr("Excluded folder names (comma separated):"),
                    &optionsDialog);
     auto* excluded = new QLineEdit(&optionsDialog);
     excluded->setObjectName(QStringLiteral("toolchains.scanExcluded"));
-    excluded->setText(QStringLiteral("include, lib, share, libexec, var"));
+    excluded->setText(
+        Settings::ToolchainScanOptions{}.excludedDirectories.join(
+            QStringLiteral(", ")));
     excluded->setToolTip(
         tr("The scan never enters folders with these names, at any depth."));
     auto* buttons =
@@ -1555,10 +1563,11 @@ void SettingsDialog::identifyToolchainFolder()
     }
 
     commitToolchainForm();
-    // The walk can take minutes on a big drive (depth 5 over C:\ is a lot of
-    // directories), so it runs on its own thread: the dialog stays usable and
-    // the button that started it says so until the answer arrives. Edits are
-    // committed first so the result is added to what the widgets show.
+    // The walk can take minutes on a big drive (the default depth over C:\ is
+    // a lot of directories), so it runs on its own thread: the dialog stays
+    // usable and the button that started it says so until the answer arrives.
+    // Edits are committed first so the result is added to what the widgets
+    // show.
     if (toolchainScanThread_ != nullptr) {
         return;  // one scan at a time (the button is disabled meanwhile)
     }
@@ -1608,21 +1617,52 @@ void SettingsDialog::onToolchainScanFinished(
         return;
     }
 
+    // Re-scanning the same root must not append a second copy of a toolchain
+    // the user already has: the list doubles on every press of Identify
+    // tools… otherwise, and a freshly scanned toolchain carries the same tool
+    // paths as the stored one (only the id and the display name differ).
+    const QList<Settings::Toolchain> existing = state(currentScope_).toolchains;
+    const auto alreadyThere = [&existing](const Settings::Toolchain& scanned) {
+        return std::any_of(
+            existing.cbegin(), existing.cend(),
+            [&scanned](const Settings::Toolchain& present) {
+                return Settings::sameTools(present, scanned);
+            });
+    };
+
+    int added = 0;
+    int known = 0;
     for (const Settings::Toolchain& scanned : found) {
+        if (alreadyThere(scanned)) {
+            ++known;
+            continue;
+        }
         Settings::Toolchain toolchain = scanned;
         toolchain.id = uniqueToolchainId(QStringLiteral("found-toolchain"));
         state(currentScope_).toolchains.append(toolchain);
+        ++added;
+    }
+    if (added == 0) {
+        setStatus(tr("All %1 toolchain(s) found are already in the list.")
+                      .arg(known));
+        return;
     }
     markDirty();
     const int firstRow =
-        static_cast<int>(state(currentScope_).toolchains.size())
-        - found.size();
+        static_cast<int>(state(currentScope_).toolchains.size()) - added;
     rebuildToolchainList(firstRow);
     loadToolchainForm(firstRow);
     updateKitSuggestions();
-    setStatus(tr("Created %1 toolchain(s) under %2")
-                  .arg(found.size())
-                  .arg(QDir::toNativeSeparators(toolchainScanRoot_)));
+    if (known > 0) {
+        setStatus(tr("Created %1 toolchain(s) under %2 (%3 already known)")
+                      .arg(added)
+                      .arg(QDir::toNativeSeparators(toolchainScanRoot_))
+                      .arg(known));
+    } else {
+        setStatus(tr("Created %1 toolchain(s) under %2")
+                      .arg(added)
+                      .arg(QDir::toNativeSeparators(toolchainScanRoot_)));
+    }
 }
 
 SettingsDialog::~SettingsDialog()

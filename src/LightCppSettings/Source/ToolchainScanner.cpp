@@ -154,6 +154,95 @@ void walk(const QString& dir, int depth, const ToolchainScanOptions& options,
     }
 }
 
+/// The directory a toolchain came from: Toolchain itself carries no path
+/// field, but every tool it holds is a file inside that directory.
+QString toolDirectory(const Toolchain& toolchain)
+{
+    const auto firstValue = [](const QHash<QString, QString>& map) {
+        for (auto it = map.constBegin(); it != map.constEnd(); ++it) {
+            if (!it.value().isEmpty()) {
+                return it.value();
+            }
+        }
+        return QString();
+    };
+    for (const QString& path : {firstValue(toolchain.compilers), toolchain.clangd,
+                                toolchain.clangFormat,
+                                firstValue(toolchain.buildTools)}) {
+        if (!path.isEmpty()) {
+            return QFileInfo(path).absolutePath();
+        }
+    }
+    return QString();
+}
+
+QStringList pathSegmentsOf(const QString& path)
+{
+    return QDir::fromNativeSeparators(path).split(QLatin1Char('/'),
+                                                  Qt::SkipEmptyParts);
+}
+
+/// The last `count` segments, or the whole path when it has fewer.
+QString nameSuffix(const QStringList& segments, int count)
+{
+    const int take = qMin(count, static_cast<int>(segments.size()));
+    return QStringList(segments.mid(segments.size() - take))
+        .join(QLatin1Char('/'));
+}
+
+/// Make names unique. A directory holding a compiler is very often called
+/// `bin`, so scanning an msys64-style tree produced a picker full of entries
+/// all called "bin" (R2-35). Only colliding names are touched, and they are
+/// qualified one parent segment at a time until they differ — never renamed
+/// past the root of their own path.
+void disambiguateNames(QList<Toolchain>* toolchains)
+{
+    const int count = toolchains->size();
+    QList<QStringList> segments;
+    segments.reserve(count);
+    for (const Toolchain& toolchain : std::as_const(*toolchains)) {
+        segments.append(pathSegmentsOf(toolDirectory(toolchain)));
+    }
+
+    for (int i = 0; i < count; ++i) {
+        if (segments.at(i).isEmpty()) {
+            continue;  // no tool path to derive a name from
+        }
+        const int available = segments.at(i).size();
+        for (int parts = 1; parts <= available; ++parts) {
+            const QString candidate = nameSuffix(segments.at(i), parts);
+            bool collides = false;
+            for (int j = 0; j < count && !collides; ++j) {
+                if (j != i) {
+                    collides = nameSuffix(segments.at(j), parts) == candidate;
+                }
+            }
+            if (!collides) {
+                (*toolchains)[i].name = candidate;
+                break;
+            }
+            if (parts == available) {
+                // Two different directories with identical trailing paths
+                // cannot happen, but if it ever did, the full path is the
+                // best name available and it is at least deterministic.
+                (*toolchains)[i].name = candidate;
+            }
+        }
+    }
+}
+
+QStringList nonEmptyEntries(const QHash<QString, QString>& map)
+{
+    QStringList entries;
+    for (auto it = map.constBegin(); it != map.constEnd(); ++it) {
+        if (!it.value().isEmpty()) {
+            entries.append(it.key() + QLatin1Char('=') + it.value());
+        }
+    }
+    entries.sort();  // QHash iteration order is unspecified
+    return entries;
+}
+
 }  // namespace
 
 QList<Toolchain> scanForToolchains(const QString& root,
@@ -169,7 +258,15 @@ QList<Toolchain> scanForToolchains(const QString& root,
     ToolchainScanOptions effective = options;
     effective.maxDepth = maxDepth;
     walk(QDir(root).absolutePath(), 0, effective, &result);
+    disambiguateNames(&result);
     return result;
+}
+
+bool sameTools(const Toolchain& a, const Toolchain& b)
+{
+    return nonEmptyEntries(a.compilers) == nonEmptyEntries(b.compilers)
+           && nonEmptyEntries(a.buildTools) == nonEmptyEntries(b.buildTools)
+           && a.clangd == b.clangd && a.clangFormat == b.clangFormat;
 }
 
 }  // namespace LightCpp::Settings

@@ -81,6 +81,13 @@ public:
     [[nodiscard]] const QStringList& lastErrors() const { return errors_; }
 
 private:
+    /// Ask the host to drop every command registered under `pluginName`.
+    /// Called when a plugin is about to be dropped after a failed
+    /// initialize(): its callbacks point into the plugin's own code, so a
+    /// menu entry that survives would be a dangling click. No-op when there
+    /// is no services object (a headless load).
+    void removeCommandsFor(const QString& pluginName);
+
     QList<Loaded> loaded_;
     QList<ProjectBackend*> backends_;
     QStringList errors_;

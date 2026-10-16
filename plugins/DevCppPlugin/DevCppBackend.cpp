@@ -71,6 +71,12 @@ public:
         std::optional<LightCpp::Project::DevCppProject> project =
             LightCpp::Project::loadDevProject(filePath, &parseError, &warnings);
         if (!project.has_value()) {
+            // A failed (re)open must not leave the previous project behind:
+            // `open_` stayed true and `project_` kept the old units, so
+            // buildSteps() would happily regenerate *that* project's makefile
+            // while the user believes the file they just picked is open.
+            project_ = LightCpp::Project::DevCppProject{};
+            open_ = false;
             if (error != nullptr) {
                 *error = parseError;
             }
