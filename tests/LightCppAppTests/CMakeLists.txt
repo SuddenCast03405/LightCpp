@@ -10,6 +10,11 @@
 # same reason, and it deliberately knows nothing about QProcess — the machine
 # this was written on cannot create a process' pipes, so a policy that needed
 # a real child could not be tested here at all.
+#
+# FindScan (R2-30) is the resume position the three find/replace scans share,
+# and DebuggerController (R2-45) is the state machine around one QProcess:
+# both are Qt6::Core only, which is why they can be compiled here and the
+# widgets that use them cannot.
 
 # The header is listed next to the source on purpose: AUTOMOC only generates
 # moc_CodeFormatter.cpp for headers that belong to the target, and without it
@@ -17,12 +22,18 @@
 add_executable(LightCppAppTests
     CodeFormatterTests.cpp
     ConsoleDecoderTests.cpp
+    DebuggerControllerTests.cpp
+    FindScanTests.cpp
     ProcessShutdownTests.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CodeFormatter.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ConsoleDecoder.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/DebuggerController.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/FindScan.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessShutdown.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CodeFormatter.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ConsoleDecoder.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/DebuggerController.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/FindScan.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ProcessShutdown.hpp
 )
 

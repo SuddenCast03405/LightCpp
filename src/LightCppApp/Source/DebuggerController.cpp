@@ -116,6 +116,7 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
 
     exePath_ = exePath;
     paused_ = false;
+    startFailed_ = false;
     pendingCommands_ = startCommands(breakpoints);
 
     process_ = new QProcess(this);
@@ -135,21 +136,31 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
             this, &DebuggerController::onReadyRead);
     connect(process_, &QProcess::errorOccurred,
             this, [this](QProcess::ProcessError error) {
+        // A process from an earlier session must never touch this one.
+        if (process_ == nullptr || process_ != sender()) {
+            return;
+        }
         if (error == QProcess::FailedToStart) {
             emit logLine(tr("failed to start debugger: %1").arg(debuggerPath_));
+            // Delivered from *inside* start(): tearing the process down here
+            // would free process_ while start() is still on the stack (and
+            // stop() would then be reached with a null member on the very
+            // next line of start()). Record the failure and let start() —
+            // which regains control immediately after the signal returns —
+            // do the cleanup.
+            startFailed_ = true;
             running_ = false;
-            stop();
-            emit stopped();
         }
     });
     connect(process_, &QProcess::finished, this, [this](int, QProcess::ExitStatus) {
-        emit stopped();
-        if (process_ == sender()) {
-            process_->deleteLater();
-            process_ = nullptr;
+        if (process_ == nullptr || process_ != sender()) {
+            return;  // a session that was already replaced or discarded
         }
+        process_->deleteLater();
+        process_ = nullptr;
         running_ = false;
         paused_ = false;
+        emit stopped();
     });
 
     running_ = true;
@@ -183,10 +194,12 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
     }
 
     process_->start(debuggerPath_, arguments);
-    if (process_->state() == QProcess::NotRunning) {
-        running_ = false;
-        emit logLine(tr("debugger did not start"));
-        return false;
+    if (startFailed_ || process_->state() == QProcess::NotRunning) {
+        // Nothing came up. Leaving process_ (and the pending command batch)
+        // behind used to poison the next session: the dead QProcess stayed
+        // connected and the stale handlers acted on whatever process the
+        // next start() installed.
+        return abortStart();
     }
 
     // The initial command batch (breakpoints + run). QProcess buffers writes
@@ -212,12 +225,7 @@ void DebuggerController::stop()
         process_->write((quitCommand() + QLatin1Char('\n')).toUtf8());
         process_->waitForFinished(2000);
     }
-    if (process_->state() != QProcess::NotRunning) {
-        process_->kill();
-        process_->waitForFinished(2000);
-    }
-    process_->deleteLater();
-    process_ = nullptr;
+    discardProcess();
     running_ = false;
     paused_ = false;
     emit logLine(tr("--- debug session ended ---"));
@@ -227,6 +235,34 @@ void DebuggerController::stop()
     if (wasRunning) {
         emit stopped();
     }
+}
+
+void DebuggerController::discardProcess()
+{
+    if (process_ == nullptr) {
+        return;
+    }
+    process_->disconnect(this);
+    if (process_->state() != QProcess::NotRunning) {
+        process_->kill();
+        process_->waitForFinished(2000);
+    }
+    process_->deleteLater();
+    process_ = nullptr;
+}
+
+bool DebuggerController::abortStart()
+{
+    // start() had already announced the session and armed the process, so
+    // both have to be taken back. stopped() is emitted for the same reason
+    // the old code did: listeners were told a session was under way.
+    discardProcess();
+    running_ = false;
+    paused_ = false;
+    pendingCommands_.clear();
+    emit logLine(tr("debugger did not start"));
+    emit stopped();
+    return false;
 }
 
 bool DebuggerController::isRunning() const

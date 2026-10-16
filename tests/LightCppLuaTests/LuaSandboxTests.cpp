@@ -130,6 +130,52 @@ TEST(LuaSandbox, Lua54IntegerSubtypeAndGenerationalGc)
               "true");
 }
 
+TEST(LuaSandbox, AnOutOfMemoryAbortLeavesTheStackWhereItFoundIt)
+{
+    // R2-48: the LUA_ERRMEM branch of endCall did not drop the error object
+    // Lua 5.4 leaves behind, so every OOM shifted the sandbox's stack up by
+    // one. The owner's own bookkeeping ("the function is mine to pop") then
+    // worked on the wrong slots.
+    LightCpp::Lua::SandboxLimits limits;
+    limits.memoryCeilingBytes = 4 * 1024 * 1024;
+    LightCpp::Lua::LuaSandbox sandbox(limits);
+    ASSERT_TRUE(sandbox.valid());
+    const int base = sandbox.stackDepth();
+
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const auto result = sandbox.runString(
+            "local t = {} for i = 1, 64 do t[i] = string.rep('x', 1024*1024) end",
+            "oom");
+        ASSERT_FALSE(result.ok);
+        ASSERT_TRUE(result.memoryLimitHit);
+        EXPECT_EQ(sandbox.stackDepth(), base)
+            << "an OOM left something on the stack (attempt " << attempt << ")";
+    }
+
+    // And the state is still usable: a plain error reports its own value,
+    // not whatever the drift had pushed on top.
+    const auto raised = sandbox.runString("error('after the oom')", "test");
+    ASSERT_FALSE(raised.ok);
+    EXPECT_EQ(raised.error, QStringLiteral("after the oom"));
+    EXPECT_EQ(sandbox.stackDepth(), base);
+}
+
+TEST(LuaSandbox, RefusesPrecompiledChunks)
+{
+    // A chunk whose first byte is Lua's 0x1b signature is bytecode as far as
+    // the loader is concerned. luaL_loadbuffer would hand it to the undumper
+    // — the one escape hatch the whitelist exists to close; runString loads
+    // in text mode ("t"), so it is a load error instead.
+    const QString binary = QString(QChar(0x1b)) + QStringLiteral("Lua not bytecode");
+
+    LightCpp::Lua::LuaSandbox sandbox;
+    const auto result = sandbox.runString(binary, "test");
+    ASSERT_FALSE(result.ok);
+    EXPECT_TRUE(result.error.contains(QStringLiteral("attempt to load")))
+        << result.error.toStdString();
+    EXPECT_EQ(sandbox.stackDepth(), 0);
+}
+
 TEST(LuaSandbox, CallGlobalRunsLifecycleFunctions)
 {
     LightCpp::Lua::LuaSandbox sandbox;

@@ -54,6 +54,11 @@ public:
     [[nodiscard]] const SandboxLimits& limits() const { return limits_; }
     /// Bytes the sandboxed VM currently holds (for tests and diagnostics).
     [[nodiscard]] qint64 memoryUsed() const { return budget_.used; }
+    /// Values on the sandbox's stack right now (for tests and diagnostics:
+    /// each call must leave the stack exactly as deep as it found it — an
+    /// error path that forgets to drop its message shifts it by one every
+    /// time, and the caller's own pops then read the wrong slots).
+    [[nodiscard]] int stackDepth() const;
 
     /// Where print() output goes instead of stdout. Set before running.
     void setPrintSink(std::function<void(const QString&)> sink);

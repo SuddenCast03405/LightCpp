@@ -101,6 +101,14 @@ private:
     void onReadyRead();
     void handleLine(const QString& line);
 
+    /// Disconnect and delete process_ without asking it to quit. Used by
+    /// stop() once the graceful quit was written, and by the failed-start
+    /// path where there is nothing to talk to.
+    void discardProcess();
+    /// Undo what start() had already set up when the process never came up
+    /// (FailedToStart). Reports the failure and returns false for it.
+    bool abortStart();
+
     // --- per-backend output parsing ---------------------------------------
     void handleGdbLine(const QString& line);
     void handleLldbLine(const QString& line);
@@ -124,6 +132,10 @@ private:
     Backend backend_ = Backend::Unknown;
     QString exePath_;
     bool running_ = false;       // start() succeeded, stop() not yet
+    /// errorOccurred(FailedToStart) is delivered from inside start(), so the
+    /// handler cannot clean up without freeing process_ under start()'s own
+    /// feet. It raises this flag and start() does the cleanup instead.
+    bool startFailed_ = false;
     bool paused_ = false;        // target currently stopped
     QStringList pendingCommands_;         // sent once the process is up
     QByteArray outputBuffer_;             // partial line accumulation

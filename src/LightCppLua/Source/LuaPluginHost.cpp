@@ -14,6 +14,7 @@ extern "C" {
 #include <QList>
 #include <QStringList>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,12 @@ public:
 /// had before the script ran. Hot-unloading a plugin (a language pack is the
 /// obvious case) has to put them back: otherwise the IDE keeps half its
 /// menus translated until the next start.
+///
+/// EVERY rewrite is recorded, not just the first per id. Two language packs
+/// loaded one after the other both rewrite the same menu; if the second one
+/// kept no record, switching it off would leave its text in place instead of
+/// falling back to the pack that is still loaded. Restoring in reverse order
+/// unwinds a chain of renames back to the original.
 struct UiTextUndo {
     struct Entry {
         QString id;
@@ -53,23 +60,14 @@ struct UiTextUndo {
     };
     QList<Entry> menuTitles;
     QList<Entry> actionTexts;
-    QStringList menuTitleSeen;
-    QStringList actionTextSeen;
 
-    /// Remember `id`'s value once — the first rewrite is the one to undo.
     void noteMenuTitle(const QString& id, const QString& original)
     {
-        if (!menuTitleSeen.contains(id)) {
-            menuTitleSeen.append(id);
-            menuTitles.append(Entry{id, original});
-        }
+        menuTitles.append(Entry{id, original});
     }
     void noteActionText(const QString& id, const QString& original)
     {
-        if (!actionTextSeen.contains(id)) {
-            actionTextSeen.append(id);
-            actionTexts.append(Entry{id, original});
-        }
+        actionTexts.append(Entry{id, original});
     }
 };
 
@@ -116,6 +114,15 @@ public:
 
     ::LightCpp::Plugin::IdeServices* services;
     QString pluginName;
+    /// False after shutdown. A snippet callback does not need the Lua state,
+    /// so unlike a command it would keep working after the script is gone —
+    /// writing through IDE services that are on their way out with the
+    /// plugin. The callbacks share this flag (rather than a pointer back
+    /// into the plugin) so they can tell that on their own: a raw `this` or
+    /// a raw services pointer would both dangle, in opposite directions.
+    std::shared_ptr<bool> active = std::make_shared<bool>(true);
+    /// Switch the snippet callbacks off (they share the flag).
+    void resetActive() { *active = false; }
 };
 
 // ---------------------------------------------------------------------------
@@ -167,7 +174,8 @@ public:
         if (services == nullptr) {
             return;
         }
-        // Reverse order: a rename of a rename lands back on the original.
+        // Reverse order: the rewrites chain, so unwinding them from the last
+        // one back lands on the original value.
         for (auto it = uiUndo.menuTitles.crbegin();
              it != uiUndo.menuTitles.crend(); ++it) {
             services->setMenuTitle(it->id, it->text);
@@ -182,6 +190,7 @@ public:
     void releaseState()
     {
         commands.active = false;
+        snippets.resetActive();
         // Unregister the callbacks while the state still lives.
         if (sandbox != nullptr) {
             if (lua_State* L = sandbox->state()) {
@@ -560,12 +569,18 @@ void CommandApi::trigger(size_t index)
 
 void SnippetApi::registerSnippet(const QString& id, const QString& body)
 {
-    if (services == nullptr) {
+    if (!*active || services == nullptr) {
         return;
     }
+    // The callback holds the lifetime token, not the plugin's storage: the
+    // command registry may fire it long after the script was unloaded, and
+    // it has to become a no-op rather than write through a dead plugin.
     services->registerCommand(
         pluginName, QStringLiteral("snippet.%1").arg(id), id, QString(),
-        [services = this->services, body] {
+        [services = this->services, alive = active, body] {
+            if (!*alive || services == nullptr) {
+                return;  // unloaded: nothing to insert into any more
+            }
             services->insertAtCursor(body);
         });
 }
@@ -666,8 +681,15 @@ LuaPluginHost::LoadResult LuaPluginHost::loadPlugin(
     impl->commands.pluginName = stem;
     impl->snippets.services = services;
     impl->snippets.pluginName = stem;
-    impl->sandbox->setPrintSink([services](const QString& line) {
-        services->log(QStringLiteral("[lua print] %1").arg(line));
+    impl->sandbox->setPrintSink([impl = impl.get()](const QString& line) {
+        // Loaded scripts run with or without services (a headless load is
+        // legal), and every other ide.* entry point checks before it calls:
+        // print has to as well, or the first print of such a script is a
+        // null dereference.
+        if (impl->services == nullptr) {
+            return;
+        }
+        impl->services->log(QStringLiteral("[lua print] %1").arg(line));
     });
 
     registerIdeApi(impl->sandbox->state(), impl.get());

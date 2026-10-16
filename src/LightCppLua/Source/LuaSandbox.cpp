@@ -157,6 +157,11 @@ void LuaSandbox::setPrintSink(std::function<void(const QString&)> sink)
     printSink_ = std::move(sink);
 }
 
+int LuaSandbox::stackDepth() const
+{
+    return L_ != nullptr ? lua_gettop(L_) : 0;
+}
+
 int LuaSandbox::luaPrint(lua_State* L)
 {
     auto* owner = static_cast<LuaSandbox*>(self(L));
@@ -233,6 +238,12 @@ ExecutionResult LuaSandbox::endCall(int status)
         result.error = QStringLiteral("out of memory (sandbox ceiling is %1 "
                                        "bytes)")
                            .arg(limits_.memoryCeilingBytes);
+        // Lua 5.4 unwinds the stack on a memory error too, leaving only its
+        // message object behind — drop it. Leaving it there shifted the
+        // sandbox's stack up by one on every OOM, and the owner's frame
+        // bookkeeping (pop one result, pop one function) then worked on the
+        // wrong values.
+        lua_pop(L_, 1);
         break;
     case LUA_ERRRUN:
     case LUA_ERRSYNTAX:
@@ -271,8 +282,12 @@ ExecutionResult LuaSandbox::runString(const QString& code,
     const QByteArray chunk = chunkName.toUtf8();
 
     beginCall();
-    int status = luaL_loadbuffer(L_, utf8.constData(),
-                                 static_cast<size_t>(utf8.size()), chunk.constData());
+    // Mode "t": text only. luaL_loadbuffer would accept a chunk whose first
+    // byte is the 0x1b signature and hand it to the undumper — the one
+    // escape hatch the whitelist is meant to close.
+    int status = luaL_loadbufferx(L_, utf8.constData(),
+                                  static_cast<size_t>(utf8.size()),
+                                  chunk.constData(), "t");
     if (status == LUA_OK) {
         status = lua_pcall(L_, 0, 0, 0);
     }

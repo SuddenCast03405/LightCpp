@@ -13,10 +13,16 @@
 #include <QVBoxLayout>
 
 #include "LightCpp/App/CodeEditor.hpp"
+#include "LightCpp/App/FindScan.hpp"
 
 namespace {
 
 constexpr int kCountCap = 9999;  // matches shown before "9999+"
+
+// This file is in the global namespace (App-layer widget convention), so the
+// shared resume decision has to be named: it lives in LightCpp::App::FindScan
+// and is what keeps the three scans below from walking off the same spot.
+namespace FindScan = LightCpp::App::FindScan;
 
 }  // namespace
 
@@ -91,6 +97,7 @@ FindBar::FindBar(QWidget* parent)
 void FindBar::openFor(CodeEditor* editor, bool replaceMode)
 {
     editor_ = editor;
+    lastZeroWidthAt_ = -1;
     if (editor != nullptr) {
         // Preload a single-line selection: that is what "search for this"
         // means, and a multi-line blob would only make the field unreadable.
@@ -112,6 +119,7 @@ void FindBar::openFor(CodeEditor* editor, bool replaceMode)
 void FindBar::setEditor(CodeEditor* editor)
 {
     editor_ = editor;
+    lastZeroWidthAt_ = -1;  // a different document: the old position means nothing
     if (isVisible()) {
         updateMatchCount();
     }
@@ -208,13 +216,6 @@ void FindBar::find(bool backward)
         return;
     }
 
-    // Start just past (or before) the current selection so pressing Next
-    // repeatedly walks through the matches instead of sitting on one.
-    QTextCursor from = editor_->textCursor();
-    if (from.hasSelection()) {
-        from.setPosition(backward ? from.selectionStart() : from.selectionEnd());
-    }
-
     const QRegularExpression re = regexPattern();
     if (regexCheck_->isChecked() && !re.isValid()) {
         statusLabel_->setStyleSheet(QStringLiteral("color: red;"));
@@ -230,7 +231,28 @@ void FindBar::find(bool backward)
             : editor_->document()->find(findEdit_->text(), start, textFlags(backward));
     };
 
-    QTextCursor found = search(from);
+    const int docEnd = editor_->document()->characterCount() - 1;
+
+    // Start just past (or before) the current selection so pressing Next
+    // repeatedly walks through the matches instead of sitting on one. A
+    // zero-width match selects nothing, so after landing on one the caret is
+    // still AT it: step over it, or this press finds the very same spot and
+    // Next looks broken.
+    QTextCursor from = editor_->textCursor();
+    bool wrapOnly = false;
+    if (from.hasSelection()) {
+        from.setPosition(backward ? from.selectionStart() : from.selectionEnd());
+    } else if (from.position() == lastZeroWidthAt_) {
+        const int resume
+            = FindScan::resumeAfter(from.position(), 0, docEnd, backward);
+        if (resume < 0) {
+            wrapOnly = true;  // nothing left in that direction: wrap
+        } else {
+            from.setPosition(resume);
+        }
+    }
+
+    QTextCursor found = wrapOnly ? QTextCursor() : search(from);
     if (found.isNull()) {
         // Wrap around: first/last match in the document, so Next from the
         // last match lands on the first one again.
@@ -239,10 +261,14 @@ void FindBar::find(bool backward)
         found = search(wrap);
     }
     if (found.isNull()) {
+        lastZeroWidthAt_ = -1;
         statusLabel_->setStyleSheet(QStringLiteral("color: red;"));
         statusLabel_->setText(tr("not found"));
         return;
     }
+    lastZeroWidthAt_ = found.selectionEnd() == found.selectionStart()
+                           ? found.selectionStart()
+                           : -1;
     editor_->setTextCursor(found);
     editor_->centerCursor();
     updateMatchCount();
@@ -302,6 +328,7 @@ void FindBar::replaceAll()
     struct Planned { int start = 0; int length = 0; QString text; };
     QList<Planned> plan;
     QTextCursor it(editor_->document());
+    const int docEnd = editor_->document()->characterCount() - 1;
     while (plan.size() <= kCountCap) {
         it = regexCheck_->isChecked()
                  ? editor_->document()->find(re, it)
@@ -321,20 +348,16 @@ void FindBar::replaceAll()
             entry.text = replaceEdit_->text();
         }
         plan.append(entry);
-        if (entry.length == 0) {
-            // A regex that matches the empty string ("x*", "a|"): the scan
-            // must move forward or this same spot is collected again and
-            // again until the cap — then the apply pass inserts the
-            // replacement there thousands of times and the document blows
-            // up. Replace the empty match once and step over one character.
-            const int next = it.selectionEnd() + 1;
-            if (next > editor_->document()->characterCount() - 1) {
-                break;
-            }
-            it.setPosition(next);
-            continue;
+        // A zero-width match ("x*", "a|", "^") has nothing to move past:
+        // without the step below this same spot is collected again and again
+        // until the cap — then the apply pass inserts the replacement there
+        // thousands of times and the document blows up.
+        const int resume = FindScan::resumeAfter(entry.start, entry.length,
+                                                 docEnd);
+        if (resume < 0) {
+            break;
         }
-        it.setPosition(it.selectionEnd());
+        it.setPosition(resume);
     }
     if (plan.isEmpty()) {
         statusLabel_->setStyleSheet(QStringLiteral("color: red;"));
@@ -358,9 +381,13 @@ void FindBar::replaceAll()
     after.setPosition(plan.constLast().start
                       + plan.constLast().text.length());
     editor_->setTextCursor(after);
+    // Re-count FIRST, then report: "N replaced" is the answer to what the
+    // user just asked for, and updateMatchCount() would otherwise overwrite
+    // it — for a literal replacement (the common case) with a red "not
+    // found", because the pattern no longer matches anything afterwards.
+    updateMatchCount();
     statusLabel_->setStyleSheet(QString());
     statusLabel_->setText(tr("%1 replaced").arg(plan.size()));
-    updateMatchCount();
 }
 
 bool FindBar::selectionMatches(const QTextCursor& cur) const
@@ -411,6 +438,7 @@ void FindBar::updateMatchCount()
     // Count from the top so the number does not depend on the caret.
     int count = 0;
     QTextCursor it(editor_->document());
+    const int docEnd = editor_->document()->characterCount() - 1;
     while (count <= kCountCap) {
         it = regexCheck_->isChecked()
                  ? editor_->document()->find(re, it)
@@ -420,6 +448,16 @@ void FindBar::updateMatchCount()
             break;
         }
         ++count;
+        // Same step as the other two scans: a zero-width match leaves the
+        // cursor in place, and re-finding it would count the same position
+        // until the cap and report "9999+" for a pattern like "^".
+        const int resume = FindScan::resumeAfter(
+            it.selectionStart(), it.selectionEnd() - it.selectionStart(),
+            docEnd);
+        if (resume < 0) {
+            break;
+        }
+        it.setPosition(resume);
     }
     if (count == 0) {
         statusLabel_->setStyleSheet(QStringLiteral("color: red;"));

@@ -12,6 +12,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/DebuggerController.hpp
     Include/LightCpp/App/FileExplorer.hpp
     Include/LightCpp/App/FindBar.hpp
+    Include/LightCpp/App/FindScan.hpp
     Include/LightCpp/App/GitClient.hpp
     Include/LightCpp/App/LanguageServerClient.hpp
     Include/LightCpp/App/LibClangCompleter.hpp
@@ -35,6 +36,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/DebuggerController.cpp
     Source/FileExplorer.cpp
     Source/FindBar.cpp
+    Source/FindScan.cpp
     Source/GitClient.cpp
     Source/LanguageServerClient.cpp
     Source/LibClangCompleter.cpp

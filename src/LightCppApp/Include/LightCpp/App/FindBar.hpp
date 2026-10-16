@@ -60,6 +60,11 @@ private:
     [[nodiscard]] bool selectionMatches(const QTextCursor& cur) const;
 
     QPointer<CodeEditor> editor_;
+    /// Document position of the zero-width match the caret is left sitting
+    /// on after a find(), or -1. An empty match ("\b", "x*", "^") selects
+    /// nothing, so the next press would search from that same spot and find
+    /// it again — this is what tells find() to step over it instead.
+    int lastZeroWidthAt_ = -1;
     QLineEdit* findEdit_ = nullptr;
     QLineEdit* replaceEdit_ = nullptr;
     QCheckBox* regexCheck_ = nullptr;
