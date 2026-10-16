@@ -108,6 +108,11 @@ constexpr char kConsolePauserFallback[] = "E:/Cpp/ConsolePauser.exe";
 /// clangd on every keystroke.
 constexpr int kLintDebounceMs = 300;
 
+/// How long a single child process may hold up a window close (ms). The four
+/// processes are killed at once, so this is the whole sweep's budget, not a
+/// per-process cost that adds up (see App::stopProcesses).
+constexpr int kChildProcessShutdownMs = 2000;
+
 /// Read a config document through a scope of its own.
 ///
 /// The handle has to be gone before the replacement is written:
@@ -1902,17 +1907,6 @@ LightCpp::Plugin::BuildRequest MainWindow::makeBuildRequest() const
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
-    // Stop a running single-file compile so its child process doesn't
-    // outlive the window (QProcess::~QProcess does not kill).
-    if (compiler_ && compiler_->state() != QProcess::NotRunning) {
-        compiler_->kill();
-        compiler_->waitForFinished(2000);
-    }
-    // Same for a program started with Compile & Run / Run.
-    if (runner_ && runner_->state() != QProcess::NotRunning) {
-        runner_->kill();
-        runner_->waitForFinished(2000);
-    }
     // Prompt to save modified files.
     for (int i = 0; i < tabWidget_->count(); ++i) {
         if (auto* ed = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
@@ -1934,6 +1928,36 @@ void MainWindow::closeEvent(QCloseEvent* event)
             }
         }
     }
+    // The close is going ahead, so nothing the user is about to lose may be
+    // touched before this point — the prompts above can still cancel it.
+    //
+    // That is where the child processes go: all four of them, in one sweep,
+    // with every kill issued before the first wait (see App::stopProcesses).
+    //
+    // Note what this is *not* for. The processes are not leaked without it:
+    // QProcess' destructor does kill a child that is still running (measured:
+    // the child is gone 12 ms after the destructor starts, with Qt printing
+    // "Destroyed while process ... is still running"). The problem is *when*
+    // that happens — during the QObject teardown, which runs after the save
+    // prompts and after the language server's own shutdown, and which
+    // previously covered only two of the four processes. A project build
+    // (cmake/make/msbuild) and the embedded terminal's shell were therefore
+    // still alive and still holding their file locks right up to the end,
+    // while the window sat unresponsive on the sequential waits.
+    const LightCpp::App::ProcessShutdownReport stopped = stopChildProcesses();
+    // The routine outcome needs no message: the close stops them, and closing
+    // is what the user asked for. A process that survives its kill is a
+    // different matter — it is still running after the window is gone — so
+    // that one gets a line in the Build channel, where build-tool trouble
+    // already lands.
+    if (stopped.stuck > 0) {
+        outputPanel_->appendBuildOutput(
+            tr("--- Closing: %1 of %2 running process(es) would not stop; "
+               "they may still be running ---")
+                .arg(stopped.stuck)
+                .arg(stopped.running));
+    }
+
     // Record the session for the next launch — after the save prompts, so
     // buffers the user chose to discard are not recorded as open tabs with
     // paths that then reopen dirty-free but stale.
@@ -1948,6 +1972,35 @@ void MainWindow::closeEvent(QCloseEvent* event)
                                 QCoreApplication::arguments().mid(1),
                                 QDir::currentPath());
     }
+}
+
+LightCpp::App::ProcessShutdownReport MainWindow::stopChildProcesses()
+{
+    // The four children the window starts itself. Each is turned into the
+    // three callables the shutdown policy works with; a null pointer ends up
+    // as an entry with nothing to call, which the policy skips. (The
+    // debugger is not one of them: DebuggerController owns that process.)
+    const auto handle = [](QProcess* process) {
+        return LightCpp::App::StoppableProcess{
+            [process] {
+                return process != nullptr
+                       && process->state() != QProcess::NotRunning;
+            },
+            [process] {
+                if (process != nullptr) {
+                    process->kill();
+                }
+            },
+            [process](int timeoutMs) {
+                if (process != nullptr) {
+                    process->waitForFinished(timeoutMs);
+                }
+            }};
+    };
+    return LightCpp::App::stopProcesses(
+        {handle(compiler_), handle(runner_), handle(projectProcess_),
+         handle(terminalRunner_)},
+        kChildProcessShutdownMs);
 }
 
 // ---------------------------------------------------------------------------

@@ -4,6 +4,12 @@
 # is not a widget: it is a state machine over QProcess, which is exactly the
 # kind of thing that breaks silently (R2-07). Its source is compiled straight
 # from the application instead of pulling in the whole app target.
+#
+# ProcessShutdown is not a widget either: it is the policy behind stopping the
+# children a window owns (R2-26). It is compiled from the application for the
+# same reason, and it deliberately knows nothing about QProcess — the machine
+# this was written on cannot create a process' pipes, so a policy that needed
+# a real child could not be tested here at all.
 
 # The header is listed next to the source on purpose: AUTOMOC only generates
 # moc_CodeFormatter.cpp for headers that belong to the target, and without it
@@ -11,10 +17,13 @@
 add_executable(LightCppAppTests
     CodeFormatterTests.cpp
     ConsoleDecoderTests.cpp
+    ProcessShutdownTests.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CodeFormatter.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ConsoleDecoder.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessShutdown.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CodeFormatter.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ConsoleDecoder.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ProcessShutdown.hpp
 )
 
 # The app target sets this on itself; CodeFormatter declares Q_OBJECT, so the

@@ -16,6 +16,7 @@
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
+#include "LightCpp/App/ProcessShutdown.hpp"
 #include "LightCpp/App/StartupPage.hpp"
 #include "LightCpp/Plugin/Plugin.hpp"
 #include "LightCpp/Plugin/PluginManager.hpp"
@@ -489,6 +490,21 @@ private:
     void startTerminalProgramWatch(const QString& exePath);
     /// One poll tick: update the embedded-terminal program-alive state.
     void pollTerminalProgram();
+    /// Stop the four child processes the window itself starts — the
+    /// single-file compiler, the embedded program runner, the project build
+    /// and the terminal shell — in one bounded sweep (see
+    /// App::stopProcesses for the policy).
+    ///
+    /// The debugger's process is deliberately not in here: it belongs to
+    /// DebuggerController, which has its own stop() and its own teardown
+    /// rules (see R2-45).
+    ///
+    /// Called from closeEvent once the close is certain. Left to the
+    /// destructors instead, the project build and the terminal shell would
+    /// only be killed during the QObject teardown: after the save prompts and
+    /// after the language server's own shutdown, i.e. with the window already
+    /// unresponsive and the build tools still holding their file locks.
+    LightCpp::App::ProcessShutdownReport stopChildProcesses();
     /// True when a live process whose parent is `shellPid` carries
     /// `imageLower` (case-insensitive, e.g. "main.exe").
     [[nodiscard]] static bool shellHasChildImage(unsigned long shellPid,
