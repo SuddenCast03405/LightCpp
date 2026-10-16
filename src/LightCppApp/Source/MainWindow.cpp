@@ -17,6 +17,7 @@
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/App/SettingsDialog.hpp"
 #include "LightCpp/App/StartupPage.hpp"
+#include "LightCpp/App/TerminalLaunch.hpp"
 #include "LightCpp/App/ToolchainPaths.hpp"
 #include "LightCpp/Plugin/PluginPaths.hpp"
 #include "LightCpp/Plugin/ProjectBackend.hpp"
@@ -5757,7 +5758,18 @@ void MainWindow::onGitInit()
     if (inRepository_) {
         return;
     }
-    git_->setWorkingDirectory(gitWorkingDirectory());
+    const QString dir = gitWorkingDirectory();
+    if (dir.isEmpty()) {
+        // Nothing to initialise: no project, no folder, no file. Say so
+        // instead of running git in whatever directory the IDE was launched
+        // from — that is how a repository ended up in the IDE's own install
+        // folder while the window reported the init as successful.
+        outputPanel_->showChannel(OutputPanel::ChannelGit);
+        outputPanel_->appendGitOutput(
+            tr("--- Nothing to initialise: open a folder or a project first ---"));
+        return;
+    }
+    git_->setWorkingDirectory(dir);
     git_->run({QStringLiteral("init")}, QStringLiteral("git init"));
 }
 
@@ -6667,9 +6679,8 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
             args.removeLast();
             needsCallOperator = true;
         }
-        const QString firstInput = needsCallOperator
-            ? QStringLiteral("& '%1'").arg(exePath)
-            : exePath;
+        const QString firstInput =
+            LightCpp::App::TerminalLaunch::programCommandLine(exePath, needsCallOperator);
         runner->setProcessEnvironment(env);
         runner->setWorkingDirectory(workDir);
         outputPanel_->appendTerminalOutput(

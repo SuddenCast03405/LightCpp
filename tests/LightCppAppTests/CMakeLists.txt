@@ -15,6 +15,11 @@
 # and DebuggerController (R2-45) is the state machine around one QProcess:
 # both are Qt6::Core only, which is why they can be compiled here and the
 # widgets that use them cannot.
+#
+# TerminalLaunch (R2-20) is the line typed into an embedded terminal to start
+# a run, and GitClient (R2-18) is the queue that must refuse to run git with
+# no working directory. GitClient pulls in LightCppProject for its status
+# parser; both stay Qt6::Core only.
 
 # The header is listed next to the source on purpose: AUTOMOC only generates
 # moc_CodeFormatter.cpp for headers that belong to the target, and without it
@@ -24,17 +29,23 @@ add_executable(LightCppAppTests
     ConsoleDecoderTests.cpp
     DebuggerControllerTests.cpp
     FindScanTests.cpp
+    GitClientTests.cpp
     ProcessShutdownTests.cpp
+    TerminalLaunchTests.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CodeFormatter.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ConsoleDecoder.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/DebuggerController.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/FindScan.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/GitClient.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessShutdown.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TerminalLaunch.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CodeFormatter.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ConsoleDecoder.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/DebuggerController.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/FindScan.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/GitClient.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ProcessShutdown.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/TerminalLaunch.hpp
 )
 
 # The app target sets this on itself; CodeFormatter declares Q_OBJECT, so the
@@ -51,6 +62,8 @@ target_compile_features(LightCppAppTests PRIVATE cxx_std_20)
 # create the QCoreApplication the QProcess/QTimer machinery needs.
 target_link_libraries(LightCppAppTests PRIVATE
     Qt6::Core
+    # GitClient's own header includes the status type it reports.
+    LightCppProject
     GTest::gtest
     LightCppWarnings
 )

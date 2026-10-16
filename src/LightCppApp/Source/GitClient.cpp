@@ -2,7 +2,6 @@
 
 #include "LightCpp/App/ToolchainPaths.hpp"
 
-#include <QDir>
 #include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
@@ -191,6 +190,30 @@ void GitClient::startNext()
         return;
     }
 
+    if (workingDirectory_.isEmpty()) {
+        // No working set: refuse, and do not let QProcess fall back to this
+        // process's own start-up directory. Running git there is how `git
+        // init` once created a repository inside the IDE's install folder
+        // (or the user's home) while the window reported success and showed
+        // the branch of the directory it happened to be launched from. The
+        // queue still has to move on, so the next job is started as usual.
+        const QString title = current_.title;
+        const bool feedsStatus = current_.feedsStatus;
+        current_ = Job{};
+        if (feedsStatus) {
+            // A status refresh with nothing to describe is the empty answer,
+            // exactly as outside a repository.
+            emit statusReady(LightCpp::Project::GitStatusSummary{});
+        } else {
+            emit commandFinished(
+                title,
+                QStringLiteral("no working directory for git — open a folder or a project first"),
+                -1);
+        }
+        startNext();
+        return;
+    }
+
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     // git translates the phrases in its output, and `git status -b` is the one
     // place this IDE parses them ("ahead 1, behind 2"). Forcing the C locale
@@ -199,8 +222,7 @@ void GitClient::startNext()
     env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
     env.insert(QStringLiteral("GIT_TERMINAL_PROMPT"), QStringLiteral("0"));
     process_->setProcessEnvironment(env);
-    process_->setWorkingDirectory(workingDirectory_.isEmpty() ? QDir::currentPath()
-                                                              : workingDirectory_);
+    process_->setWorkingDirectory(workingDirectory_);
     // Non-ASCII file names arrive quoted in octal escapes ("\346\265\213…")
     // unless quotepath is off; the parser and the log pane want the real
     // names (the output is decoded as UTF-8 further up).

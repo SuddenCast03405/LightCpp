@@ -48,6 +48,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/ProjectSearchDialog.cpp
     Source/SettingsDialog.cpp
     Source/StartupPage.cpp
+    Source/TerminalLaunch.cpp
 )
 
 add_executable(lightcpp ${LIGHTCPP_APP_SOURCES})
