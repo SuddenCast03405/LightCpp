@@ -494,7 +494,14 @@ TEST(BomOnSave, ThePolicyIsWhatTheEncoderActuallyWrites)
     const QString text = "// 中文";
     for (const TextEncoding encoding : {TextEncoding::Utf8, TextEncoding::Utf16Le}) {
         for (const bool sourceHadBom : {false, true}) {
-            const bool want = LightCpp::Text::bomOnSave(encoding, sourceHadBom);
+            // Independent oracle, spelled out from the requirement rather
+            // than read back from bomOnSave(): "every UTF-16 save carries a
+            // BOM; a UTF-8 save carries one exactly when the file had one".
+            // Asking the policy for the expectation would make the test
+            // blind to both halves being wrong in the same direction.
+            const bool want =
+                encoding == TextEncoding::Utf16Le || sourceHadBom;
+            EXPECT_EQ(LightCpp::Text::bomOnSave(encoding, sourceHadBom), want);
             const auto bytes = LightCpp::Text::encodeFromQString(text, encoding, want);
             ASSERT_TRUE(bytes.hasValue());
             EXPECT_EQ(LightCpp::Text::detectEncoding(bytes.value()).hadBom, want);
