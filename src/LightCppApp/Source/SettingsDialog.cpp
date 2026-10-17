@@ -610,6 +610,13 @@ QWidget* SettingsDialog::buildKitsPage()
            "the kit names its own."));
     form->addRow(tr("Compiler family"), kitCompilerFamily_);
     connect(kitCompilerFamily_, &QComboBox::currentIndexChanged, this, [this](int) {
+        // This combo is built by hand (its items carry the family as data,
+        // so makeCombo() cannot make it), and that meant the one connect it
+        // did get was about the inheritance display only. Changing nothing
+        // but the compiler family therefore left the layer "unmodified" and
+        // Apply skipped writing it — the edit vanished without a word
+        // (R2-33). What the user sees is what must be saved.
+        markDirty();
         if (kitInheritToolchain_->isChecked()) {
             updateKitInheritanceUi();
         }
@@ -934,6 +941,7 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
     terminalsRow->addWidget(runTerminals_, 1);
     auto* terminalButtons = new QVBoxLayout;
     auto* addTerminal = new QPushButton(tr("Add"), this);
+    addTerminal->setObjectName(QStringLiteral("prefs.run.terminals.add"));
     connect(addTerminal, &QPushButton::clicked, this, [this] {
         // A new row gets a generated id (kept in the name item's data) so
         // the selection can reference it after the settings are saved.
@@ -953,11 +961,23 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
         runTerminals_->editItem(nameItem);
     });
     auto* removeTerminal = new QPushButton(tr("Remove"), this);
+    removeTerminal->setObjectName(QStringLiteral("prefs.run.terminals.remove"));
     removeTerminal->setToolTip(tr("Delete the selected terminal"));
     connect(removeTerminal, &QPushButton::clicked, this, [this] {
         const int row = runTerminals_->currentRow();
-        if (row >= 0) {
-            runTerminals_->removeRow(row);
+        if (row < 0) {
+            return;
+        }
+        // removeRow() emits no itemChanged, so the one handler that knows
+        // about user edits never runs: the layer stayed "unmodified", Apply
+        // skipped it, and the deleted terminal came back — while the "run
+        // in" list kept offering it too (R2-33). Deleting a row is an edit
+        // like any other.
+        runTerminals_->removeRow(row);
+        if (runTerminalsLoaded_) {
+            runTerminals_->setCurrentCell(-1, -1);
+            rebuildRunTerminalCombo();
+            markDirty();
         }
     });
     terminalButtons->addWidget(addTerminal);
