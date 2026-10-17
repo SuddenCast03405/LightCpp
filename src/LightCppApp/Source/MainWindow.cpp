@@ -305,6 +305,15 @@ MainWindow::MainWindow(QWidget* parent)
     // the configured backend: Clangd Output, ccls Output or libclang Output.
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverLog, this,
             [this](const QString& text) { appendServerProcessLog(text); });
+    // A request the server answered with an error (R2-22). The empty answer
+    // has already been delivered, so the UI is not stuck — but "nothing found"
+    // and "the request failed" used to print the same thing, and only this
+    // signal can tell the user which one happened.
+    connect(lsp_, &LightCpp::App::LanguageServerClient::requestFailed, this,
+            [this](const QString& text) {
+        appendServerProcessLog(text);
+        statusBar()->showMessage(text, 6000);
+    });
     connect(lsp_, &LightCpp::App::LanguageServerClient::serverStarted, this,
             [this] {
         appendServerProcessLog(tr("language server started"));

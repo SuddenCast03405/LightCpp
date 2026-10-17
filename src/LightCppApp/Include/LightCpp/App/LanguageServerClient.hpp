@@ -316,6 +316,13 @@ signals:
     /// The initialize handshake completed; documents can now be opened.
     void serverStarted();
 
+    /// A request was answered with a JSON-RPC error (R2-22). The matching
+    /// "...Ready" signal has already been emitted with an empty answer, so
+    /// whoever is waiting is unblocked; this is the part that says the answer
+    /// was a failure rather than "nothing found". `message` names the request
+    /// and carries the server's own text.
+    void requestFailed(const QString& message);
+
     /// A line of the server's own log: its stderr output plus any
     /// "window/logMessage" / "window/showMessage" notifications it pushes.
     /// Intended for the IDE's clangd log channel.

@@ -2,6 +2,7 @@
 
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/CompileDatabase.hpp"
+#include "LightCpp/App/LspResponse.hpp"
 
 #include <cstring>
 #include <utility>
@@ -1095,8 +1096,21 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
             readyGate_.open();
             return;
         }
+        // R2-22: a JSON-RPC error carries no `result`, so every branch below
+        // would parse it as an empty answer — "Nothing found at that position."
+        // is exactly what a successful search with no hits prints, and there
+        // was no way to tell the two apart. The initialize branch above has its
+        // own, harsher handling (the server is unusable); for requests, name
+        // what failed, unblock the waiter with the empty answer, and say why.
+        const LspResponse::Error error = LspResponse::errorOf(message);
         if (completionRequests_.contains(id)) {
             const QString filePath = completionRequests_.take(id);
+            if (error.present) {
+                emit requestFailed(LspResponse::describe(
+                    LspResponse::Kind::Completion, error.message));
+                emit completionReady(id, filePath, {});
+                return;
+            }
             QList<LspCompletionItem> items;
             QJsonArray rawItems;
             const QJsonValue result = message.value("result");
@@ -1165,6 +1179,12 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
         }
         if (definitionRequests_.contains(id)) {
             const QString filePath = definitionRequests_.take(id);
+            if (error.present) {
+                emit requestFailed(LspResponse::describe(
+                    LspResponse::Kind::Definition, error.message));
+                emit definitionReady(id, filePath, {});
+                return;
+            }
             // The result is Location | Location[] | LocationLink[] | null.
             // One destination is all the IDE can act on, so the first entry
             // wins; anything unparseable stays invalid ("not found").
@@ -1184,10 +1204,13 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
             return;
         }
         const QString* locationOwner = nullptr;
+        LspResponse::Kind locationKind = LspResponse::Kind::References;
         if (declarationRequests_.contains(id)) {
             locationOwner = &declarationRequests_[id];
+            locationKind = LspResponse::Kind::Declaration;
         } else if (implementationRequests_.contains(id)) {
             locationOwner = &implementationRequests_[id];
+            locationKind = LspResponse::Kind::Implementation;
         } else if (referencesRequests_.contains(id)) {
             locationOwner = &referencesRequests_[id];
         }
@@ -1196,6 +1219,12 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
             declarationRequests_.remove(id);
             implementationRequests_.remove(id);
             referencesRequests_.remove(id);
+            if (error.present) {
+                emit requestFailed(
+                    LspResponse::describe(locationKind, error.message));
+                emit locationsReady(id, filePath, {});
+                return;
+            }
             // Declaration/implementation: Location | Location[] | LocationLink[]
             // | null. References: Location[] | null.
             QList<LspLocation> locations;
@@ -1220,6 +1249,12 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
         }
         if (signatureHelpRequests_.contains(id)) {
             signatureHelpRequests_.remove(id);
+            if (error.present) {
+                emit requestFailed(LspResponse::describe(
+                    LspResponse::Kind::SignatureHelp, error.message));
+                emit signatureHelpReady(id, {});
+                return;
+            }
             // result: SignatureHelp | null. Only the ACTIVE signature is
             // shown; its activeParameter maps into the label if clangd
             // names the range as [start,end] (it does; a plain string is
@@ -1265,6 +1300,12 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
         }
         if (documentSymbolRequests_.contains(id)) {
             const QString filePath = documentSymbolRequests_.take(id);
+            if (error.present) {
+                emit requestFailed(LspResponse::describe(
+                    LspResponse::Kind::DocumentSymbols, error.message));
+                emit documentSymbolsReady(id, filePath, {});
+                return;
+            }
             // result: DocumentSymbol[] (hierarchical) | SymbolInformation[]
             // (flat) | null — both parsed into LspSymbol trees.
             QList<LspSymbol> symbols;
@@ -1288,12 +1329,24 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
         }
         if (renameRequests_.contains(id)) {
             renameRequests_.remove(id);
+            if (error.present) {
+                emit requestFailed(LspResponse::describe(
+                    LspResponse::Kind::Rename, error.message));
+                emit renameReady(id, {});
+                return;
+            }
             // result: WorkspaceEdit | null (null = nothing renameable).
             emit renameReady(id, parseWorkspaceEdit(message.value("result")));
             return;
         }
         if (codeActionRequests_.contains(id)) {
             codeActionRequests_.remove(id);
+            if (error.present) {
+                emit requestFailed(LspResponse::describe(
+                    LspResponse::Kind::CodeActions, error.message));
+                emit codeActionsReady(id, {});
+                return;
+            }
             // result: (Command | CodeAction)[] | null. Commands carry no
             // edit; only actions with a workspace edit are surfaced.
             QList<LspCodeAction> actions;
