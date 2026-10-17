@@ -37,20 +37,32 @@ GitClient::GitClient(QObject* parent)
     // never exits (stale index.lock held by a crashed process, a credential
     // prompt that escaped GIT_TERMINAL_PROMPT=0) would otherwise wedge the
     // queue — and every future status refresh — until the IDE restarts.
+    // The budget is not fixed: it comes from what the command does.
     watchdog_ = new QTimer(this);
     watchdog_->setSingleShot(true);
-    watchdog_->setInterval(60 * 1000);
     connect(watchdog_, &QTimer::timeout, this, [this] {
         if (process_ == nullptr || process_->state() == QProcess::NotRunning) {
             return;
         }
-        const QString title = current_.title;
+        // Read the job out before clearing it: the finished handler recognises
+        // "this kill is mine" by the empty title.
+        const Job job = current_;
         current_ = Job{};
         process_->kill();
-        emit commandFinished(
-            title,
-            QStringLiteral("git did not exit within 60 s and was killed"),
-            -1);
+        const QString text = GitCommandPolicy::timeoutMessage(
+            job.title, job.kind, GitCommandPolicy::timeoutMsFor(job.kind));
+        if (job.feedsStatus) {
+            // The panel is waiting for this answer, and silence is what made
+            // the symptom invisible: give it the empty summary (the same shape
+            // as "not a repository") and put the reason in the log through the
+            // log-only signal. Not commandFinished: the window answers that one
+            // with another refresh, so a wedged git would be killed once a
+            // minute for the rest of the session.
+            emit statusReady(LightCpp::Project::GitStatusSummary{});
+            emit statusTimedOut(text);
+        } else {
+            emit commandFinished(job.title, text, -1);
+        }
         startNext();
     });
 }
@@ -113,7 +125,8 @@ void GitClient::run(const QStringList& arguments, const QString& title,
     if (arguments.isEmpty()) {
         return;
     }
-    queue_.append(Job{arguments, title, feedsStatus});
+    queue_.append(Job{arguments, title, feedsStatus,
+                      GitCommandPolicy::kindOf(arguments)});
     startNext();
 }
 
@@ -230,6 +243,7 @@ void GitClient::startNext()
                     QStringList{QStringLiteral("-c"),
                                 QStringLiteral("core.quotepath=false")}
                         + current_.arguments);
+    watchdog_->setInterval(GitCommandPolicy::timeoutMsFor(current_.kind));
     watchdog_->start();
 }
 

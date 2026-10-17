@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QTimer>
 
+#include "LightCpp/App/GitCommandPolicy.hpp"
 #include "LightCpp/Project/GitStatus.hpp"
 
 namespace LightCpp::App {
@@ -62,12 +63,19 @@ signals:
     /// `exitCode` is 0 on success — for anything else git's own message in
     /// `text` is the explanation, so it is shown rather than summarised.
     void commandFinished(const QString& title, const QString& text, int exitCode);
+    /// A status refresh was abandoned by the watchdog. Reported separately
+    /// from commandFinished on purpose: that signal asks the window for
+    /// another refresh, and a wedged git would then be killed once a minute
+    /// for the rest of the session. The status answer itself has already been
+    /// emitted (the empty summary) — this is the explanation for the log.
+    void statusTimedOut(const QString& text);
 
 private:
     struct Job {
         QStringList arguments;
         QString title;
         bool feedsStatus = false;  // stdout is porcelain status output
+        GitCommandPolicy::Kind kind = GitCommandPolicy::Kind::ReadOnly;
     };
 
     /// Queue a command. `feedsStatus` marks the one job whose stdout is
@@ -81,9 +89,11 @@ private:
     QString workingDirectory_;
     /// The git executable to use; empty = the compiled-in default.
     QString toolPathOverride_;
-    /// Kills a command that produces no exit for a long time (a stale index
+    /// Kills a command that produces no exit for too long (a stale index
     /// lock, a hung network fetch): without it one wedged git stalls the
-    /// queue — and every later status refresh — forever.
+    /// queue — and every later status refresh — forever. The budget is per
+    /// command (GitCommandPolicy): a read may not take a minute, while a
+    /// commit runs the user's hooks and a push waits on the network.
     QTimer* watchdog_ = nullptr;
 };
 

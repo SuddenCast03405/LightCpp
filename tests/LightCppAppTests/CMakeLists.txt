@@ -31,6 +31,7 @@ add_executable(LightCppAppTests
     DebuggerControllerTests.cpp
     FindScanTests.cpp
     GitClientTests.cpp
+    GitCommandPolicyTests.cpp
     ProcessShutdownTests.cpp
     TerminalLaunchTests.cpp
     TextColumnsTests.cpp
@@ -40,6 +41,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/DebuggerController.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/FindScan.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/GitClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/GitCommandPolicy.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessShutdown.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TerminalLaunch.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TextColumns.cpp
@@ -49,6 +51,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/DebuggerController.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/FindScan.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/GitClient.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/GitCommandPolicy.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ProcessShutdown.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/TerminalLaunch.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/TextColumns.hpp

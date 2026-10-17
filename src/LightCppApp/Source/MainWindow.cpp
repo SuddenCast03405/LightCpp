@@ -707,6 +707,16 @@ MainWindow::MainWindow(QWidget* parent)
             &MainWindow::onGitStatusReady);
     connect(git_, &LightCpp::App::GitClient::commandFinished, this,
             &MainWindow::onGitCommandFinished);
+    // A refresh the watchdog gave up on: the empty summary has already been
+    // delivered (the panel shows "not a repository" rather than its previous,
+    // now meaningless contents), and this only puts the reason in the log.
+    connect(git_, &LightCpp::App::GitClient::statusTimedOut, this,
+            [this](const QString& text) {
+                outputPanel_->showChannel(OutputPanel::ChannelGit);
+                outputPanel_->appendGitOutput(
+                    tr("--- git status (abandoned) ---"));
+                outputPanel_->appendGitOutput(text);
+            });
     syncGitWorkingDirectory();
 
     // Locate MSVC in the background. cl.exe needs INCLUDE/LIB built by hand,
