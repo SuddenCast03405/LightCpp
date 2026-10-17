@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 
@@ -73,6 +74,12 @@ struct TextFileContent {
     int detectionScore = 0;
     /// True for BOM-based or strong heuristic detection.
     bool detectionReliable = false;
+    /// Broken UTF-8 sequences behind an unreliable detection: non-zero means
+    /// the file is UTF-8 with that many damaged spots, and `utf8` below holds
+    /// U+FFFD where they were (see EncodingDetection::invalidUtf8Sequences).
+    /// Writing the buffer back replaces those bytes for good, so the caller
+    /// has to show the user that the encoding was a guess.
+    std::size_t invalidUtf8Sequences = 0;
     /// The line-ending style the file's bytes use, so the editor can keep
     /// it on save instead of rewriting every line to the global default.
     LineEnding lineEndings = LineEnding::None;

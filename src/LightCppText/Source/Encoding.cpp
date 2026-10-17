@@ -33,6 +33,15 @@ constexpr std::array kBoms{
     BomEntry{"\xFE\xFF", 2, TextEncoding::Utf16Be},
 };
 
+/// How many broken UTF-8 sequences still count as "this file is UTF-8, some
+/// bytes of it are damaged" rather than "this file is not UTF-8".
+///
+/// Three is the size of one character at most (a four-byte sequence cut in
+/// half leaves at most three bytes behind as one bad run), and the percentage
+/// test below keeps a couple of stray bytes from reclassifying a small legacy
+/// file: `invalid * 100 <= size` means "at most one per cent".
+constexpr std::size_t kMaxBrokenUtf8Sequences = 3;
+
 /// True when the buffer "looks like" UTF-16 without a BOM: even length and
 /// a large majority of code units carry NUL in the same position (high byte
 /// for LE, low byte for BE). Pure-Latin UTF-16 has NUL in every unit, but
@@ -201,6 +210,38 @@ QString localAnsiDisplayName() noexcept
         .arg(QString::fromLatin1(toName(localAnsiEncoding())));
 }
 
+QString encodingDisplayName(TextEncoding encoding, bool reliable)
+{
+    const QString name = QString::fromLatin1(toName(encoding));
+    // "(guessed)" is not decoration: the label is what the log line and the
+    // status-bar tooltip show, and it is the only thing that tells the user
+    // the text on screen came from guessing rather than from a BOM.
+    return reliable ? name : name + QStringLiteral(" (guessed)");
+}
+
+QString encodingGuessWarning(
+    TextEncoding encoding,
+    bool reliable,
+    std::size_t invalidUtf8Sequences)
+{
+    if (reliable) {
+        return {};
+    }
+    if (encoding == TextEncoding::Utf8 && invalidUtf8Sequences > 0) {
+        // The text is right except at those spots: say exactly what will be
+        // lost, not "the encoding might be wrong" (it is not).
+        return QStringLiteral(
+                   "Not valid UTF-8: %1 damaged spot(s) are shown as U+FFFD, and "
+                   "saving replaces those bytes with it.")
+            .arg(invalidUtf8Sequences);
+    }
+    return QStringLiteral(
+               "Not valid UTF-8, so the encoding was guessed (%1). Saving writes "
+               "the buffer back in %1 — pick a different encoding in the status "
+               "bar if the text looks wrong.")
+        .arg(QString::fromLatin1(toName(encoding)));
+}
+
 EncodingDetection detectEncoding(QByteArrayView bytes)
 {
     EncodingDetection result;
@@ -264,14 +305,39 @@ EncodingDetection detectEncoding(QByteArrayView bytes)
     }
 
     // -- 3. UTF-8 (with or without multi-byte sequences) --------------------
+    std::size_t utf8Errors = 0;
     {
         const std::string_view view(bytes.constData(), static_cast<std::size_t>(size));
-        if (LightCpp::Core::Text::validateUtf8(view) == 0) {
+        utf8Errors = LightCpp::Core::Text::validateUtf8(view);
+        if (utf8Errors == 0) {
             result.encoding = TextEncoding::Utf8;
             result.score = 800;
             result.reliable = true;
             return result;
         }
+    }
+
+    // -- 3b. Nearly UTF-8: a few broken sequences in an otherwise UTF-8 file --
+    // Strict validation is all-or-nothing, and the fallback below is the local
+    // ANSI code page. So one byte cut out of a character — a writer that died
+    // mid-save, a file truncated at a byte boundary, a legacy tool appending
+    // something — turned an entire UTF-8 source file into mojibake: every
+    // Chinese comment and string literal in it decoded through GBK. That is
+    // not a wrong guess about a legacy file, it is the wrong failure mode for
+    // a file that is 99.99% UTF-8.
+    //
+    // A handful of bad sequences in a buffer that otherwise decodes cleanly is
+    // strong evidence for UTF-8, so say so — but as a *guess*, because the
+    // damaged bytes cannot be written back (they have no character). The
+    // caller decodes leniently and treats the result as something the user
+    // must confirm before it is saved over the original bytes.
+    if (utf8Errors <= kMaxBrokenUtf8Sequences
+        && utf8Errors * 100 <= static_cast<std::size_t>(size)) {
+        result.encoding = TextEncoding::Utf8;
+        result.score = 300;
+        result.reliable = false;
+        result.invalidUtf8Sequences = utf8Errors;
+        return result;
     }
 
     // -- 4. Not Unicode: default to local ANSI code page -------------------
@@ -288,6 +354,7 @@ EncodingDetection detectEncoding(QByteArrayView bytes)
     result.encoding = localAnsiEncoding();
     result.score = 100;
     result.reliable = false;  // guessed, not verified
+    result.invalidUtf8Sequences = utf8Errors;
     return result;
 }
 

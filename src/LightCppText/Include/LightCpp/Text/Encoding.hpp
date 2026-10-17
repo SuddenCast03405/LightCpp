@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 
@@ -84,6 +85,33 @@ enum class TextEncoding : std::uint8_t {
 /// Suitable for display in the encoding drop-down.
 [[nodiscard]] QString localAnsiDisplayName() noexcept;
 
+/// Name to show in a log line or a tooltip: "GBK" when the encoding was
+/// proven, "GBK (guessed)" when the detector could only guess.
+///
+/// The distinction is the whole point of `EncodingDetection::reliable`, and
+/// it used to have no consumer anywhere in the IDE: a file that was not valid
+/// UTF-8 showed up as "[GBK, N bytes]" exactly like a file with a BOM, and the
+/// user had no way to tell that the text on screen was the result of a guess —
+/// until Ctrl+S wrote that guess back over the original bytes.
+[[nodiscard]] QString encodingDisplayName(TextEncoding encoding, bool reliable);
+
+/// What to tell the user about a guessed read — empty when `reliable`.
+///
+/// The rule lives here, next to the detection that produced the guess, for the
+/// same reason `bomOnSave` does: the window is not the place where "what does
+/// this flag mean for the user" gets decided, and a rule written inside a
+/// `MainWindow` slot cannot be tested.
+///
+/// Two shapes, because the two guesses are not equally dangerous:
+/// - `encoding` is UTF-8 and some sequences are damaged: the text is right
+///   except for those spots, which became U+FFFD — saving rewrites them;
+/// - anything else: the whole file was decoded through another code page, so
+///   the text on screen may be entirely wrong.
+[[nodiscard]] QString encodingGuessWarning(
+    TextEncoding encoding,
+    bool reliable,
+    std::size_t invalidUtf8Sequences);
+
 /// Outcome of encoding detection over a byte buffer.
 struct EncodingDetection {
     TextEncoding encoding = TextEncoding::Unknown;
@@ -97,6 +125,22 @@ struct EncodingDetection {
 
     /// True for BOM-based detection or a strong heuristic result.
     bool reliable = false;
+
+    /// How many byte sequences in the buffer are not well-formed UTF-8.
+    ///
+    /// Zero for every buffer that is plain ASCII or valid UTF-8, and also for
+    /// UTF-16/32 and NUL-structured binary (the UTF-8 question does not apply
+    /// there). It is only meaningful when `reliable` is false:
+    ///
+    /// - a small count means the file *is* UTF-8 with a few broken bytes (a
+    ///   character cut in half by a writer that died mid-save, a stray byte
+    ///   pasted in from a legacy tool). `encoding` then says Utf8 with
+    ///   `reliable == false`, and the caller decodes leniently — the damaged
+    ///   bytes become U+FFFD instead of the whole file turning into mojibake
+    ///   in another code page;
+    /// - a large count means the buffer really is some other encoding, and
+    ///   `encoding` is the local ANSI fallback.
+    std::size_t invalidUtf8Sequences = 0;
 };
 
 /// Detect the encoding of `bytes`.

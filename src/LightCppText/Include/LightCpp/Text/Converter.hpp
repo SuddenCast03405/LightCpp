@@ -55,6 +55,21 @@ using ConvertResult = LightCpp::Core::Result<QByteArray, ConvertError>;
     TextEncoding encoding,
     bool stripBom = true);
 
+/// Decode UTF-8 the lenient way: bytes that are not part of a well-formed
+/// sequence become U+FFFD instead of failing the conversion.
+///
+/// This exists for exactly one caller — `readDetectedTextFile` reading a file
+/// that `detectEncoding` flagged as **nearly** UTF-8 (a few broken sequences
+/// in an otherwise clean buffer). Strict UTF-8 decoding would refuse the file
+/// and the local-ANSI fallback would decode the whole thing as GBK; one byte
+/// cut out of a character must not turn every Chinese comment in a source
+/// file into mojibake.
+///
+/// It is lossy by definition, so the caller MUST mark the result as a guess:
+/// U+FFFD has no original bytes, and writing them back replaces them for good.
+/// A buffer with no damage decodes exactly like the strict path.
+[[nodiscard]] ConvertResult convertUtf8Lenient(QByteArrayView bytes);
+
 /// Encode `text` into the byte representation of `encoding` — the inverse
 /// of decodeToQString(). Used when saving a buffer whose tab has a
 /// non-UTF-8 encoding selected.

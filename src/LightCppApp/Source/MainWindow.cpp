@@ -3162,6 +3162,36 @@ void MainWindow::onSaveFile()
 bool MainWindow::saveEditorToDisk(CodeEditor* ed)
 {
     const QString path = ed->filePath();
+
+    // A guessed encoding is still a guess until the user says otherwise. The
+    // write below re-encodes the whole buffer in it: for the legacy fallback
+    // that rewrites every byte of the file, and for a nearly-UTF-8 file the
+    // U+FFFD standing in for the undecodable bytes becomes permanent. Ask
+    // once per tab, before the payload is built, and treat "cancel" as "not
+    // saved" rather than saving anyway.
+    if (ed->property("encodingGuessed").toBool()
+        && !ed->property("encodingGuessAcknowledged").toBool()) {
+        const QString encodingName = ed->encodingLabel();
+        const auto answer = QMessageBox::question(
+            this, tr("Save with a Guessed Encoding"),
+            tr("<p><b>%1</b> was opened as <b>%2</b>, and that encoding was "
+               "guessed — the file is not valid UTF-8.</p>"
+               "<p>Saving writes the whole buffer back as %2. If the text "
+               "looks wrong, cancel and pick the right encoding in the status "
+               "bar first.</p>"
+               "<p>Save anyway?</p>")
+                .arg(QFileInfo(path).fileName(), encodingName),
+            QMessageBox::Save | QMessageBox::Cancel, QMessageBox::Cancel);
+        if (answer != QMessageBox::Save) {
+            outputPanel_->appendBuildOutput(
+                tr("Not saved: %1 is open as %2, which was guessed. Pick the "
+                   "encoding in the status bar, then save again.")
+                    .arg(path, encodingName));
+            return false;
+        }
+        ed->setProperty("encodingGuessAcknowledged", true);
+    }
+
     const std::optional<QByteArray> payload = encodedSavePayload(ed);
     if (!payload.has_value()) {
         return false;
@@ -4212,9 +4242,14 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
     outputPanel_->appendBuildOutput(
         tr("Opened: %1  [%2, %3 bytes%4]")
             .arg(path)
-            .arg(toName(content.encoding))
+            // "(guessed)" when there was no BOM and the bytes were not clean
+            // UTF-8: the label used to look identical to a verified read, and
+            // the buffer's encoding then went back to disk on the next Ctrl+S.
+            .arg(LightCpp::Text::encodingDisplayName(content.encoding,
+                                                     content.detectionReliable))
             .arg(content.byteSize)
             .arg(content.hadBom ? QStringLiteral(", BOM") : QString()));
+    noteEncodingGuess(editor, content);
 
     // A file that really opened goes to the top of the recent list the
     // start-up page shows.
@@ -4286,6 +4321,9 @@ void MainWindow::reloadWithEncoding(LightCpp::Text::TextEncoding encoding)
     const TextFileContent& content = result.value();
     ed->loadUtf8(content.utf8);
     setEncodingInfo(ed, toName(encoding));
+    // The user chose this one, so it is not a guess: no save prompt later.
+    ed->setProperty("encodingGuessed", false);
+    ed->setProperty("encodingGuessAcknowledged", false);
     ed->setProperty("detectedLineEnding",
                     QString::fromLatin1(LightCpp::Text::toString(content.lineEndings)));
     // Every path that reads the file also records whether it had a BOM:
@@ -4395,6 +4433,9 @@ void MainWindow::reloadEditorFromDisk(CodeEditor* ed)
     }
     outputPanel_->appendBuildOutput(
         tr("Reloaded (changed on disk): %1").arg(ed->filePath()));
+    // The file may have changed enough to be a different kind of read; the
+    // guessed/verified flag follows the read, not the tab.
+    noteEncodingGuess(ed, content);
     updateEolCombo(ed);
 }
 
@@ -4454,30 +4495,64 @@ void MainWindow::updateEncodingCombo(CodeEditor* editor)
     // fromName so both forms select the same slot).
     const auto parsed = LightCpp::Text::fromName(enc.toUtf8());
     QSignalBlocker blocker(encodingCombo_);
+    bool matched = false;
     if (parsed.has_value()) {
         for (int i = 0; i < encodingCombo_->count(); ++i) {
             const auto e = encodingCombo_->itemData(i)
                                 .value<LightCpp::Text::TextEncoding>();
             if (e == *parsed) {
                 encodingCombo_->setCurrentIndex(i);
-                return;
+                matched = true;
+                break;
             }
         }
     }
     // Fallback: match by display text.
-    for (int i = 0; i < encodingCombo_->count(); ++i) {
-        if (encodingCombo_->itemText(i) == enc) {
-            encodingCombo_->setCurrentIndex(i);
-            return;
+    if (!matched) {
+        for (int i = 0; i < encodingCombo_->count(); ++i) {
+            if (encodingCombo_->itemText(i) == enc) {
+                encodingCombo_->setCurrentIndex(i);
+                matched = true;
+                break;
+            }
         }
     }
-    encodingCombo_->setCurrentIndex(0);  // default to UTF-8
+    if (!matched) {
+        encodingCombo_->setCurrentIndex(0);  // default to UTF-8
+    }
+    // The drop-down has to say what the log line says: a guess and a verified
+    // read chose the same slot, and the tooltip is the only place on that bar
+    // where the difference can live without breaking the label the save path
+    // parses (encodingLabel() must stay a plain encoding name).
+    encodingCombo_->setToolTip(
+        editor->property("encodingGuessed").toBool()
+            ? tr("Encoding guessed from the file's bytes — not verified by a "
+                 "BOM. The next save writes the buffer back in this encoding.")
+            : QString());
 }
 
 void MainWindow::setEncodingInfo(CodeEditor* editor, const QString& encodingName)
 {
     editor->setEncodingLabel(encodingName);
     updateEncodingCombo(editor);
+}
+
+void MainWindow::noteEncodingGuess(CodeEditor* editor,
+                                   const LightCpp::Text::TextFileContent& content)
+{
+    namespace LT = LightCpp::Text;
+    // The flag is per tab, and it starts unacknowledged: the first save is the
+    // moment the guess becomes the file's bytes, so that is when the user is
+    // asked. Re-reading the file (encoding override, external reload) resets
+    // both — a different read deserves its own question.
+    editor->setProperty("encodingGuessed", !content.detectionReliable);
+    editor->setProperty("encodingGuessAcknowledged", false);
+    const QString warning = LT::encodingGuessWarning(
+        content.encoding, content.detectionReliable, content.invalidUtf8Sequences);
+    if (!warning.isEmpty()) {
+        outputPanel_->appendBuildOutput(warning);
+    }
+    updateEncodingCombo(editor);  // the tooltip carries the same marker
 }
 // ---------------------------------------------------------------------------
 // Syntax check (clangd over LSP)

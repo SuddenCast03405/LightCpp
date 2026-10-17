@@ -234,7 +234,125 @@ TEST(EncodingDetect, NonLocalLatin1FallsBackToLocalAnsi)
         << "detected: " << LightCpp::Text::toName(d.encoding);
 }
 
+// --- nearly UTF-8: a few broken bytes in an otherwise clean buffer -----------
+//
+// Strict validation is all-or-nothing and the fallback is the local ANSI code
+// page, so one byte cut out of a character used to turn an entire UTF-8 source
+// file into mojibake — every Chinese comment decoded through GBK. These tests
+// pin the two halves of the fix: the buffer still counts as UTF-8, and it is
+// reported as a *guess* (the damaged bytes have no character to write back).
+
+TEST(EncodingDetect, ACharacterCutInHalfKeepsTheFileUtf8)
+{
+    QByteArray bytes("// 中文注释：这是一个 UTF-8 源文件\n");
+    bytes += QByteArray(200, 'x');            // plenty of clean text around it
+    bytes += QByteArray("\xE4\xB8", 2);       // U+4E2D with its last byte lost
+
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, TextEncoding::Utf8)
+        << "detected: " << LightCpp::Text::toName(d.encoding);
+    EXPECT_FALSE(d.reliable) << "damaged bytes cannot be called a verified read";
+    EXPECT_EQ(d.invalidUtf8Sequences, 1u);
+}
+
+TEST(EncodingDetect, AStrayByteFromALegacyToolKeepsTheFileUtf8)
+{
+    QByteArray bytes("中文 ");
+    bytes += QByteArray(200, 'x');
+    bytes += QByteArray("\xFF", 1);  // neither UTF-8 nor anything else's first byte
+
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, TextEncoding::Utf8);
+    EXPECT_FALSE(d.reliable);
+    EXPECT_EQ(d.invalidUtf8Sequences, 1u);
+}
+
+TEST(EncodingDetect, ARealGbkFileIsNotNearlyUtf8)
+{
+    // The other side of the same rule: a buffer with many broken sequences is
+    // not "UTF-8 with a scratch", it is another encoding. Guessing UTF-8 here
+    // would take the text away from the user in the other direction.
+    const QByteArray bytes = winEncode("你好，世界！今天天气不错。", 936);
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, LightCpp::Text::localAnsiEncoding());
+    EXPECT_FALSE(d.reliable);
+    EXPECT_GT(d.invalidUtf8Sequences, 3u) << "the count is what the decision was made on";
+}
+
+TEST(EncodingDetect, PlainUtf8CarriesNoBrokenSequences)
+{
+    const auto d = LightCpp::Text::detectEncoding(QByteArray("中文注释\n"));
+    EXPECT_EQ(d.encoding, TextEncoding::Utf8);
+    EXPECT_TRUE(d.reliable);
+    EXPECT_EQ(d.invalidUtf8Sequences, 0u);
+}
+
+TEST(EncodingNames, AGuessedEncodingSaysSo)
+{
+    // The label is what the log line and the status-bar tooltip show. Without
+    // the marker a guessed read looks exactly like a BOM-verified one.
+    EXPECT_EQ(LightCpp::Text::encodingDisplayName(TextEncoding::Gbk, true),
+              QStringLiteral("GBK"));
+    EXPECT_EQ(LightCpp::Text::encodingDisplayName(TextEncoding::Gbk, false),
+              QStringLiteral("GBK (guessed)"));
+}
+
+TEST(EncodingNames, AVerifiedReadHasNothingToWarnAbout)
+{
+    // Silence is the correct output here: a warning on every open would teach
+    // the user to skip the line that matters.
+    EXPECT_TRUE(LightCpp::Text::encodingGuessWarning(TextEncoding::Utf8, true, 0).isEmpty());
+    EXPECT_TRUE(LightCpp::Text::encodingGuessWarning(TextEncoding::Gbk, true, 0).isEmpty());
+}
+
+TEST(EncodingNames, ADamagedUtf8FileIsWarnedAboutPrecisely)
+{
+    // This one knows the text is right and only a few spots are lost, so it
+    // says that instead of "the encoding may be wrong".
+    const QString warning =
+        LightCpp::Text::encodingGuessWarning(TextEncoding::Utf8, false, 2);
+    EXPECT_TRUE(warning.contains(QStringLiteral("U+FFFD"))) << warning.toStdString();
+    EXPECT_TRUE(warning.contains(QStringLiteral("2"))) << warning.toStdString();
+}
+
+TEST(EncodingNames, AGuessedLegacyFileNamesItsEncodingAndTheWayOut)
+{
+    const QString warning =
+        LightCpp::Text::encodingGuessWarning(TextEncoding::Gbk, false, 40);
+    EXPECT_TRUE(warning.contains(QStringLiteral("guessed"))) << warning.toStdString();
+    EXPECT_TRUE(warning.contains(QStringLiteral("GBK"))) << warning.toStdString();
+    EXPECT_TRUE(warning.contains(QStringLiteral("status bar"))) << warning.toStdString();
+}
+
 // --- explicit conversion (always picks the right codec) -----------------------
+
+TEST(EncodingConvert, LenientUtf8KeepsTheTextAroundTheDamage)
+{
+    // The counterpart of the "nearly UTF-8" detection above: decoding must not
+    // throw away the good text to punish the bad bytes. Exactly one U+FFFD, and
+    // the characters on both sides of it survive untouched.
+    QByteArray bytes("中文 ");
+    bytes += QByteArray(200, 'x');
+    bytes += QByteArray("\xFF", 1);
+    bytes += QByteArray(" 尾巴");
+
+    const auto converted = LightCpp::Text::convertUtf8Lenient(bytes);
+    ASSERT_TRUE(converted.hasValue());
+    const QString text = QString::fromUtf8(converted.value());
+    EXPECT_TRUE(text.startsWith(QStringLiteral("中文 ")));
+    EXPECT_TRUE(text.endsWith(QStringLiteral(" 尾巴")));
+    EXPECT_EQ(text.count(QChar::ReplacementCharacter), 1);
+}
+
+TEST(EncodingConvert, LenientUtf8LeavesCleanTextExactlyAsIs)
+{
+    // Leniency is not a different decoder: with nothing to repair the bytes
+    // must come back identical, so choosing it can never change a good file.
+    const QByteArray bytes("中文注释\r\nint x = 1;\r\n");
+    const auto converted = LightCpp::Text::convertUtf8Lenient(bytes);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(converted.value(), bytes);
+}
 
 TEST(EncodingConvert, GbkToUtf8RoundTrip)
 {

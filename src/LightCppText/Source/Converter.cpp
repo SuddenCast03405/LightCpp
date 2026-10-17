@@ -230,6 +230,28 @@ ConvertResult convertToUtf8(QByteArrayView bytes, TextEncoding encoding, bool st
     return ConvertResult::success(std::move(utf8));
 }
 
+ConvertResult convertUtf8Lenient(QByteArrayView bytes)
+{
+    // QString::fromUtf8 is the lenient decoder: every byte that does not
+    // complete a character becomes U+FFFD, and decoding carries on after the
+    // maximal subpart. That is what "nearly UTF-8" needs — the alternative
+    // (strict failure) sends the whole buffer to the local code page.
+    //
+    // No BOM handling: a BOM would have been detected before this point
+    // (detectEncoding returns on the BOM gate), so a BOM cannot be present.
+    const QString decoded =
+        QString::fromUtf8(bytes.constData(), static_cast<qsizetype>(bytes.size()));
+    QStringEncoder encoder(QStringConverter::Utf8);
+    QByteArray utf8 = encoder(decoded);
+    if (encoder.hasError()) {
+        // Encoding a QString we just built can only fail on an unpaired
+        // surrogate, which a decoder never produces — but a failure must not
+        // look like success.
+        return ConvertResult::failure(ConvertError::InvalidInput);
+    }
+    return ConvertResult::success(std::move(utf8));
+}
+
 ConvertResult encodeFromQString(const QString& text, TextEncoding encoding, bool addBom)
 {
     QByteArray out;

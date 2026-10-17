@@ -79,6 +79,55 @@ TEST_F(TextFileTest, ReadsUtf8FileWithBom)
     EXPECT_EQ(result.value().utf8, QByteArray("text"));  // BOM stripped
 }
 
+TEST_F(TextFileTest, NearlyUtf8FileKeepsItsTextAndIsMarkedAsAGuess)
+{
+    // R2-37: the file is UTF-8 with its last character cut in half. Reading it
+    // through GBK would garble every Chinese character in it; the answer is to
+    // keep the text, mark the two damaged bytes, and remember that this was a
+    // guess — the caller has to show that before the buffer is saved back.
+    QByteArray bytes("// 中文注释：这是 UTF-8 源文件\n");
+    bytes += QByteArray(200, 'x');
+    bytes += QByteArray("\xE4\xB8", 2);
+
+    const QString path = writeFile("broken-utf8.cpp", bytes);
+    const auto result = LightCpp::Text::readDetectedTextFile(path);
+
+    ASSERT_TRUE(result.hasValue());
+    EXPECT_EQ(result.value().encoding, TextEncoding::Utf8);
+    EXPECT_FALSE(result.value().detectionReliable);
+    EXPECT_EQ(result.value().invalidUtf8Sequences, 1u);
+
+    const QString text = QString::fromUtf8(result.value().utf8);
+    EXPECT_TRUE(text.startsWith(QStringLiteral("// 中文注释：这是 UTF-8 源文件")))
+        << "the clean part must not be decoded through another code page";
+    EXPECT_TRUE(text.endsWith(QChar::ReplacementCharacter));
+}
+
+#ifdef _WIN32
+TEST_F(TextFileTest, ARealGbkFileIsReportedAsAGuessNotAsVerified)
+{
+    // The other half of R2-37: a guessed read must be distinguishable from a
+    // verified one, because saving persists the guess.
+    const QString path = writeFile("gbk2.txt", winEncode("这是一个 GBK 文件。", 936));
+    const auto result = LightCpp::Text::readDetectedTextFile(path);
+    ASSERT_TRUE(result.hasValue());
+    EXPECT_EQ(result.value().encoding, LightCpp::Text::localAnsiEncoding());
+    EXPECT_FALSE(result.value().detectionReliable);
+    EXPECT_GT(result.value().invalidUtf8Sequences, 0u);
+}
+#endif  // _WIN32
+
+TEST_F(TextFileTest, AVerifiedReadSaysItIsVerified)
+{
+    // The guard for the flag itself: if everything came back unreliable the
+    // marker would be noise and the user would learn to ignore it.
+    const QString path = writeFile("clean.cpp", QByteArray("// 中文注释\nint x;\n"));
+    const auto result = LightCpp::Text::readDetectedTextFile(path);
+    ASSERT_TRUE(result.hasValue());
+    EXPECT_TRUE(result.value().detectionReliable);
+    EXPECT_EQ(result.value().invalidUtf8Sequences, 0u);
+}
+
 TEST_F(TextFileTest, ReadsUtf16LeFile)
 {
     const QString text = "Hello 你好";

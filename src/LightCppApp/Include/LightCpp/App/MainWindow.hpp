@@ -27,6 +27,7 @@
 #include "LightCpp/Project/GitStatus.hpp"
 #include "LightCpp/Settings/SettingsStore.hpp"
 #include "LightCpp/Text/Encoding.hpp"
+#include "LightCpp/Text/TextFile.hpp"
 
 #include <memory>
 #include <optional>
@@ -348,6 +349,17 @@ private:
     CodeEditor* createEditorTab(const QString& title);
     void updateEncodingCombo(CodeEditor* editor);
     void setEncodingInfo(CodeEditor* editor, const QString& encodingName);
+    /// Record whether this tab's encoding was detected or guessed, and say so
+    /// in the output channel (R2-37).
+    ///
+    /// A guessed read and a verified one look identical on screen, yet only
+    /// the guess is written back over the original bytes on the next save: a
+    /// legacy code page re-encodes the whole file, and U+FFFD in place of the
+    /// bytes that did not decode. The flag lives on the tab, the tooltip and
+    /// the log carry it, and saveEditorToDisk() asks once before persisting it.
+    void noteEncodingGuess(
+        CodeEditor* editor,
+        const LightCpp::Text::TextFileContent& content);
     /// Re-open the current editor's file with a forced encoding.
     void reloadWithEncoding(LightCpp::Text::TextEncoding encoding);
     /// Encode the editor's buffer for saving in the tab's own encoding

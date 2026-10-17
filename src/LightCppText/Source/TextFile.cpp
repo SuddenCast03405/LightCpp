@@ -140,7 +140,15 @@ TextFileResult readDetectedTextFile(const QString& path, const TextFileOptions& 
         return TextFileResult::failure(TextFileError::DecodeError);
     }
 
-    ConvertResult converted = convertToUtf8(data, detection.encoding);
+    // "Nearly UTF-8" (detectEncoding found a few broken sequences in an
+    // otherwise clean buffer): decode leniently rather than refuse the file.
+    // Strict decoding here would send it to the legacy fallback, i.e. the
+    // entire text through the wrong code page because of two bad bytes.
+    ConvertResult converted = detection.encoding == TextEncoding::Utf8
+                                          && !detection.reliable
+                                      && detection.invalidUtf8Sequences > 0
+                                  ? convertUtf8Lenient(data)
+                                  : convertToUtf8(data, detection.encoding);
     if (!converted.hasValue()) {
         switch (converted.error()) {
         case ConvertError::PlatformUnsupported:
@@ -159,6 +167,7 @@ TextFileResult readDetectedTextFile(const QString& path, const TextFileOptions& 
     content.byteSize = data.size();
     content.detectionScore = detection.score;
     content.detectionReliable = detection.reliable;
+    content.invalidUtf8Sequences = detection.invalidUtf8Sequences;
     content.lineEndings = detectLineEndings(data, detection.encoding);
 
     return TextFileResult::success(std::move(content));
