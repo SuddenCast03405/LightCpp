@@ -18,6 +18,7 @@
 #include "LightCpp/App/SettingsDialog.hpp"
 #include "LightCpp/App/StartupPage.hpp"
 #include "LightCpp/App/TerminalLaunch.hpp"
+#include "LightCpp/App/TextColumns.hpp"
 #include "LightCpp/App/ToolchainPaths.hpp"
 #include "LightCpp/Plugin/PluginPaths.hpp"
 #include "LightCpp/Plugin/ProjectBackend.hpp"
@@ -83,6 +84,7 @@
 #include <QStyle>
 #include <QTabWidget>
 #include <QTextBlock>
+#include <QTextDocument>
 #include <QTextCursor>
 #include <QTimer>
 #include <QToolBar>
@@ -4597,9 +4599,13 @@ void MainWindow::applyCompilerDiagnosticsToEditors()
             }
             LightCpp::App::LspDiagnostic d;
             d.startLine = p.line;
-            d.startColumn = p.column;
+            // Same conversion as the jump uses: p.column is gcc's display
+            // column, and CodeEditor's squiggles are in UTF-16 code units.
+            const int column = LightCpp::App::TextColumns::utf16ColumnForDisplayColumn(
+                ed->document()->findBlockByNumber(qMax(p.line, 0)).text(), p.column);
+            d.startColumn = column;
             d.endLine = p.line;
-            d.endColumn = p.column;
+            d.endColumn = column;
             d.severity = p.severity;
             d.message = p.message;
             d.code = QStringLiteral("compiler");
@@ -4612,13 +4618,30 @@ void MainWindow::applyCompilerDiagnosticsToEditors()
     applyingCompilerDiagnostics_ = false;
 }
 
-void MainWindow::onProblemActivated(const QString& filePath, int line, int column)
+void MainWindow::onProblemActivated(const QString& filePath, int line, int column,
+                                    bool compilerColumn)
 {
-    jumpToLocation(filePath, line, column);
+    // A compiler entry's column counts display cells (gcc's default unit: each
+    // CJK character is two) while the editor counts UTF-16 code units, so the
+    // same number means a different character as soon as the line holds
+    // non-ASCII text. jumpToLocation() opens or loads the editor first, so the
+    // conversion can work from the text that is actually about to be shown.
+    jumpToLocation(filePath, line, column, compilerColumn);
 }
 
-void MainWindow::jumpToLocation(const QString& filePath, int line, int column)
+void MainWindow::jumpToLocation(const QString& filePath, int line, int column,
+                                bool compilerColumn)
 {
+    // Convert only a compiler's column, and only once the editor holding the
+    // line is in hand — the LSP's columns are already in editor units.
+    const auto editorColumn = [compilerColumn, line](CodeEditor* ed, int rawColumn) {
+        if (!compilerColumn || ed == nullptr) {
+            return rawColumn;
+        }
+        return LightCpp::App::TextColumns::utf16ColumnForDisplayColumn(
+            ed->document()->findBlockByNumber(qMax(line, 0)).text(), rawColumn);
+    };
+
     // A diagnostic or a definition may belong to an unsaved buffer, whose
     // "path" is a virtual temp location rather than a real file — look for an
     // open tab first and only fall back to loading from disk.
@@ -4630,12 +4653,12 @@ void MainWindow::jumpToLocation(const QString& filePath, int line, int column)
         if (QFileInfo(ed->lintPath()).absoluteFilePath()
                 == QFileInfo(filePath).absoluteFilePath()) {
             tabWidget_->setCurrentIndex(i);
-            ed->gotoLocation(line, column);
+            ed->gotoLocation(line, editorColumn(ed, column));
             return;
         }
     }
     if (CodeEditor* ed = openFileInTab(filePath)) {
-        ed->gotoLocation(line, column);
+        ed->gotoLocation(line, editorColumn(ed, column));
     } else {
         outputPanel_->appendBuildOutput(
             tr("Cannot jump to %1: the file could not be opened.").arg(filePath));

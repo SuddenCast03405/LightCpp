@@ -343,6 +343,66 @@ std::optional<CompilerDiagnostic> parseDriverStyle(const std::string& line)
     return d;
 }
 
+/// A build tool's own failure summary: <make>: *** <why> (no location).
+///
+/// GNU make reports a failed recipe this way — "make: *** [Makefile.win:12:
+/// all] Error 1", "mingw32-make: *** No rule to make target 'x'.  Stop." — and
+/// ninja has its own "build stopped" line. None of them carries an "error:"
+/// word: the word is capitalised and sits behind "***", which is why
+/// parseDriverStyle cannot see it. Without these the build could be red while
+/// the Problems list stayed empty — the failure was only ever reported by a
+/// line nothing matched.
+///
+/// Deliberately an allowlist rather than "anything followed by ***": that
+/// marker turns up in plenty of ordinary output (a compiler echoing a source
+/// line, a test log), and a wrong match puts a bogus entry in Problems — which
+/// is exactly why this was left alone until it could be written narrowly.
+std::optional<CompilerDiagnostic> parseBuildToolSummary(const std::string& line)
+{
+    struct Shape {
+        const char* program;   // executable name as printed
+        const char* marker;
+    };
+    static const Shape kShapes[] = {
+        {"make", ": *** "},
+        {"make.exe", ": *** "},
+        {"mingw32-make", ": *** "},
+        {"mingw32-make.exe", ": *** "},
+        {"gmake", ": *** "},
+        {"gmake.exe", ": *** "},
+        {"ninja", ": build stopped: "},
+        {"ninja.exe", ": build stopped: "},
+    };
+
+    for (const Shape& shape : kShapes) {
+        const size_t at = line.find(shape.marker);
+        if (at == std::string::npos) {
+            continue;
+        }
+        // The tool may print its full path ("E:/msys64/…/mingw32-make.exe"),
+        // so compare the last component only.
+        std::string program = line.substr(0, at);
+        const size_t slash = program.find_last_of("/\\");
+        if (slash != std::string::npos) {
+            program = program.substr(slash + 1);
+        }
+        if (program != shape.program) {
+            continue;
+        }
+        // The whole line is the message: for a summary the tool's own name is
+        // the subject ("make: *** …"), so stripping it the way the driver form
+        // does would leave a bare "[Makefile.win:12: all] Error 1".
+        CompilerDiagnostic d;
+        d.file.clear();
+        d.line = 0;
+        d.column = 0;
+        d.severity = 1;
+        d.message = line;
+        return d;
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 std::optional<CompilerDiagnostic>
@@ -356,6 +416,9 @@ parseCompilerDiagnostic(const std::string& line)
         return d;
     }
     if (auto d = parseMsvcStyle(stripped)) {
+        return d;
+    }
+    if (auto d = parseBuildToolSummary(stripped)) {
         return d;
     }
     return parseDriverStyle(stripped);

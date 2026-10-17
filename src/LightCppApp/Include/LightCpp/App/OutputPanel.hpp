@@ -134,8 +134,11 @@ public:
 
 signals:
     /// The user activated an entry in the Problems list. Line/column are
-    /// 0-based, matching the editor's own coordinate system.
-    void problemActivated(const QString& filePath, int line, int column);
+    /// 0-based. `compilerColumn` marks a column that came from a compiler,
+    /// which counts *display cells* (each CJK character is two) rather than
+    /// the UTF-16 code units QTextCursor uses — the receiver converts it.
+    void problemActivated(const QString& filePath, int line, int column,
+                          bool compilerColumn);
     /// The user submitted a line of input for the running program (Enter in
     /// the input field, or the Send button).
     void programInputSubmitted(const QString& text);

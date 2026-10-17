@@ -32,6 +32,7 @@ add_executable(LightCppAppTests
     GitClientTests.cpp
     ProcessShutdownTests.cpp
     TerminalLaunchTests.cpp
+    TextColumnsTests.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CodeFormatter.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ConsoleDecoder.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/DebuggerController.cpp
@@ -39,6 +40,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/GitClient.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessShutdown.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TerminalLaunch.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TextColumns.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CodeFormatter.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ConsoleDecoder.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/DebuggerController.hpp
@@ -46,6 +48,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/GitClient.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ProcessShutdown.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/TerminalLaunch.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/TextColumns.hpp
 )
 
 # The app target sets this on itself; CodeFormatter declares Q_OBJECT, so the

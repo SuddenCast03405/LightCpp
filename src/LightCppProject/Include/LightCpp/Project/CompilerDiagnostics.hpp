@@ -33,6 +33,13 @@ struct CompilerDiagnostic {
 ///   Driver:     <program>: error: <msg>   (e.g. "clang++: error: ...",
 ///               "collect2.exe: error: ld returned 1 exit status") — no
 ///                location, `file` comes back empty.
+///   Build tool: <make>: *** [<file>:<line>: <target>] Error <n>
+///               <make>: *** No rule to make target '<x>, needed by '<y>'.  Stop.
+///               <ninja>: build stopped: subcommand failed.
+///               (make/gmake/mingw32-make/ninja only — no location, `file`
+///                empty, and the whole line becomes the message. A failed
+///                build whose only trace is this summary would otherwise reach
+///                Problems as nothing at all.)
 ///
 /// Windows drive-letter paths ("E:/x.cpp:3:5: error: ...") are handled: the
 /// file part is everything before the *last* "<digits>:<digits>:" run.

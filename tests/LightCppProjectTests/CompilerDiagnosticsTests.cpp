@@ -269,3 +269,67 @@ TEST(CompilerDiagnostics, DriverLineWithSpaceBeforeColon)
               "unresolved external symbol _main");
 }
 
+TEST(CompilerDiagnostics, MakeSummaryLineIsAnError)
+{
+    // "make: *** [...] Error 1" carries no "error:" word — the word is
+    // capitalised and behind "***" — so nothing matched it and a build that
+    // failed at the make level reached Problems as zero errors.
+    const std::string line = "make: *** [Makefile.win:12: all] Error 1";
+    const auto d = parseCompilerDiagnostic(line);
+    ASSERT_TRUE(d.has_value());
+    EXPECT_TRUE(d->file.empty());
+    EXPECT_EQ(d->line, 0);
+    EXPECT_EQ(d->column, 0);
+    EXPECT_EQ(d->severity, 1);
+    EXPECT_EQ(d->message, line);  // the tool's name is the subject here
+}
+
+TEST(CompilerDiagnostics, MakeSummaryUnderItsFullPathIsRecognised)
+{
+    // make prints itself by whatever name invoked it, full path included.
+    const auto d = parseCompilerDiagnostic(
+        "E:/msys64/ucrt64/bin/mingw32-make.exe: *** [Makefile.win:5: all] Error 2");
+    ASSERT_TRUE(d.has_value());
+    EXPECT_EQ(d->severity, 1);
+    EXPECT_TRUE(d->file.empty());
+}
+
+TEST(CompilerDiagnostics, MakeNoRuleSummaryIsAnError)
+{
+    const auto d = parseCompilerDiagnostic(
+        "mingw32-make: *** No rule to make target 'main.o', needed by 'hello.exe'.  Stop.");
+    ASSERT_TRUE(d.has_value());
+    EXPECT_EQ(d->severity, 1);
+    EXPECT_TRUE(d->file.empty());
+}
+
+TEST(CompilerDiagnostics, NinjaStoppedIsAnError)
+{
+    const auto d = parseCompilerDiagnostic("ninja: build stopped: subcommand failed.");
+    ASSERT_TRUE(d.has_value());
+    EXPECT_EQ(d->severity, 1);
+    EXPECT_TRUE(d->file.empty());
+}
+
+TEST(CompilerDiagnostics, OtherProgramsBehindStarsAreNotDiagnostics)
+{
+    // The allowlist is the point: "***" alone is not a diagnostic, and a
+    // wrong match here would put a bogus entry in Problems.
+    EXPECT_FALSE(parseCompilerDiagnostic(
+        "myapp: *** something went wrong").has_value());
+    EXPECT_FALSE(parseCompilerDiagnostic(
+        "make.bat: *** [x] Error 1").has_value());
+}
+
+TEST(CompilerDiagnostics, ARealDiagnosticStillWinsOverTheSummaryShape)
+{
+    // A source line echoed by a compiler could contain "***"; the located
+    // forms are tried first, so they keep their own meaning.
+    const auto d = parseCompilerDiagnostic("main.cpp:3:5: error: bad *** thing");
+    ASSERT_TRUE(d.has_value());
+    EXPECT_EQ(d->file, "main.cpp");
+    EXPECT_EQ(d->line, 2);
+    EXPECT_EQ(d->column, 4);
+}
+
+

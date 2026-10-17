@@ -49,6 +49,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/SettingsDialog.cpp
     Source/StartupPage.cpp
     Source/TerminalLaunch.cpp
+    Source/TextColumns.cpp
 )
 
 add_executable(lightcpp ${LIGHTCPP_APP_SOURCES})

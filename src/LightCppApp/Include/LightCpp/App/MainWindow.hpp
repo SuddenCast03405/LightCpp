@@ -148,7 +148,8 @@ private slots:
     [[nodiscard]] QString resolveDebuggerPath() const;
     /// Jump to the source position of a Problems-list entry.
     /// `line` / `column` are 0-based.
-    void onProblemActivated(const QString& filePath, int line, int column);
+    void onProblemActivated(const QString& filePath, int line, int column,
+                            bool compilerColumn);
     /// Reindent the active file through clang-format. The answer is async, so
     /// the request id is remembered and a late reply for a superseded buffer
     /// is dropped.
@@ -371,7 +372,8 @@ private:
     /// (possibly an unsaved buffer under its virtual lint path) and only load
     /// from disk when no tab matches. Shared by the Problems list and by
     /// go-to-definition, so both land the caret identically.
-    void jumpToLocation(const QString& filePath, int line, int column);
+    void jumpToLocation(const QString& filePath, int line, int column,
+                        bool compilerColumn = false);
     /// Rebuild the Output panel's Problems list from diagnosticsByFile_.
     void rebuildProblems();
     // --- compiler problems (parsed from the compiler / build log) ---------

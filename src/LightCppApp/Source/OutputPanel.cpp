@@ -182,8 +182,11 @@ OutputPanel::OutputPanel(QWidget* parent)
         tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
         tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
         tree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+        // Only the compiler tree needs converting: its columns are gcc's
+        // display cells, while the LSP already speaks UTF-16 code units.
+        const bool compilerColumn = (tree == compilerProblems_);
         connect(tree, &QTreeWidget::itemClicked, this,
-                [this](QTreeWidgetItem* item, int) {
+                [this, compilerColumn](QTreeWidgetItem* item, int) {
             if (item == nullptr) {
                 return;
             }
@@ -193,7 +196,8 @@ OutputPanel::OutputPanel(QWidget* parent)
             }
             emit problemActivated(path,
                                   item->data(0, kRoleLine).toInt(),
-                                  item->data(0, kRoleColumn).toInt());
+                                  item->data(0, kRoleColumn).toInt(),
+                                  compilerColumn);
         });
     }
 
