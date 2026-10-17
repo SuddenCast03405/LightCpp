@@ -26,6 +26,7 @@
 # the link fails on CodeFormatter::staticMetaObject and its two signals.
 add_executable(LightCppAppTests
     CodeFormatterTests.cpp
+    CompileDatabaseTests.cpp
     ConsoleDecoderTests.cpp
     DebuggerControllerTests.cpp
     FindScanTests.cpp
@@ -34,6 +35,7 @@ add_executable(LightCppAppTests
     TerminalLaunchTests.cpp
     TextColumnsTests.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CodeFormatter.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CompileDatabase.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ConsoleDecoder.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/DebuggerController.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/FindScan.cpp
@@ -42,6 +44,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TerminalLaunch.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TextColumns.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CodeFormatter.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CompileDatabase.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ConsoleDecoder.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/DebuggerController.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/FindScan.hpp

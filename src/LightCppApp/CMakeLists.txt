@@ -29,6 +29,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/BatchFormatter.cpp
     Source/CodeEditor.cpp
     Source/CodeFormatter.cpp
+    Source/CompileDatabase.cpp
     Source/CompletionPopup.cpp
     Source/ConsoleDecoder.cpp
     Source/CppSyntaxHighlighter.cpp

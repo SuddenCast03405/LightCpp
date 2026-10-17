@@ -1,6 +1,7 @@
 // LanguageServerClient — implementation.
 
 #include "LightCpp/App/LanguageServerClient.hpp"
+#include "LightCpp/App/CompileDatabase.hpp"
 
 #include <cstring>
 #include <utility>
@@ -184,44 +185,6 @@ QList<LspTextEdit> parseWorkspaceEdit(const QJsonValue& value)
 QString clangdFlagsDir()
 {
     return QDir(QDir::tempPath()).filePath(QStringLiteral("lightcpp-clangd"));
-}
-
-/// Locate a compilation database the project itself owns — CMake's
-/// CMAKE_EXPORT_COMPILE_COMMANDS output. Probes the project root and the
-/// conventional build-directory layouts one and two levels below it
-/// (build/, build/Debug, out/build/Debug, ...). Returns the directory that
-/// holds compile_commands.json, or empty when the project has none.
-QString findProjectCompileCommandsDir(const QString& rootPath)
-{
-    if (rootPath.isEmpty()) {
-        return {};
-    }
-    const QDir root(rootPath);
-    if (!root.exists()) {
-        return {};
-    }
-    QStringList dirs;
-    dirs.append(root.absolutePath());
-    const QStringList topLevel =
-        root.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    for (const QString& entry : topLevel) {
-        const QDir level1(root.filePath(entry));
-        dirs.append(level1.absolutePath());
-        dirs.append(level1.filePath(QStringLiteral("Debug")));
-        dirs.append(level1.filePath(QStringLiteral("Release")));
-        const QStringList nested =
-            level1.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-        for (const QString& nestedEntry : nested) {
-            dirs.append(level1.filePath(nestedEntry));
-        }
-    }
-    for (const QString& dir : dirs) {
-        if (QFileInfo::exists(QDir(dir).filePath(
-                QStringLiteral("compile_commands.json")))) {
-            return QDir(dir).absolutePath();
-        }
-    }
-    return {};
 }
 
 /// Write the one-file compilation database clangd reads its include paths from.
@@ -420,7 +383,8 @@ void LanguageServerClient::start()
     // per-target -I flags for the project's own headers — so it wins over
     // the synthesized file. The compiler's builtin headers still resolve:
     // clangd queries the compiler named inside the database itself.
-    const QString projectDbDir = findProjectCompileCommandsDir(rootPath_);
+    const QString projectDbDir =
+        LightCpp::App::CompileDatabase::findProjectDirectory(rootPath_);
     if (!projectDbDir.isEmpty()) {
         // clangd takes a command-line flag; ccls has no such flag and reads
         // the database directory from its --init JSON instead. Forward
