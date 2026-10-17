@@ -1495,3 +1495,98 @@ TEST(SettingsLayer, FullDefaultsDocumentWouldWipeTheBase)
     EXPECT_TRUE(store.preferences().disabledPlugins.isEmpty());
 }
 
+// --- mergedToolchains: what the user's configuration actually has ----------
+//
+// The settings dialog edits one layer at a time, so it holds base and overlay
+// separately. "Does this toolchain id exist?" has to be answered for the
+// configuration the user runs, not for the file being edited — a project kit
+// inheriting a global toolchain is a normal setup.
+
+namespace {
+
+Toolchain toolchainNamed(const QString& id, const QString& name)
+{
+    Toolchain toolchain;
+    toolchain.id = id;
+    toolchain.name = name;
+    toolchain.compilers.insert(QStringLiteral("gcc"), id + QStringLiteral("/gcc.exe"));
+    return toolchain;
+}
+
+}  // namespace
+
+TEST(MergedToolchains, WithNoOverlayTheBaseEntriesComeBackUnchanged)
+{
+    const QList<Toolchain> base = {toolchainNamed(QStringLiteral("a"), QStringLiteral("A")),
+                                   toolchainNamed(QStringLiteral("b"), QStringLiteral("B"))};
+    const QList<Toolchain> merged = mergedToolchains(base, {});
+    ASSERT_EQ(merged.size(), 2);
+    EXPECT_EQ(merged[0].id, QStringLiteral("a"));
+    EXPECT_EQ(merged[1].id, QStringLiteral("b"));
+}
+
+TEST(MergedToolchains, AnOverlayEntryReplacesTheSameIdInPlace)
+{
+    // Replacing in place rather than appending keeps the rows the user is
+    // used to where they were, and matches what SettingsStore does to the
+    // documents (base first, then the overlay).
+    const QList<Toolchain> base = {toolchainNamed(QStringLiteral("a"), QStringLiteral("A")),
+                                   toolchainNamed(QStringLiteral("b"), QStringLiteral("B"))};
+    const QList<Toolchain> overlay = {toolchainNamed(QStringLiteral("a"),
+                                                     QStringLiteral("A (project)"))};
+    const QList<Toolchain> merged = mergedToolchains(base, overlay);
+    ASSERT_EQ(merged.size(), 2);
+    EXPECT_EQ(merged[0].id, QStringLiteral("a"));
+    EXPECT_EQ(merged[0].name, QStringLiteral("A (project)"));
+    EXPECT_EQ(merged[1].id, QStringLiteral("b"));
+}
+
+TEST(MergedToolchains, OverlayOnlyEntriesAreAppendedAfterTheBaseOnes)
+{
+    const QList<Toolchain> base = {toolchainNamed(QStringLiteral("a"), QStringLiteral("A"))};
+    const QList<Toolchain> overlay = {
+        toolchainNamed(QStringLiteral("project-msvc"), QStringLiteral("MSVC"))};
+    const QList<Toolchain> merged = mergedToolchains(base, overlay);
+    ASSERT_EQ(merged.size(), 2);
+    EXPECT_EQ(merged[0].id, QStringLiteral("a"));
+    EXPECT_EQ(merged[1].id, QStringLiteral("project-msvc"));
+}
+
+TEST(MergedToolchains, AProjectKitCanInheritAGlobalToolchain)
+{
+    // The shape that used to break twice: the project layer defines no
+    // toolchain at all, and its kit inherits one the global layer defines.
+    // Seen through the merged view the id resolves, so the form neither
+    // blanks it (R2-32) nor refuses to save it (R2-36).
+    const QList<Toolchain> base = {toolchainNamed(QStringLiteral("msys2-ucrt64"),
+                                                  QStringLiteral("MSYS2 UCRT64"))};
+    const QList<Toolchain> project = {};
+
+    Kit kit;
+    kit.id = QStringLiteral("project-debug");
+    kit.inheritToolchain = true;
+    kit.toolchainId = QStringLiteral("msys2-ucrt64");
+
+    const QList<Toolchain> merged = mergedToolchains(base, project);
+    bool found = false;
+    for (const Toolchain& toolchain : merged) {
+        if (toolchain.id == kit.toolchainId) {
+            found = true;
+        }
+    }
+    EXPECT_TRUE(found) << kit.toolchainId.toStdString();
+}
+
+TEST(MergedToolchains, AnIdlessOverlayEntryDoesNotHideTheBaseOne)
+{
+    // A half-filled toolchain being added in the overlay has no id yet; it
+    // must not eat the base entry whose id is empty-in-effect for matching.
+    const QList<Toolchain> base = {toolchainNamed(QStringLiteral("a"), QStringLiteral("A"))};
+    Toolchain blank;
+    blank.name = QStringLiteral("just scanned");
+    const QList<Toolchain> merged = mergedToolchains(base, {blank});
+    ASSERT_EQ(merged.size(), 2);
+    EXPECT_EQ(merged[0].id, QStringLiteral("a"));
+    EXPECT_TRUE(merged[1].id.isEmpty());
+}
+

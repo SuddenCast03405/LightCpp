@@ -173,6 +173,17 @@ private:
     void addBuildConfiguration();
     void removeBuildConfiguration();
     void updateKitSuggestions();
+    /// The toolchains the user actually has: this layer's, plus the other
+    /// layer's when editing the project layer — merged the way the runtime
+    /// merges them. "This layer does not define it" is not "it does not
+    /// exist": a project kit inheriting a global toolchain is normal (R2-36).
+    [[nodiscard]] QList<LightCpp::Settings::Toolchain> visibleToolchains(
+        Scope scope) const;
+    /// Fill the Toolchain drop-down from visibleToolchains() and select
+    /// `storedId` even when nothing defines it — the combo is not editable,
+    /// so setCurrentText() on an unknown value leaves it standing at -1 and
+    /// answering "" (R2-32).
+    void populateKitToolchainCombo(const QString& storedId);
     void updateDefaultsKitItems();
     void updateKitInheritanceUi();
     /// Snapshot the kit's own tool-field values (what the widgets show right

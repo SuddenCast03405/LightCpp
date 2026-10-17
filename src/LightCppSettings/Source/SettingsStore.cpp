@@ -588,4 +588,24 @@ QStringList SettingsStore::buildConfigurationNames(const Kit& kit) const
     return names;
 }
 
+QList<Toolchain> mergedToolchains(const QList<Toolchain>& base,
+                                  const QList<Toolchain>& overlay)
+{
+    QList<Toolchain> out = base;
+    for (const Toolchain& toolchain : overlay) {
+        bool replaced = false;
+        for (Toolchain& existing : out) {
+            if (!toolchain.id.isEmpty() && existing.id == toolchain.id) {
+                existing = toolchain;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            out.append(toolchain);
+        }
+    }
+    return out;
+}
+
 }  // namespace LightCpp::Settings

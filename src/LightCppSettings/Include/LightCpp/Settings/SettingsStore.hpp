@@ -186,4 +186,22 @@ private:
     QStringList errors_;
 };
 
+/// The toolchains the merged settings will have when both layers are loaded:
+/// the base layer's in its own order, then the overlay's own — an overlay
+/// entry whose id the base already has replaces it in place, the same rule
+/// the documents follow in toolchains().
+///
+/// The settings dialog edits one layer at a time and therefore holds each
+/// layer separately, but "does this toolchain id exist?" has to be answered
+/// for the configuration the user actually runs: a project layer that lets a
+/// kit inherit a global toolchain is normal, and calling that id missing both
+/// blanked it (R2-32) and then refused to save it (R2-36).
+///
+/// A same-id overlay entry **replaces** the base one here rather than merging
+/// field by field: the dialog holds parsed structs, where "not mentioned" and
+/// "cleared" are the same empty value. The difference only shows for a
+/// hand-written overlay that redefines a toolchain partially.
+[[nodiscard]] QList<Toolchain> mergedToolchains(const QList<Toolchain>& base,
+                                               const QList<Toolchain>& overlay);
+
 }  // namespace LightCpp::Settings

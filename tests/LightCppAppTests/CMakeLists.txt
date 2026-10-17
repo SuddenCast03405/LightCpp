@@ -32,6 +32,7 @@ add_executable(LightCppAppTests
     FindScanTests.cpp
     GitClientTests.cpp
     GitCommandPolicyTests.cpp
+    KitToolchainOptionsTests.cpp
     LspResponseTests.cpp
     MsvcNamesTests.cpp
     ProcessShutdownTests.cpp
@@ -44,6 +45,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/FindScan.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/GitClient.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/GitCommandPolicy.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/KitToolchainOptions.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/LspResponse.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/MsvcNames.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessShutdown.cpp
@@ -56,6 +58,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/FindScan.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/GitClient.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/GitCommandPolicy.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/KitToolchainOptions.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/LspResponse.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/MsvcNames.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ProcessShutdown.hpp

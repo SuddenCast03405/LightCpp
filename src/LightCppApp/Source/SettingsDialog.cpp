@@ -7,6 +7,7 @@
 
 #include "LightCpp/App/SettingsDialog.hpp"
 
+#include "LightCpp/App/KitToolchainOptions.hpp"
 #include "LightCpp/Settings/SettingsJson.hpp"
 #include "LightCpp/Settings/SettingsStore.hpp"
 #include "LightCpp/Settings/ToolchainScanner.hpp"
@@ -1700,7 +1701,7 @@ void SettingsDialog::loadKitForm(int kitIndex)
         kitEnabled_->setChecked(true);
         kitIsDefault_->setChecked(false);
         kitInheritToolchain_->setChecked(false);
-        kitToolchainId_->setCurrentText(QString());
+        populateKitToolchainCombo(QString());
         kitCompilerFamily_->setCurrentIndex(0);
         for (QComboBox* combo : {kitCCompiler_, kitCppCompiler_, kitDebugger_,
                                  kitClangd_, kitClangFormat_, kitToolCmake_,
@@ -1725,7 +1726,7 @@ void SettingsDialog::loadKitForm(int kitIndex)
     kitEnabled_->setChecked(kit.enabled);
     kitIsDefault_->setChecked(kit.isDefault);
     kitInheritToolchain_->setChecked(kit.inheritToolchain);
-    kitToolchainId_->setCurrentText(kit.toolchainId);
+    populateKitToolchainCombo(kit.toolchainId);
     const int familyIndex = kitCompilerFamily_->findData(kit.compilerFamily);
     kitCompilerFamily_->setCurrentIndex(familyIndex < 0 ? 0 : familyIndex);
     kitCCompiler_->setCurrentText(kit.cCompiler);
@@ -1771,7 +1772,9 @@ void SettingsDialog::commitKitForm()
     kit.enabled = kitEnabled_->isChecked();
     kit.isDefault = kitIsDefault_->isChecked();
     kit.inheritToolchain = kitInheritToolchain_->isChecked();
-    kit.toolchainId = kitToolchainId_->currentText().trimmed();
+    // currentData(), not currentText(): the row may say "gcc (missing)" or
+    // "(none)" while the value it carries is the id the kit stores.
+    kit.toolchainId = kitToolchainId_->currentData().toString().trimmed();
     kit.compilerFamily = kitCompilerFamily_->currentData().toString();
     // While inheriting, the tool widgets display the resolved toolchain
     // paths; committing them would freeze today's toolchain into the kit's
@@ -2002,10 +2005,12 @@ void SettingsDialog::removeBuildConfiguration()
 
 void SettingsDialog::updateKitSuggestions()
 {
-    // Tool suggestions come from the layer's toolchain entries: every
-    // toolchain contributes its tool to the matching combo.
+    // Tool suggestions come from the toolchains the user actually has —
+    // including the base layer's while editing the project layer, or the
+    // fields of a kit that inherits a global toolchain would look empty.
+    const QList<Settings::Toolchain> toolchains = visibleToolchains(currentScope_);
     QHash<QString, QStringList> byKey;
-    for (const Settings::Toolchain& toolchain : state(currentScope_).toolchains) {
+    for (const Settings::Toolchain& toolchain : toolchains) {
         for (const ToolchainToolSpec& spec : kToolchainToolSpecs) {
             const QString path =
                 toolchainPath(toolchain, QLatin1String(spec.key));
@@ -2018,7 +2023,7 @@ void SettingsDialog::updateKitSuggestions()
     // kind the toolchains carry: C slots list gcc/clang/cl, C++ slots
     // g++/clang++/cl, debugger slots gdb/lldb.
     QStringList cCompilers, cppCompilers, debuggers;
-    for (const Settings::Toolchain& toolchain : state(currentScope_).toolchains) {
+    for (const Settings::Toolchain& toolchain : toolchains) {
         for (const QString& key :
              {QStringLiteral("gcc"), QStringLiteral("g++"),
               QStringLiteral("clang"), QStringLiteral("clang++"),
@@ -2058,16 +2063,37 @@ void SettingsDialog::updateKitSuggestions()
     suggest(kitToolGnuMake_, byKey.value(QStringLiteral("gnuMake")));
     suggest(kitToolMsbuild_, byKey.value(QStringLiteral("msbuild")));
 
-    // The inheritance combo names the toolchains by id.
-    const QString currentToolchainId = kitToolchainId_->currentText();
-    QSignalBlocker blocker(kitToolchainId_);
-    kitToolchainId_->clear();
-    for (const Settings::Toolchain& toolchain : state(currentScope_).toolchains) {
-        if (!toolchain.id.isEmpty()) {
-            kitToolchainId_->addItem(toolchain.id);
-        }
+    // The inheritance combo names the toolchains by id — every id the user
+    // can refer to, and the selected one even when nothing defines it.
+    populateKitToolchainCombo(kitToolchainId_->currentData().toString());
+}
+
+QList<Settings::Toolchain> SettingsDialog::visibleToolchains(Scope scope) const
+{
+    // The base layer is written and read on its own, so a base kit may only
+    // lean on a base toolchain; a project layer legally inherits a global
+    // one, and calling that id missing is what blanked it (R2-32) and then
+    // refused to save it (R2-36).
+    const QList<Settings::Toolchain>& base = state(Scope::Base).toolchains;
+    if (scope == Scope::Overlay) {
+        return Settings::mergedToolchains(base, state(Scope::Overlay).toolchains);
     }
-    kitToolchainId_->setCurrentText(currentToolchainId);
+    return base;
+}
+
+void SettingsDialog::populateKitToolchainCombo(const QString& storedId)
+{
+    QStringList ids;
+    for (const Settings::Toolchain& toolchain : visibleToolchains(currentScope_)) {
+        ids.append(toolchain.id);
+    }
+    const KitToolchainOptions options = kitToolchainOptionsFor(ids, storedId);
+    const QSignalBlocker blocker(kitToolchainId_);
+    kitToolchainId_->clear();
+    for (const KitToolchainOption& option : options.items) {
+        kitToolchainId_->addItem(option.text, option.value);
+    }
+    kitToolchainId_->setCurrentIndex(options.current);
 }
 
 void SettingsDialog::updateKitInheritanceUi()
@@ -2120,9 +2146,9 @@ void SettingsDialog::saveKitToolFieldsSnapshot()
 
 void SettingsDialog::applyKitInheritanceDisplay()
 {
-    const QString toolchainId = kitToolchainId_->currentText().trimmed();
+    const QString toolchainId = kitToolchainId_->currentData().toString().trimmed();
     const Settings::Toolchain* toolchain = nullptr;
-    for (const Settings::Toolchain& candidate : state(currentScope_).toolchains) {
+    for (const Settings::Toolchain& candidate : visibleToolchains(currentScope_)) {
         if (candidate.id == toolchainId) {
             toolchain = &candidate;
             break;
@@ -2454,14 +2480,35 @@ bool SettingsDialog::validateScope(Scope scope, QString* errorMessage) const
         }
         toolchainIds.insert(toolchain.id);
     }
-    // Kits that inherit must name an existing toolchain of the same layer.
+    // A kit must name a toolchain the user's configuration will have. That is
+    // not the same as "a toolchain this layer defines": when the project layer
+    // is being saved, every global toolchain counts too (R2-36). Validating
+    // against this layer alone turned a normal setup into a red box that
+    // blocked saving, after the id itself had been blanked (R2-32).
+    QSet<QString> visibleIds;
+    for (const Settings::Toolchain& toolchain : visibleToolchains(scope)) {
+        if (!toolchain.id.isEmpty()) {
+            visibleIds.insert(toolchain.id);
+        }
+    }
     for (int i = 0; i < current.kits.size(); ++i) {
         const Settings::Kit& kit = current.kits[i];
-        if (kit.inheritToolchain && !toolchainIds.contains(kit.toolchainId)) {
+        if (!kit.inheritToolchain) {
+            continue;
+        }
+        if (kit.toolchainId.isEmpty()) {
+            if (errorMessage != nullptr) {
+                *errorMessage = tr("Kit \"%1\" inherits a toolchain but names "
+                                   "none.")
+                                    .arg(kitDisplayName(kit));
+            }
+            return false;
+        }
+        if (!visibleIds.contains(kit.toolchainId)) {
             if (errorMessage != nullptr) {
                 *errorMessage = tr("Kit \"%1\" inherits from toolchain "
                                    "\"%2\", which does not exist.")
-                                     .arg(kitDisplayName(kit), kit.toolchainId);
+                                    .arg(kitDisplayName(kit), kit.toolchainId);
             }
             return false;
         }
