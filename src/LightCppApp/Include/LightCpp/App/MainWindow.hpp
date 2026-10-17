@@ -17,6 +17,7 @@
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
 #include "LightCpp/App/ProcessShutdown.hpp"
+#include "LightCpp/App/ProcessTree.hpp"
 #include "LightCpp/App/StartupPage.hpp"
 #include "LightCpp/Plugin/Plugin.hpp"
 #include "LightCpp/Plugin/PluginManager.hpp"
@@ -29,6 +30,7 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
 class CodeEditor;
 class FileExplorer;
@@ -486,9 +488,11 @@ private:
     /// dedicated terminal channel, not in Program Output.
     QProcess* ensureTerminalRunner();
     /// Begin watching the user program launched inside the embedded
-    /// terminal: a Toolhelp32 poll pairs the shell's PID with the program's
-    /// image name, so "can run again" follows the program's lifetime, not
-    /// the shell's (a `cmd /k` shell outlives the program by design).
+    /// terminal: a Toolhelp32 poll finds the program among the shell's
+    /// descendants and pins the pid it found, so "can run again" follows the
+    /// program's lifetime, not the shell's (a `cmd /k` shell outlives the
+    /// program by design — and the program outlives the shell once it is
+    /// stopped, which is the half that used to go unnoticed).
     void startTerminalProgramWatch(const QString& exePath);
     /// One poll tick: update the embedded-terminal program-alive state.
     void pollTerminalProgram();
@@ -507,10 +511,10 @@ private:
     /// after the language server's own shutdown, i.e. with the window already
     /// unresponsive and the build tools still holding their file locks.
     LightCpp::App::ProcessShutdownReport stopChildProcesses();
-    /// True when a live process whose parent is `shellPid` carries
-    /// `imageLower` (case-insensitive, e.g. "main.exe").
-    [[nodiscard]] static bool shellHasChildImage(unsigned long shellPid,
-                                                 const QString& imageLower);
+    /// Stop the embedded terminal's program before the shell that started
+    /// it: the tree kill plus, for anything that refused to go, a line in
+    /// the terminal saying which image stayed alive.
+    void stopTerminalProgram();
     /// Launch `exePath` through ConsolePauser.exe in its own console window
     /// (preferences run.output = "consolePauser"). Nothing is captured; the
     /// console owns the program's input and output.
@@ -886,10 +890,16 @@ private:
     /// raw output goes to the dedicated terminal channel.
     QProcess* terminalRunner_ = nullptr;
     /// Terminal-program lifetime watch: image name of the exe typed into
-    /// the shell, whether it has been observed alive at least once, the
-    /// current aliveness, and the launch-time grace timer source.
+    /// the shell, the pid it was pinned to, the current aliveness, and the
+    /// launch-time grace timer source. There is no "seen it once" flag any
+    /// more: remembering the pid says the same thing and answers more.
     QString terminalProgramImage_;
-    bool terminalProgramSeen_ = false;
+    /// The pid the watch pinned the program to once it saw it, or 0 while it
+    /// has not. Kept because the shell's lifetime is not the program's: once
+    /// the shell is gone this is the only thing that can answer "is it still
+    /// running?" — and it answers with the image too, so a reused pid reads
+    /// as gone instead of as alive.
+    unsigned long terminalProgramPid_ = 0;
     bool terminalProgramRunning_ = false;
     QElapsedTimer terminalProgramLaunch_;
     QTimer* terminalProgramTimer_ = nullptr;

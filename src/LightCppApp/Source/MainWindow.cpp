@@ -2019,6 +2019,20 @@ LightCpp::App::ProcessShutdownReport MainWindow::stopChildProcesses()
                 }
             }};
     };
+    // ... and what those children started, before the sweep below runs. A
+    // program terminated on its own leaves whatever it spawned behind, and a
+    // shell does that to the program it was told to run; either way the
+    // survivor keeps the .exe locked after the IDE is gone (R2-19). Failures
+    // are not reported here: the window is closing, so there is nobody left
+    // to read them.
+    const std::vector<LightCpp::App::ProcessEntry> processes =
+        LightCpp::App::snapshotProcesses();
+    for (QProcess* process : {runner_, terminalRunner_}) {
+        if (process != nullptr && process->state() != QProcess::NotRunning) {
+            (void)LightCpp::App::stopProcessTree(
+                processes, static_cast<unsigned long>(process->processId()));
+        }
+    }
     return LightCpp::App::stopProcesses(
         {handle(compiler_), handle(runner_), handle(projectProcess_),
          handle(terminalRunner_)},
@@ -6341,6 +6355,19 @@ void MainWindow::onStopProgram()
     if (programRunning) {
         outputPanel_->showChannel(OutputPanel::ChannelProgram);
         outputPanel_->appendProgramOutput(tr("--- Stopping program ---"));
+        // What the program started is not the program: kill() ends the one
+        // process the runner owns, while a helper it spawned keeps running
+        // and, if that helper is writing the same .exe, holds it against the
+        // next build (R2-19).
+        const QStringList stayed = LightCpp::App::stopProcessTree(
+            LightCpp::App::snapshotProcesses(),
+            static_cast<unsigned long>(runner_->processId()));
+        if (!stayed.isEmpty()) {
+            outputPanel_->appendProgramOutput(
+                tr("Still running after the stop request: %1 — it may keep "
+                   "the executable locked.")
+                    .arg(stayed.join(QStringLiteral(", "))));
+        }
         runner_->kill();
     }
     if (terminalRunning) {
@@ -6353,6 +6380,10 @@ void MainWindow::onStopProgram()
                 static_cast<OutputPanel::Channel>(terminalChannel_));
         }
         outputPanel_->appendTerminalOutput(tr("--- Stopping terminal ---\n"));
+        // The order matters, and so does who gets killed: the shell started
+        // the program, and terminating the shell does not touch it. Stopping
+        // the tree first is what makes "stopped" true.
+        stopTerminalProgram();
         terminalRunner_->kill();
     }
 }
@@ -6504,7 +6535,7 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
 void MainWindow::startTerminalProgramWatch(const QString& exePath)
 {
     terminalProgramImage_ = QFileInfo(exePath).fileName().toLower();
-    terminalProgramSeen_ = false;
+    terminalProgramPid_ = 0;
     // Assume alive during the grace window so the run actions do not
     // flicker; the first poll corrects this if the program never appears.
     terminalProgramRunning_ = true;
@@ -6520,53 +6551,67 @@ void MainWindow::startTerminalProgramWatch(const QString& exePath)
 
 void MainWindow::pollTerminalProgram()
 {
-    if (terminalRunner_ == nullptr
-        || terminalRunner_->state() == QProcess::NotRunning
-        || terminalProgramImage_.isEmpty()) {
+    if (terminalProgramTimer_ == nullptr) {
+        return;
+    }
+    if (terminalProgramImage_.isEmpty()) {
         terminalProgramTimer_->stop();
         terminalProgramRunning_ = false;
         updateRunActionStates();
         return;
     }
-    const bool alive = shellHasChildImage(
-        static_cast<unsigned long>(terminalRunner_->processId()),
+    const bool shellUp = terminalRunner_ != nullptr
+        && terminalRunner_->state() != QProcess::NotRunning;
+    const unsigned long shellPid =
+        shellUp ? static_cast<unsigned long>(terminalRunner_->processId()) : 0;
+
+    // Which pid is still running this program: the one already pinned, or a
+    // fresh look below the shell. The decision lives in ProcessTree because
+    // it is the one that was wrong — the shell going away is not the program
+    // going away (R2-19).
+    const unsigned long found = LightCpp::App::watchedProgramPid(
+        LightCpp::App::snapshotProcesses(), terminalProgramPid_, shellPid,
         terminalProgramImage_);
-    if (alive) {
-        terminalProgramSeen_ = true;
+    if (found != 0) {
+        terminalProgramPid_ = found;
         terminalProgramRunning_ = true;
-    } else if (terminalProgramSeen_
-               || terminalProgramLaunch_.elapsed() > 2000) {
-        // Observed once and gone, or never showed up within the grace
-        // window (a slow shell may still be resolving the command — do not
-        // confuse that with an exit).
+        updateRunActionStates();
+        return;
+    }
+    // 0 means "gone" or "not seen yet". Gone — because a pid was pinned and
+    // is no longer carrying the image — ends the watch. Not-yet-seen keeps
+    // it going through the grace window, where a slow shell may still be
+    // resolving the command; after that the run is over.
+    const bool wasPinned = terminalProgramPid_ != 0;
+    terminalProgramPid_ = 0;
+    if (wasPinned || shellPid == 0
+        || terminalProgramLaunch_.elapsed() > 2000) {
         terminalProgramRunning_ = false;
+        terminalProgramTimer_->stop();
     }
     updateRunActionStates();
 }
 
-bool MainWindow::shellHasChildImage(unsigned long shellPid,
-                                    const QString& imageLower)
+void MainWindow::stopTerminalProgram()
 {
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap == INVALID_HANDLE_VALUE) {
-        return false;
+    if (terminalRunner_ == nullptr) {
+        return;
     }
-    PROCESSENTRY32W entry;
-    entry.dwSize = sizeof(entry);
-    bool found = false;
-    if (Process32FirstW(snap, &entry)) {
-        do {
-            if (entry.th32ParentProcessID == shellPid
-                && QString::fromWCharArray(entry.szExeFile).toLower()
-                       == imageLower) {
-                found = true;
-                break;
-            }
-        } while (Process32NextW(snap, &entry));
+    const QStringList stayed = LightCpp::App::stopProcessTree(
+        LightCpp::App::snapshotProcesses(),
+        static_cast<unsigned long>(terminalRunner_->processId()));
+    if (stayed.isEmpty()) {
+        return;
     }
-    CloseHandle(snap);
-    return found;
+    // Silence here would be the original defect with a nicer message: the
+    // user is told the terminal stopped, the leftover keeps writing to the
+    // .exe, and the next build fails in the linker for no visible reason.
+    outputPanel_->appendTerminalOutput(
+        tr("Could not stop: %1. It is still running and may keep the "
+           "executable locked, so the next build can fail to link it.\n")
+            .arg(stayed.join(QStringLiteral(", "))));
 }
+
 
 bool MainWindow::startDetachedInNewConsole(const QString& program,
                                            const QStringList& args,
@@ -6795,10 +6840,11 @@ void MainWindow::updateRunActionStates()
                                && terminalRunner_->state()
                                       != QProcess::NotRunning;
     // Terminal modes: the shell (cmd /k, pwsh …) intentionally outlives the
-    // program it ran, so what blocks a rerun is the program's own lifetime
-    // — watched by the Toolhelp32 poll — not the shell's.
-    const bool runningForRerun =
-        runnerAlive || (terminalAlive && terminalProgramRunning_);
+    // program it ran, so what blocks a rerun is the program's own lifetime —
+    // the pid the Toolhelp32 poll pinned it to, which keeps answering after
+    // the shell is gone. Reading the shell instead is how the Run action came
+    // back on while the program was still holding the executable (R2-19).
+    const bool runningForRerun = runnerAlive || terminalProgramRunning_;
     const bool running = runnerAlive || terminalAlive;
     const bool debugging = debugger_ != nullptr && debugger_->isRunning();
     if (actCompile_)    actCompile_->setEnabled(!building);

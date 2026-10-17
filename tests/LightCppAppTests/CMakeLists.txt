@@ -36,6 +36,7 @@ add_executable(LightCppAppTests
     LspResponseTests.cpp
     MsvcNamesTests.cpp
     ProcessShutdownTests.cpp
+    ProcessTreeTests.cpp
     TerminalLaunchTests.cpp
     TextColumnsTests.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CodeFormatter.cpp
@@ -49,6 +50,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/LspResponse.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/MsvcNames.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessShutdown.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessTree.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TerminalLaunch.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TextColumns.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CodeFormatter.hpp
@@ -62,6 +64,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/LspResponse.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/MsvcNames.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ProcessShutdown.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ProcessTree.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/TerminalLaunch.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/TextColumns.hpp
 )
