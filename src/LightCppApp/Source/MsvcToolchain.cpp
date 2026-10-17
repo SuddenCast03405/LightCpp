@@ -7,6 +7,8 @@
 
 #include "LightCpp/App/MsvcToolchain.hpp"
 
+#include "LightCpp/App/MsvcNames.hpp"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -108,6 +110,27 @@ QString capture(const QString& program, const QStringList& args)
     return QString::fromUtf8(process.readAllStandardOutput());
 }
 
+/// The installer's own record of where 32-bit programs live. Read instead of
+/// assumed because the environment variable can be missing (a stripped
+/// environment, a process that inherited nothing), and because the directory
+/// is relocatable: neither "C:" nor "next to Windows" is a given.
+QString programFilesDirX86FromRegistry()
+{
+    const QStringList keys = {
+        QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion"),
+        QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion"),
+    };
+    for (const QString& key : keys) {
+        const QSettings settings(key, QSettings::NativeFormat);
+        const QString value =
+            settings.value(QStringLiteral("ProgramFilesDir (x86)")).toString();
+        if (!value.isEmpty()) {
+            return value;
+        }
+    }
+    return {};
+}
+
 /// Visual Studio 2017 and later, straight from the installer's own locator.
 ///
 /// vswhere is preferred over the registry because it also reports preview
@@ -115,10 +138,17 @@ QString capture(const QString& program, const QStringList& args)
 /// up here, and only when -prerelease is passed.
 QList<Candidate> rootsFromVswhere()
 {
-    QString vswhere = QDir(qEnvironmentVariable("ProgramFiles(x86)"))
-                          .filePath(QStringLiteral("Microsoft Visual Studio/Installer/vswhere.exe"));
-    if (!QFileInfo(vswhere).isFile()) {
-        vswhere = QStringLiteral("C:/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe");
+    // R2-57: this used to fall back to a hard-coded "C:/Program Files (x86)".
+    // On a machine whose Windows is elsewhere — or whose 32-bit programs are —
+    // that fallback cannot find vswhere at all, so an installed Visual Studio
+    // was reported as "No Visual Studio installation was found".
+    const QString programsX86 = LightCpp::App::MsvcNames::programFilesX86From(
+        qEnvironmentVariable("ProgramFiles(x86)"),
+        programFilesDirX86FromRegistry(), qEnvironmentVariable("SystemDrive"));
+    QString vswhere;
+    if (!programsX86.isEmpty()) {
+        vswhere = QDir(programsX86).filePath(
+            QStringLiteral("Microsoft Visual Studio/Installer/vswhere.exe"));
     }
     if (!QFileInfo(vswhere).isFile()) {
         return {};
@@ -208,12 +238,6 @@ constexpr std::array<LegacyLayout, 3> kLegacyLayouts{{
     {"Bin", "Include", "Lib"},                       // Visual C++ 6.0
 }};
 
-/// Render a score back into a version, e.g. 17000 -> "17.0".
-QString versionFromScore(int score)
-{
-    return QStringLiteral("%1.%2").arg(score / 1000).arg(score % 1000);
-}
-
 /// `arch` receives "x64" or "x86" so the Windows SDK lookup can match.
 Msvc::Toolchain resolve(const Candidate& candidate, QString* arch)
 {
@@ -254,13 +278,18 @@ Msvc::Toolchain resolve(const Candidate& candidate, QString* arch)
             if (parts.size() > 1) {
                 toolchain.clMinor = parts.at(1).toInt();
             }
-            const QString product = QStringLiteral("Visual Studio %1")
-                                        .arg(versionFromScore(candidate.score));
+            const QString product =
+                LightCpp::App::MsvcNames::productName(candidate.score);
+            // `product` already carries the installer's own version in
+            // parentheses, so the surroundings use a dash rather than a second
+            // pair — "(Visual Studio 2022 (17.10), toolset …)" is not a label
+            // anyone can parse at a glance.
             toolchain.label = toolchain.clMinor > 0
-                    ? QStringLiteral("MSVC 19.%1 (%2, toolset %3)")
+                    ? QStringLiteral("MSVC 19.%1 \u2014 %2, toolset %3")
                           .arg(toolchain.clMinor)
                           .arg(product, toolsetName)
-                    : QStringLiteral("MSVC (%1, toolset %2)").arg(product, toolsetName);
+                    : QStringLiteral("MSVC \u2014 %1, toolset %2")
+                          .arg(product, toolsetName);
             return toolchain;
         }
     }
@@ -279,8 +308,9 @@ Msvc::Toolchain resolve(const Candidate& candidate, QString* arch)
                     ? QStringLiteral("x64")
                     : QStringLiteral("x86");
         toolchain.clMinor = 0;  // not derivable from the layout alone
-        toolchain.label = QStringLiteral("MSVC (Visual Studio %1)")
-                              .arg(versionFromScore(candidate.score));
+        toolchain.label = QStringLiteral("MSVC (%1)")
+                              .arg(LightCpp::App::MsvcNames::productName(
+                                  candidate.score));
         return toolchain;
     }
 

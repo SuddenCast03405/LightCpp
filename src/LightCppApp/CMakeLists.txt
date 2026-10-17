@@ -15,6 +15,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/FindScan.hpp
     Include/LightCpp/App/GitClient.hpp
     Include/LightCpp/App/GitCommandPolicy.hpp
+    Include/LightCpp/App/MsvcNames.hpp
     Include/LightCpp/App/LanguageServerClient.hpp
     Include/LightCpp/App/LibClangCompleter.hpp
     Include/LightCpp/App/LspLocationsDialog.hpp
@@ -41,6 +42,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/FindScan.cpp
     Source/GitClient.cpp
     Source/GitCommandPolicy.cpp
+    Source/MsvcNames.cpp
     Source/LanguageServerClient.cpp
     Source/LibClangCompleter.cpp
     Source/LspLocationsDialog.cpp
