@@ -1,5 +1,8 @@
 #include "LightCpp/App/ProcessShutdown.hpp"
 
+#include <memory>
+#include <utility>
+
 namespace LightCpp::App {
 
 ProcessShutdownReport stopProcesses(
@@ -41,6 +44,31 @@ ProcessShutdownReport stopProcesses(
     }
 
     return report;
+}
+
+void killAfterGrace(const StoppableProcess& process, int delayMs,
+                    const DelayedScheduler& scheduler)
+{
+    if (!scheduler) {
+        // No event loop to come back to: kill now rather than leave a child
+        // behind that nobody will ever reap.
+        if (process.isRunning && process.isRunning() && process.kill) {
+            process.kill();
+        }
+        return;
+    }
+    // Shared so the guard survives as long as the callback does; a single-shot
+    // timer is what the caller passes, but nothing here trusts that.
+    auto fired = std::make_shared<bool>(false);
+    scheduler(delayMs, [process, fired] {
+        if (*fired) {
+            return;
+        }
+        *fired = true;
+        if (process.isRunning && process.isRunning() && process.kill) {
+            process.kill();
+        }
+    });
 }
 
 }  // namespace LightCpp::App

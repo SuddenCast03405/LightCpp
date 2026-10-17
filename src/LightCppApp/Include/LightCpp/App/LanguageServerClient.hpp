@@ -152,6 +152,12 @@ public:
 
     /// Graceful shutdown: LSP "shutdown" request + "exit" notification,
     /// then kill the process if it does not exit on its own.
+    ///
+    /// Returns without waiting for the server (R2-25). The kill is scheduled
+    /// on the event loop, so ticking Syntax Check off or switching Kit no
+    /// longer freezes the window for the time an indexing clangd takes to
+    /// leave. A new start() may follow immediately; the two briefly overlap.
+    /// Only the destructor waits, and only 100 ms.
     void stop();
 
     [[nodiscard]] bool isRunning() const;

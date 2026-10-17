@@ -3,6 +3,7 @@
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/CompileDatabase.hpp"
 #include "LightCpp/App/LspResponse.hpp"
+#include "LightCpp/App/ProcessShutdown.hpp"
 
 #include <cstring>
 #include <utility>
@@ -15,11 +16,19 @@
 #include <QJsonObject>
 #include <QProcessEnvironment>
 #include <QSet>
+#include <QTimer>
 #include <QUrl>
 
 namespace LightCpp::App {
 
 namespace {
+
+/// How long a language server gets to leave on its own after being asked
+/// (shutdown + exit) before the event loop kills it. Long enough for a normal
+/// exit, short enough that a wedged clangd is not left indexing in the
+/// background — and it costs nothing on the GUI thread, because the kill is
+/// scheduled rather than waited for (R2-25).
+constexpr int kExitGraceMs = 500;
 
 /// Parse the "range" object of a diagnostic into start/end positions.
 struct LspRange {
@@ -233,7 +242,19 @@ LanguageServerClient::LanguageServerClient(const QString& serverPath,
 
 LanguageServerClient::~LanguageServerClient()
 {
-    stop();
+    QProcess* proc = process_;
+    stop();  // asks it to leave and schedules the kill; does not wait
+    // Teardown has no event loop left to run that kill, and the mechanism that
+    // would have waited is gone with it — so make sure the process is gone
+    // here. The bound is deliberately short: this is the path the window takes
+    // when it closes, and the 2 s it used to spend here (1.5 + 0.5) was most of
+    // what made closing feel stuck (R2-25). Whatever is still alive after this
+    // is killed by QProcess' own destructor, which does kill (measured in
+    // R2-26).
+    if (proc != nullptr && proc->state() != QProcess::NotRunning) {
+        proc->kill();
+        proc->waitForFinished(100);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -461,12 +482,11 @@ void LanguageServerClient::stop()
     // run by whatever handshake happens next.
     readyGate_.drop();
 
-    // Disconnect all our signal handlers first. waitForFinished() spins
-    // a local event loop, which can deliver queued signals (finished,
-    // aboutToClose, readyReadStandardOutput) to the lambdas below; those
-    // lambdas used to access `process_` which we are about to null out.
-    // disconnect(this) breaks every signal→this connection owned by the
-    // process, so no lambda can fire while we tear the process down.
+    // Disconnect all our signal handlers first, and before anything can run
+    // an event loop: the lambdas below read `process_`, which is nulled out
+    // further down, and the process outlives this detach (its kill is
+    // scheduled). disconnect(this) breaks every signal→this connection the
+    // process owns, so none of them can fire into a half-torn-down client.
     process_->disconnect(this);
 
     // LSP shutdown: request "shutdown", then notification "exit".
@@ -480,19 +500,32 @@ void LanguageServerClient::stop()
     QProcess* proc = process_;
     process_ = nullptr;  // detach so the finished() lambda (if it slips in
                          // despite the disconnect) is a no-op via sender()
-    if (!proc->waitForFinished(1500)) {
-        proc->kill();
-        proc->waitForFinished(500);
+    // R2-25: no waitForFinished() on this thread. clangd can take a second or
+    // more to leave while it is indexing, and waiting for it froze the window
+    // on every Kit switch, on ticking Syntax Check off, and on closing. It has
+    // already been asked to leave (shutdown + exit above); if it is still there
+    // in half a second, the kill comes from the event loop.
+    LightCpp::App::killAfterGrace(
+        LightCpp::App::StoppableProcess{
+            [proc] { return proc->state() != QProcess::NotRunning; },
+            [proc] { proc->kill(); },
+            [](int) {}},
+        kExitGraceMs, [proc](int delayMs, std::function<void()> callback) {
+            // The process is the timer's context object, so a server that
+            // exits first takes the pending kill with it — the callback can
+            // never land on a deleted QProcess.
+            QTimer::singleShot(delayMs, proc, [callback] { callback(); });
+        });
+    // Whichever comes first deletes it: normally the process ending, whether
+    // by its own exit or by that kill.
+    QObject::connect(proc,
+                     QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                     proc, &QObject::deleteLater);
+    if (proc->state() == QProcess::NotRunning) {
+        // It never started (FailedToStart) or is already gone: no signal will
+        // come, and an unparented-looking QProcess must not linger.
+        proc->deleteLater();
     }
-    // The process is already gone — waitForFinished above either reaped it or
-    // killed it and reaped that. deleteLater() would be the usual idiom, but
-    // the deletion is only performed by the event loop, and stop() is also
-    // called on the way out of the window, when there is no event loop left to
-    // run it: the QProcess would then outlive its owner and Qt would abort
-    // during destruction with "called object is not of the correct type".
-    // Deleting directly is safe precisely because nothing can still be
-    // connected to it (disconnect(this) above) and it has already exited.
-    delete proc;
     documentVersions_.clear();
     completionRequests_.clear();
     definitionRequests_.clear();

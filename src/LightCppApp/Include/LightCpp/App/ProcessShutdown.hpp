@@ -49,4 +49,26 @@ struct StoppableProcess {
 [[nodiscard]] ProcessShutdownReport stopProcesses(
     const std::vector<StoppableProcess>& processes, int timeoutMs);
 
+/// "Run this callback after `delayMs`" — the caller's event loop, passed in so
+/// the policy below does not need a QTimer, and so a test can drive the timer
+/// by hand instead of sleeping.
+using DelayedScheduler = std::function<void(int delayMs, std::function<void()>)>;
+
+/// Kill `process` if it is still running once `delayMs` has passed — and do
+/// nothing now.
+///
+/// This is the non-blocking half of stopping a child, for the callers that must
+/// not wait: a language server asked to shut down during an index takes a
+/// second or more to leave, and blocking the GUI thread on it froze the window
+/// on every Kit switch, on ticking Syntax Check off, and on closing (R2-25).
+///
+/// The process is told to leave by the caller, before this is called; all this
+/// adds is "and if it is still there later, end it". The kill is issued from
+/// the callback, so the caller's own thread is free in between; a process that
+/// exits on its own in that window is left alone.
+///
+/// The callback runs at most once, however many times the scheduler misbehaves.
+void killAfterGrace(const StoppableProcess& process, int delayMs,
+                    const DelayedScheduler& scheduler);
+
 }  // namespace LightCpp::App

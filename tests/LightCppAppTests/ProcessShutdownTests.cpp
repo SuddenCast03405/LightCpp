@@ -19,9 +19,12 @@
 
 #include <gtest/gtest.h>
 
+#include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
+using LightCpp::App::killAfterGrace;
 using LightCpp::App::ProcessShutdownReport;
 using LightCpp::App::StoppableProcess;
 using LightCpp::App::stopProcesses;
@@ -239,4 +242,102 @@ TEST(ProcessShutdown, AnEmptySetIsANoOp)
     EXPECT_EQ(report.running, 0);
     EXPECT_EQ(report.killed, 0);
     EXPECT_EQ(report.stuck, 0);
+}
+
+// ---------------------------------------------------------------------------
+// killAfterGrace — the half of stopping a child that must not wait (R2-25).
+//
+// A language server asked to leave during an index takes a second or more; the
+// GUI thread cannot spend that. So the kill is handed to the event loop, and
+// the assertion that matters is *when* it is issued: not during the call.
+// The scheduler below stands in for that event loop and is driven by hand —
+// no sleeping, no timers, no child process.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Records what was scheduled, so a test can fire it when it likes.
+struct FakeScheduler {
+    int delay = -1;
+    std::function<void()> callback;
+
+    LightCpp::App::DelayedScheduler handle()
+    {
+        return [this](int delayMs, std::function<void()> fire) {
+            delay = delayMs;
+            callback = std::move(fire);
+        };
+    }
+};
+
+}  // namespace
+
+TEST(KillAfterGrace, NothingIsKilledDuringTheCall)
+{
+    CallLog log;
+    FakeProcess server{"clangd", /*running=*/true, false, &log};
+    FakeScheduler scheduler;
+
+    killAfterGrace(server.handle(), 500, scheduler.handle());
+
+    // The process was asked to leave by its caller; this side only arranges
+    // what happens if it does not. Killing now would be the block this replaces.
+    EXPECT_TRUE(log.empty()) << joined(log);
+    EXPECT_EQ(scheduler.delay, 500);
+    EXPECT_NE(scheduler.callback, nullptr);
+}
+
+TEST(KillAfterGrace, TheKillHappensWhenTheGraceIsUp)
+{
+    CallLog log;
+    FakeProcess server{"clangd", true, false, &log};
+    FakeScheduler scheduler;
+
+    killAfterGrace(server.handle(), 500, scheduler.handle());
+    ASSERT_TRUE(scheduler.callback != nullptr);
+    // Nothing yet: the grace is the point, and killing early is what the old
+    // code did by waiting for the exit instead.
+    EXPECT_TRUE(log.empty()) << joined(log);
+    scheduler.callback();
+
+    EXPECT_EQ(log, (CallLog{"kill:clangd"}));
+}
+
+TEST(KillAfterGrace, AServerThatLeftOnItsOwnIsNotKilled)
+{
+    CallLog log;
+    FakeProcess server{"clangd", true, false, &log};
+    FakeScheduler scheduler;
+
+    killAfterGrace(server.handle(), 500, scheduler.handle());
+    server.running = false;  // exited while the grace was running
+    scheduler.callback();
+
+    EXPECT_TRUE(log.empty()) << joined(log);
+}
+
+TEST(KillAfterGrace, FiringTwiceKillsOnce)
+{
+    CallLog log;
+    FakeProcess server{"clangd", /*running=*/true, /*stubborn=*/true, &log};
+    FakeScheduler scheduler;
+
+    killAfterGrace(server.handle(), 500, scheduler.handle());
+    scheduler.callback();
+    scheduler.callback();
+
+    // A repeated timeout must not send a second kill at whatever the first one
+    // left behind.
+    EXPECT_EQ(log, (CallLog{"kill:clangd"}));
+}
+
+TEST(KillAfterGrace, WithoutAnEventLoopTheChildIsNotLeftBehind)
+{
+    CallLog log;
+    FakeProcess server{"clangd", true, false, &log};
+
+    // No scheduler = nothing will ever come back to do it.
+    killAfterGrace(server.handle(), 500, {});
+
+    EXPECT_EQ(log, (CallLog{"kill:clangd"}));
 }
