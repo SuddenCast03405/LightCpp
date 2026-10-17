@@ -6447,14 +6447,18 @@ QProcess* MainWindow::ensureTerminalRunner()
         connect(terminalRunner_, &QProcess::readyReadStandardOutput, this,
                 [this] {
             if (terminalRunner_ == nullptr) return;
-            // Raw: no decode probes, no line reassembly. The bytes are only
-            // converted from the console's code page (what cmd writes, and
-            // what programs built for console modes emit) and appended as
-            // they arrived — a trailing "D:\>" prompt without a newline
-            // stays visible, exactly like in a real console.
-            outputPanel_->appendTerminalOutput(
-                QString::fromLocal8Bit(
-                    terminalRunner_->readAllStandardOutput()));
+            // Streaming decode, not a raw fromLocal8Bit per chunk (R2-41):
+            // the probe decides UTF-8 vs local code page per line, and the
+            // bytes at the seam are held back when they are the front of a
+            // character — the panel otherwise decoded half a character as
+            // itself and printed the replacement glyph. What a shell does
+            // NOT wait for is a newline: a prompt has none for minutes, so
+            // an unterminated tail goes out with this chunk.
+            const QString text = terminalStreamDecoder_.decode(
+                terminalRunner_->readAllStandardOutput());
+            if (!text.isEmpty()) {
+                outputPanel_->appendTerminalOutput(text);
+            }
         });
         connect(terminalRunner_, &QProcess::started, this, [this] {
             outputPanel_->setTerminalInputEnabled(true);
@@ -6472,6 +6476,13 @@ QProcess* MainWindow::ensureTerminalRunner()
         connect(terminalRunner_,
                 QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
                 this, [this](int code, QProcess::ExitStatus status) {
+            // Whatever the seam was still holding — a character whose
+            // continuation never arrived, which is what a program killed
+            // mid-character leaves behind.
+            const QString tail = terminalStreamDecoder_.flush();
+            if (!tail.isEmpty()) {
+                outputPanel_->appendTerminalOutput(tail);
+            }
             outputPanel_->appendTerminalOutput(
                 status == QProcess::NormalExit
                     ? tr("--- Terminal exited with code %1 ---\n").arg(code)

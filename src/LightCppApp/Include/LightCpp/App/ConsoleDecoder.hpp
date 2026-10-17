@@ -37,4 +37,36 @@ private:
     bool pendingCarriageReturn_ = false;
 };
 
+/// The same probe, for a stream whose lines do not end.
+///
+/// An interactive terminal is the case ConsoleDecoder cannot serve: its
+/// prompt ("D:\>") has no newline for minutes, and holding output back
+/// until a terminator appears would make the terminal look dead — so the
+/// embedded terminal bypassed the decoder entirely and ran every chunk
+/// through `QString::fromLocal8Bit`. That traded one defect for two
+/// (R2-41): bytes arrived in whatever chunk the pipe happened to deliver,
+/// so a multi-byte character cut at the seam was decoded twice, once per
+/// half; and nothing probed for UTF-8, so on a GBK machine a program that
+/// speaks UTF-8 printed mojibake.
+///
+/// This decoder keeps the probe and the line folding and changes one thing:
+/// a chunk is emitted as soon as it can be decoded, holding back only the
+/// bytes at its very end that could be the front of a character whose
+/// continuation has not arrived. A prompt appears as it is typed; a split
+/// character is still one character.
+class ConsoleStreamDecoder {
+public:
+    /// Decode one chunk, returning everything decodable now — including a
+    /// trailing line that has not been terminated yet. Empty only when the
+    /// whole chunk was half a character (plus whatever was held before).
+    QString decode(const QByteArray& chunk);
+    /// Decode the bytes held back at the seam, end of output.
+    QString flush();
+
+private:
+    /// The 0..3 bytes at the very end that may start a character.
+    QByteArray pending_;
+    bool pendingCarriageReturn_ = false;
+};
+
 }  // namespace LightCpp::App

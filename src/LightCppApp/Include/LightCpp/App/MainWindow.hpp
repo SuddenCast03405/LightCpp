@@ -925,6 +925,11 @@ private:
     LightCpp::App::ConsoleDecoder buildDecoder_;
     LightCpp::App::ConsoleDecoder projectBuildDecoder_;
     LightCpp::App::ConsoleDecoder runDecoder_;
+    /// The embedded terminal gets the streaming variant: its lines do not end
+    /// (a prompt has no newline for minutes), so the line decoder's "wait for
+    /// the terminator" would make the terminal look dead — but decoding each
+    /// chunk raw would cut multi-byte characters at the seam (R2-41).
+    LightCpp::App::ConsoleStreamDecoder terminalStreamDecoder_;
     /// preferences.run.output — "program" (default), "consolePauser", or
     /// the id of a terminal from the editable list.
     QString programOutputMode_ = QStringLiteral("program");
