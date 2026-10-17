@@ -55,6 +55,21 @@ enum class TextEncoding : std::uint8_t {
 /// (unavailable on some builds/platforms; see decodeToQString).
 [[nodiscard]] bool isLegacyCodec(TextEncoding encoding) noexcept;
 
+/// Whether saving a buffer in `encoding` must write a byte-order mark.
+///
+/// UTF-16/32 always do: without one, reopening has to guess endianness.
+///
+/// UTF-8 follows the file it was loaded from. A UTF-8 BOM is not decoration —
+/// other tools act on it (MSVC picks its code page from it, and without one
+/// falls back to the ANSI code page, so Chinese comments come back as C4819
+/// and mojibake). Dropping it on save silently changes how the file is read
+/// everywhere else. The other direction matters too: a file that had no BOM
+/// must not gain one, or the first line of every such file shows up as
+/// modified in a diff.
+///
+/// Legacy code pages never take a BOM.
+[[nodiscard]] bool bomOnSave(TextEncoding encoding, bool sourceHadBom) noexcept;
+
 /// Parse an encoding name (case-insensitive, '-'/'_' ignored).
 /// Returns nullopt for unknown names.
 [[nodiscard]] std::optional<TextEncoding> fromName(QByteArrayView name);

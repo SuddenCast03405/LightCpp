@@ -3086,12 +3086,12 @@ std::optional<QByteArray> MainWindow::encodedSavePayload(CodeEditor* ed)
     const LT::TextEncoding encoding =
         parsed.value_or(LT::TextEncoding::Utf8);
 
-    // UTF-16/32 files get a BOM so detection on reopen is unambiguous;
-    // UTF-8 stays BOM-less as before.
-    const bool addBom = encoding == LT::TextEncoding::Utf16Le
-                        || encoding == LT::TextEncoding::Utf16Be
-                        || encoding == LT::TextEncoding::Utf32Le
-                        || encoding == LT::TextEncoding::Utf32Be;
+    // UTF-16/32 always get a BOM so detection on reopen is unambiguous;
+    // UTF-8 keeps whatever the file on disk had — a BOM is a signal other
+    // tools act on (MSVC picks its code page from it; without one Chinese
+    // comments fail to compile as C4819), and a file that had none must not
+    // silently gain one. The rule itself lives in Text::bomOnSave().
+    const bool addBom = LT::bomOnSave(encoding, ed->property("sourceHadBom").toBool());
 
     // Newline translation happens on the text (before encoding): a byte
     // level 0x0A->0x0D0A replace would corrupt UTF-16/32 payloads.
@@ -4189,6 +4189,9 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
     // file edited by one line used to come back all-CRLF).
     editor->setProperty("detectedLineEnding",
                         QString::fromLatin1(LightCpp::Text::toString(content.lineEndings)));
+    // What to write back is a property of the file, not of the drop-down:
+    // the label only says "UTF-8", which cannot express a BOM.
+    editor->setProperty("sourceHadBom", content.hadBom);
     statusFile_->setText(path);
     updateEolCombo(editor);
     statusLanguage_->setText(languageFromSuffix(path));
@@ -4271,6 +4274,10 @@ void MainWindow::reloadWithEncoding(LightCpp::Text::TextEncoding encoding)
     setEncodingInfo(ed, toName(encoding));
     ed->setProperty("detectedLineEnding",
                     QString::fromLatin1(LightCpp::Text::toString(content.lineEndings)));
+    // Every path that reads the file also records whether it had a BOM:
+    // that flag — not the encoding drop-down, which cannot express it — is
+    // what the next save writes back (Text::bomOnSave).
+    ed->setProperty("sourceHadBom", content.hadBom);
     outputPanel_->appendBuildOutput(
         tr("Reloaded: %1  [%2]")
             .arg(ed->filePath())
@@ -4358,6 +4365,10 @@ void MainWindow::reloadEditorFromDisk(CodeEditor* ed)
     setEncodingInfo(ed, toName(content.encoding));
     ed->setProperty("detectedLineEnding",
                     QString::fromLatin1(LightCpp::Text::toString(content.lineEndings)));
+    // Every path that reads the file also records whether it had a BOM:
+    // that flag — not the encoding drop-down, which cannot express it — is
+    // what the next save writes back (Text::bomOnSave).
+    ed->setProperty("sourceHadBom", content.hadBom);
     // The file may have become writable (or read-only) outside the IDE.
     ed->setReadOnly(!QFileInfo(ed->filePath()).isWritable());
     if (lsp_->isRunning() && isCppLikeFile(ed->lintPath())

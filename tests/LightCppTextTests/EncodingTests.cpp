@@ -378,6 +378,57 @@ TEST(EncodingEncode, Utf8NoBom)
     EXPECT_EQ(encoded.value(), text.toUtf8());
 }
 
+TEST(EncodingEncode, Utf8WithBom)
+{
+    const QString text = "你好 hello";
+    const auto encoded =
+        LightCpp::Text::encodeFromQString(text, TextEncoding::Utf8, true);
+    ASSERT_TRUE(encoded.hasValue());
+    // Exactly the three BOM bytes, then the plain UTF-8 payload.
+    EXPECT_EQ(encoded.value(), QByteArray("\xEF\xBB\xBF") + text.toUtf8());
+    bool hadBom = false;
+    const auto decoded =
+        LightCpp::Text::decodeToQString(encoded.value(), TextEncoding::Utf8, true, &hadBom);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_TRUE(hadBom);
+    EXPECT_EQ(*decoded, text);
+}
+
+TEST(EncodingEncode, Utf8BomIsNotDoubledAcrossASaveCycle)
+{
+    const QString text = "中文注释 // comment";
+    const auto first = LightCpp::Text::encodeFromQString(text, TextEncoding::Utf8, true);
+    ASSERT_TRUE(first.hasValue());
+
+    // The save cycle is: strip the BOM on load, put it back on save. That
+    // must be a fixed point — a second BOM would show up as text.
+    bool hadBom = false;
+    const auto loaded =
+        LightCpp::Text::decodeToQString(first.value(), TextEncoding::Utf8, true, &hadBom);
+    ASSERT_TRUE(loaded.has_value());
+    const auto second = LightCpp::Text::encodeFromQString(*loaded, TextEncoding::Utf8, true);
+    ASSERT_TRUE(second.hasValue());
+    EXPECT_EQ(second.value(), first.value());
+    EXPECT_EQ(second.value().count(QByteArray("\xEF\xBB\xBF")), 1);
+}
+
+TEST(EncodingEncode, Utf8AsciiWithBomIsStillAThreeBytePrefix)
+{
+    // Nothing in the payload can be mistaken for the BOM on the way back in.
+    const auto encoded =
+        LightCpp::Text::encodeFromQString("int main() {}\n", TextEncoding::Utf8, true);
+    ASSERT_TRUE(encoded.hasValue());
+    EXPECT_EQ(encoded.value().left(3), QByteArray("\xEF\xBB\xBF"));
+    bool hadBom = false;
+    const auto detected = LightCpp::Text::detectEncoding(encoded.value());
+    EXPECT_EQ(detected.encoding, TextEncoding::Utf8);
+    EXPECT_TRUE(detected.hadBom);
+    const auto decoded =
+        LightCpp::Text::decodeToQString(encoded.value(), TextEncoding::Utf8, true, &hadBom);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(*decoded, QStringLiteral("int main() {}\n"));
+}
+
 TEST(EncodingEncode, Utf16LeWithBom)
 {
     const QString text = "你好 world";
@@ -399,6 +450,62 @@ TEST(EncodingEncode, Utf16BeNoBomByDefault)
         LightCpp::Text::encodeFromQString("abc", TextEncoding::Utf16Be);
     ASSERT_TRUE(encoded.hasValue());
     EXPECT_EQ(encoded.value().size(), 6);  // 3 chars * 2 bytes, no BOM
+}
+
+// --- the save path: should a BOM be written back? -------------------------------
+
+TEST(BomOnSave, Utf8KeepsWhatTheFileHad)
+{
+    // A BOM-bearing file keeps its BOM (MSVC reads the code page from it);
+    // a BOM-less file must not gain one (that would rewrite line 1 of every
+    // such file in a diff).
+    EXPECT_TRUE(LightCpp::Text::bomOnSave(TextEncoding::Utf8, true));
+    EXPECT_FALSE(LightCpp::Text::bomOnSave(TextEncoding::Utf8, false));
+}
+
+TEST(BomOnSave, Utf16AndUtf32AlwaysNeedOne)
+{
+    for (const TextEncoding encoding : {TextEncoding::Utf16Le, TextEncoding::Utf16Be,
+                                        TextEncoding::Utf32Le, TextEncoding::Utf32Be}) {
+        // Even for a file that had none: the BOM is the only thing that
+        // makes the endianness explicit on the next open.
+        EXPECT_TRUE(LightCpp::Text::bomOnSave(encoding, false));
+        EXPECT_TRUE(LightCpp::Text::bomOnSave(encoding, true));
+    }
+}
+
+TEST(BomOnSave, LegacyCodePagesNeverTakeOne)
+{
+    for (const TextEncoding encoding : {TextEncoding::Gb18030, TextEncoding::Gbk,
+                                        TextEncoding::Big5, TextEncoding::ShiftJis,
+                                        TextEncoding::EucKr, TextEncoding::Windows1252,
+                                        TextEncoding::Latin1}) {
+        EXPECT_FALSE(LightCpp::Text::bomOnSave(encoding, true));
+        EXPECT_FALSE(LightCpp::Text::bomOnSave(encoding, false));
+    }
+}
+
+TEST(BomOnSave, ThePolicyIsWhatTheEncoderActuallyWrites)
+{
+    // End to end: the flag the policy returns must be the flag the encoder
+    // acts on, and detection on the way back in must agree with it. A
+    // policy that says "yes" while the encoder ignores it is exactly the
+    // bug this pair guards against.
+    const QString text = "// 中文";
+    for (const TextEncoding encoding : {TextEncoding::Utf8, TextEncoding::Utf16Le}) {
+        for (const bool sourceHadBom : {false, true}) {
+            const bool want = LightCpp::Text::bomOnSave(encoding, sourceHadBom);
+            const auto bytes = LightCpp::Text::encodeFromQString(text, encoding, want);
+            ASSERT_TRUE(bytes.hasValue());
+            EXPECT_EQ(LightCpp::Text::detectEncoding(bytes.value()).hadBom, want);
+            bool hadBom = false;
+            const auto back =
+                LightCpp::Text::decodeToQString(bytes.value(), encoding, true, &hadBom);
+            ASSERT_TRUE(back.has_value());
+            EXPECT_EQ(hadBom, want);
+            EXPECT_EQ(*back, text);
+        }
+    }
 }
 
 TEST(EncodingEncode, Latin1)

@@ -242,6 +242,16 @@ ConvertResult encodeFromQString(const QString& text, TextEncoding encoding, bool
         if (encoder.hasError()) {
             return ConvertResult::failure(ConvertError::InvalidInput);
         }
+        // A UTF-8 BOM is written only when the caller asks for it — the
+        // decision belongs to Text::bomOnSave(), which keeps whatever the
+        // file had. Saving a BOM-bearing file without one turns the BOM
+        // into three text characters on the next load, and makes MSVC fall
+        // back to the ANSI code page (C4819 on every Chinese comment).
+        if (addBom) {
+            if (const std::optional<BomSpec> bom = bomFor(encoding)) {
+                out.prepend(bom->bytes, bom->length);
+            }
+        }
         break;
     }
     case TextEncoding::Utf16Le:

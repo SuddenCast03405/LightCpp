@@ -59,8 +59,10 @@ using ConvertResult = LightCpp::Core::Result<QByteArray, ConvertError>;
 /// of decodeToQString(). Used when saving a buffer whose tab has a
 /// non-UTF-8 encoding selected.
 ///
-/// When `addBom` is true a byte-order mark is written for the UTF-16/32
-/// encodings (never for UTF-8 — this build saves UTF-8 without BOM).
+/// When `addBom` is true a byte-order mark is written for every Unicode
+/// encoding, UTF-8 included. Callers should not decide that themselves —
+/// Text::bomOnSave() is the rule (UTF-16/32 always, UTF-8 only when the
+/// file on disk had one).
 ///
 /// Returns ConvertError::InvalidInput when the encoding cannot represent
 /// every character of `text` (no silent best-fit '?' substitution), and

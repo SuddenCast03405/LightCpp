@@ -104,6 +104,23 @@ bool isLegacyCodec(TextEncoding encoding) noexcept
     }
 }
 
+bool bomOnSave(TextEncoding encoding, bool sourceHadBom) noexcept
+{
+    switch (encoding) {
+    case TextEncoding::Utf16Le:
+    case TextEncoding::Utf16Be:
+    case TextEncoding::Utf32Le:
+    case TextEncoding::Utf32Be:
+        // The BOM is the only thing that makes the endianness explicit.
+        return true;
+    case TextEncoding::Utf8:
+        return sourceHadBom;
+    default:
+        // Legacy code pages have no BOM; Binary/Unknown never reach a save.
+        return false;
+    }
+}
+
 std::optional<TextEncoding> fromName(QByteArrayView name)
 {
     if (name.isEmpty()) {
