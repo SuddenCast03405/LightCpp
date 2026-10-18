@@ -11,6 +11,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QStringList>
 #include <QTemporaryDir>
 
 #include "LightCpp/Text/Encoding.hpp"
@@ -35,6 +36,17 @@ const QString kDevPath = QStringLiteral("E:/proj/hello.dev");
 std::optional<DevCppProject> parse(const char* content, QString* error = nullptr)
 {
     return parseDevProject(kDevPath, QByteArray(content), error);
+}
+
+/// Parse with a `warnings` sink. The third parameter of parseDevProject() is
+/// the whole point of the "a project that silently lost units must not look
+/// like a clean load" contract, and until these tests nothing ever passed one:
+/// the lambda that fills it was unreachable from the suite.
+std::optional<DevCppProject> parseWithWarnings(const char* content,
+                                               QStringList& warnings,
+                                               QString* error = nullptr)
+{
+    return parseDevProject(kDevPath, QByteArray(content), error, &warnings);
 }
 
 /// A Dev-C++ 5.x file the way the IDE actually writes one: everything in
@@ -225,7 +237,8 @@ TEST(DevCppProject, TemplateStyleUnitsUseCppNameAndStartAtUnitZero)
 
 TEST(DevCppProject, DuplicateUnitsAcrossBothSpellingsAreCountedOnce)
 {
-    const auto project = parse(
+    QStringList warnings;
+    const auto project = parseWithWarnings(
         "[Project]\n"
         "Name=dupes\n"
         "UnitCount=2\n"
@@ -238,12 +251,91 @@ TEST(DevCppProject, DuplicateUnitsAcrossBothSpellingsAreCountedOnce)
         "[Unit2]\n"
         "FileName=.\\util.cpp\n"
         "Compile=1\n"
-        "Link=1\n");
+        "Link=1\n",
+        warnings);
     ASSERT_TRUE(project.has_value());
     EXPECT_EQ(project->units.size(), 2);
     EXPECT_EQ(project->buildUnitPaths(),
               QStringList({QStringLiteral("E:/proj/main.cpp"),
                            QStringLiteral("E:/proj/util.cpp")}));
+    // Both spellings naming the same file is the benign case: one unit, and
+    // nothing to tell the user. A warning here would train them to ignore the
+    // ones that matter.
+    EXPECT_TRUE(warnings.isEmpty())
+        << warnings.join(QLatin1Char('\n')).toStdString();
+}
+
+TEST(DevCppProject, OneIndexNamingTwoDifferentFilesKeepsTheFirstAndSaysSo)
+{
+    // The section spelling is read first, so main.cpp is the one that stays;
+    // other.cpp disappears from the build and the user is told both names.
+    QStringList warnings;
+    const auto project = parseWithWarnings(
+        "[Project]\n"
+        "Name=dupes\n"
+        "UnitCount=1\n"
+        "Unit1=other.cpp\n"
+        "[Unit1]\n"
+        "FileName=main.cpp\n",
+        warnings);
+    ASSERT_TRUE(project.has_value());
+    EXPECT_EQ(project->buildUnitPaths(),
+              QStringList({QStringLiteral("E:/proj/main.cpp")}));
+    ASSERT_EQ(warnings.size(), 1) << warnings.join(QLatin1Char('\n')).toStdString();
+    EXPECT_TRUE(warnings.first().contains(QStringLiteral("main.cpp")));
+    EXPECT_TRUE(warnings.first().contains(QStringLiteral("other.cpp")));
+}
+
+TEST(DevCppProject, TheSameFileUnderTwoIndicesIsKeptOnceAndSaid)
+{
+    // `.\main.cpp` and `main.cpp` are one file once resolved, and a second
+    // entry for it would compile the same translation unit twice.
+    //
+    // UnitCount=1 (what survives) on purpose: with 2 the parser would also be
+    // right to report the count mismatch, and this test would then be pinning
+    // two warnings while claiming to be about one.
+    QStringList warnings;
+    const auto project = parseWithWarnings(
+        "[Project]\n"
+        "Name=dupes\n"
+        "UnitCount=1\n"
+        "[Unit0]\n"
+        "FileName=main.cpp\n"
+        "[Unit1]\n"
+        "FileName=.\\main.cpp\n",
+        warnings);
+    ASSERT_TRUE(project.has_value());
+    EXPECT_EQ(project->units.size(), 1);
+    ASSERT_EQ(warnings.size(), 1) << warnings.join(QLatin1Char('\n')).toStdString();
+    EXPECT_TRUE(warnings.first().contains(QStringLiteral("main.cpp")));
+}
+
+TEST(DevCppProject, AUnitCountThatDoesNotMatchTheUnitsIsNotACleanLoad)
+{
+    // UnitCount= is the size the IDE sized its unit table to; a hand-edited
+    // file that lost a unit still opens, but must not look clean.
+    QStringList warnings;
+    const auto project = parseWithWarnings(
+        "[Project]\n"
+        "Name=lost\n"
+        "UnitCount=5\n"
+        "[Unit0]\n"
+        "FileName=main.cpp\n",
+        warnings);
+    ASSERT_TRUE(project.has_value());
+    EXPECT_EQ(project->units.size(), 1);
+    ASSERT_EQ(warnings.size(), 1) << warnings.join(QLatin1Char('\n')).toStdString();
+    EXPECT_TRUE(warnings.first().contains(QStringLiteral("UnitCount=5")));
+}
+
+TEST(DevCppProject, ACleanProjectReportsNoWarnings)
+{
+    QStringList warnings;
+    const auto project = parseWithWarnings(kDevCpp5Project, warnings);
+    ASSERT_TRUE(project.has_value());
+    EXPECT_EQ(project->units.size(), 3);
+    EXPECT_TRUE(warnings.isEmpty())
+        << warnings.join(QLatin1Char('\n')).toStdString();
 }
 
 TEST(DevCppProject, CProjectsReadTheCompilerKey)
