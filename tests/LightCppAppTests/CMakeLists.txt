@@ -20,6 +20,14 @@
 # a run, and GitClient (R2-18) is the queue that must refuse to run git with
 # no working directory. GitClient pulls in LightCppProject for its status
 # parser; both stay Qt6::Core only.
+#
+# CppTokenScan is the half of CppSyntaxHighlighter that decides what counts as
+# a comment or a literal inside one line. It was split out for this suite's
+# sake: the highlighter itself is QtGui (QSyntaxHighlighter over QTextDocument,
+# which needs a QGuiApplication to lay text out), while the decision that kept
+# going wrong — `"http://x"`, `"/*"`, `"don't"`, `1'000'000` — is plain string
+# walking over QString. Testing it through a document would have required the
+# suite to grow a GUI application for reasons unrelated to the failure.
 
 # The header is listed next to the source on purpose: AUTOMOC only generates
 # moc_CodeFormatter.cpp for headers that belong to the target, and without it
@@ -28,6 +36,7 @@ add_executable(LightCppAppTests
     CodeFormatterTests.cpp
     CompileDatabaseTests.cpp
     ConsoleDecoderTests.cpp
+    CppTokenScanTests.cpp
     DebuggerControllerTests.cpp
     FindScanTests.cpp
     GitClientTests.cpp
@@ -42,6 +51,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CodeFormatter.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CompileDatabase.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ConsoleDecoder.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CppTokenScan.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/DebuggerController.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/FindScan.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/GitClient.cpp
@@ -56,6 +66,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CodeFormatter.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CompileDatabase.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ConsoleDecoder.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CppTokenScan.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/DebuggerController.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/FindScan.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/GitClient.hpp

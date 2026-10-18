@@ -34,15 +34,10 @@ private:
     };
     QList<Rule> rules_;
     QList<WordClass> wordClasses_;
-    /// String and char literals, applied AFTER rules_ and wordClasses_: a
-    /// later setFormat() wins, so the literal green must land last or every
-    /// keyword/number/identifier inside a string ("const char* s = "size_t
-    /// bytes";") gets repainted in the word colour.
-    QList<Rule> stringRules_;
 
-    /// TODO / FIXME / XXX / HACK markers, applied AFTER the comment rules
-    /// so they stay visible inside comments (the comments would otherwise
-    /// paint right over them — rules_ runs before the comment passes).
+    /// TODO / FIXME / XXX / HACK markers, applied AFTER the comment and
+    /// literal spans so they stay visible inside comments (the spans would
+    /// otherwise paint right over them).
     QRegularExpression todoRule_;
     QTextCharFormat todoFormat_;
 

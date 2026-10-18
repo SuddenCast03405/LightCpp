@@ -8,6 +8,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/CompletionPopup.hpp
     Include/LightCpp/App/ConsoleDecoder.hpp
     Include/LightCpp/App/CppSyntaxHighlighter.hpp
+    Include/LightCpp/App/CppTokenScan.hpp
     Include/LightCpp/App/DefaultSettings.hpp
     Include/LightCpp/App/DebuggerController.hpp
     Include/LightCpp/App/FileExplorer.hpp
@@ -38,6 +39,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/CompletionPopup.cpp
     Source/ConsoleDecoder.cpp
     Source/CppSyntaxHighlighter.cpp
+    Source/CppTokenScan.cpp
     Source/DefaultSettings.cpp
     Source/DebuggerController.cpp
     Source/FileExplorer.cpp

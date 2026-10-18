@@ -8,7 +8,15 @@
 #include <QRegularExpression>
 #include <QTextDocument>
 
+#include "LightCpp/App/CppTokenScan.hpp"
+
+namespace CppTokenScan = LightCpp::App::CppTokenScan;
+
 namespace {
+
+/// QSyntaxHighlighter carries one integer between blocks. It means "this block
+/// ends inside a /* ... */ comment".
+constexpr int kBlockCommentState = 1;
 
 /// Build "\\b(a|b|c)\\b" with the alternatives longest-first, so a prefix
 /// ("int" vs "int8_t") is never shadowed by a shorter alternative that would
@@ -140,21 +148,17 @@ CppSyntaxHighlighter::CppSyntaxHighlighter(QTextDocument* parent)
     r.format = funcFormat_;
     rules_.append(r);
 
-    // Double-quoted string and single-quoted char live in stringRules_,
-    // applied LAST so literal green wins over anything the word/number
-    // passes painted inside the literal.
-    Rule str;
-    str.pattern = QRegularExpression(QStringLiteral(R"("(?:[^"\\]|\\.)*")"));
-    str.format = stringFormat_;
-    stringRules_.append(str);
-
-    str.pattern = QRegularExpression(QStringLiteral(R"('(?:[^'\\]|\\.)*')"));
-    stringRules_.append(str);
+    // String and char literals are no longer rules: deciding where a literal
+    // ends (and whether the `/*` or `//` further along the line is really
+    // code) needs one scanner that sees the whole line in order. See
+    // CppTokenScan.hpp — the scan also tells the passes above which ranges to
+    // leave alone, which is what stops a keyword inside a literal from
+    // leaving its bold weight behind under the green.
 
     // TODO / FIXME / XXX / HACK markers. Applied separately at the END of
-    // highlightBlock (after the comment passes) so they stay orange inside
-    // comments — rules_ itself runs before the comments would paint over it.
-    // \S boundary on both sides keeps it a marker token, not part of a word.
+    // highlightBlock (after the comment and literal spans, which would
+    // otherwise paint right over them) so they stay orange inside comments.
+    // \b on both sides keeps it a marker token, not part of a word.
     todoRule_ = QRegularExpression(
         QStringLiteral(R"(\b(TODO|FIXME|XXX|HACK)\b)"));
     todoFormat_.setForeground(QColor(0xC8, 0x64, 0x00));  // dark orange
@@ -167,11 +171,29 @@ CppSyntaxHighlighter::~CppSyntaxHighlighter() = default;
 
 void CppSyntaxHighlighter::highlightBlock(const QString& text)
 {
+    // One scan answers "what is a comment, what is a literal" for the whole
+    // block; every pass below asks it before painting, so no pass can paint
+    // into a literal and leave its font weight or colour behind. Three
+    // independent passes over the same question is what made `s = "/*";`
+    // open a comment that never closed and made the `//` in `"http://x"`
+    // depend on whether some other regex happened to match the literal.
+    const CppTokenScan::Line tokens =
+        CppTokenScan::scan(text, previousBlockState() == kBlockCommentState);
+    setCurrentBlockState(tokens.endsInsideBlockComment ? kBlockCommentState : 0);
+
+    const auto paintsOverText = [&tokens](const QRegularExpressionMatch& m) {
+        return CppTokenScan::overlapsAny(tokens.spans, m.capturedStart(),
+                                         m.capturedLength());
+    };
+
     // Apply single-line rules.
     for (const auto& rule : rules_) {
         auto it = rule.pattern.globalMatch(text);
         while (it.hasNext()) {
             const QRegularExpressionMatch m = it.next();
+            if (paintsOverText(m)) {
+                continue;
+            }
             setFormat(m.capturedStart(), m.capturedLength(), rule.format);
         }
     }
@@ -182,6 +204,9 @@ void CppSyntaxHighlighter::highlightBlock(const QString& text)
         auto it = wc.pattern.globalMatch(text);
         while (it.hasNext()) {
             const QRegularExpressionMatch m = it.next();
+            if (paintsOverText(m)) {
+                continue;
+            }
             const auto format = wc.formats.constFind(m.captured());
             if (format != wc.formats.constEnd()) {
                 setFormat(m.capturedStart(), m.capturedLength(), *format);
@@ -189,67 +214,11 @@ void CppSyntaxHighlighter::highlightBlock(const QString& text)
         }
     }
 
-    // String and char literals last among the coloured passes: their green
-    // overwrites whatever the word/number/identifier rules painted inside
-    // the literal ("int", 0x41, size_t(...)).
-    for (const auto& rule : stringRules_) {
-        auto it = rule.pattern.globalMatch(text);
-        while (it.hasNext()) {
-            const QRegularExpressionMatch m = it.next();
-            setFormat(m.capturedStart(), m.capturedLength(), rule.format);
-        }
-    }
-
-    // Multi-line comment: track state across blocks.
-    setCurrentBlockState(0);
-
-    if (previousBlockState() != 1) {
-        // Not inside a block comment — look for /* ... */
-        const int idx = text.indexOf(QStringLiteral("/*"));
-        if (idx >= 0) {
-            const int end = text.indexOf(QStringLiteral("*/"), idx + 2);
-            if (end < 0) {
-                // Comment runs to end of block, continues next.
-                setFormat(idx, text.length() - idx, commentFormat_);
-                setCurrentBlockState(1);
-            } else {
-                setFormat(idx, end + 2 - idx, commentFormat_);
-            }
-        }
-    } else {
-        // We are inside a continued block comment.
-        const int end = text.indexOf(QStringLiteral("*/"));
-        if (end < 0) {
-            setFormat(0, text.length(), commentFormat_);
-            setCurrentBlockState(1);
-        } else {
-            setFormat(0, end + 2, commentFormat_);
-        }
-    }
-
-    // Single-line comment // — skipping every position inside a string or
-    // char literal, so "http://example.com" keeps its green instead of
-    // turning grey from the // in the URL onward.
-    QList<QRegularExpressionMatch> literals;
-    for (const auto& rule : stringRules_) {
-        auto litIt = rule.pattern.globalMatch(text);
-        while (litIt.hasNext()) {
-            literals.append(litIt.next());
-        }
-    }
-    const auto insideLiteral = [&literals](int pos) {
-        for (const QRegularExpressionMatch& m : literals) {
-            if (pos >= m.capturedStart() && pos < m.capturedEnd()) {
-                return true;
-            }
-        }
-        return false;
-    };
-    for (int i = 0; i < text.length() - 1; ++i) {
-        if (text[i] == u'/' && text[i + 1] == u'/' && !insideLiteral(i)) {
-            setFormat(i, text.length() - i, commentFormat_);
-            break;
-        }
+    // Comments and literals: one setFormat per span, nothing underneath it.
+    for (const CppTokenScan::Span& span : tokens.spans) {
+        setFormat(span.start, span.length,
+                  span.kind == CppTokenScan::Kind::Literal ? stringFormat_
+                                                           : commentFormat_);
     }
 
     // TODO/FIXME markers last, so they punch through the comment colours.
