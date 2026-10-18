@@ -137,11 +137,16 @@ TEST(LuaPluginHost, ExposesTheIdeApiWithDotInvocation)
     const QString path = writeScript(dir, "api.lua", R"lua(
 plugin = { name = "api" }
 function plugin.onInit()
-    ide.ui.setMenuTitle("menuFile", "文件")
-    ide.ui.setActionText("actionNew", "新建")
+    -- The shipped language pack's idiom: alias the namespace first, then call
+    -- through the alias. Both hops are Lua table reads — the members are raw
+    -- fields of the namespace table — so this has to keep working.
+    local ui = ide.ui
+    ui.setMenuTitle("menuFile", "文件")
+    ui.setActionText("actionNew", "新建")
     ide.editor.insert("/* inserted */")
     local who = ide.editor.activePath()
     ide.log("path=" .. who)
+    ide.log("title=" .. ui.menuTitle("menuFile"))
     ide.commands.register("greet", "Greet", function()
         ide.log("greeted")
     end)
@@ -155,6 +160,7 @@ end
 
     EXPECT_EQ(services.menuFileTitle, QStringLiteral("文件"));
     EXPECT_EQ(services.actionNewText, QStringLiteral("新建"));
+    EXPECT_TRUE(services.logs.contains(QStringLiteral("title=文件")));
     EXPECT_TRUE(services.editorBuffer.contains(QStringLiteral("/* inserted */")));
     EXPECT_TRUE(services.editorBuffer.contains(QStringLiteral("int main()")));
     ASSERT_EQ(services.commandIds.size(), 1);
