@@ -10,6 +10,12 @@
 #include <string>
 #include <string_view>
 
+#ifdef _WIN32
+#include <process.h>  // _getpid
+#else
+#include <unistd.h>   // getpid
+#endif
+
 namespace {
 
 namespace fs = std::filesystem;
@@ -18,12 +24,21 @@ using LightCpp::Core::Text::ReadOptions;
 using LightCpp::Core::Text::readUtf8File;
 
 /// Per-test scratch directory, cleaned up automatically.
+///
+/// The name carries the process id, and it has to: ctest runs one *process*
+/// per test (`--parallel N`), and a counter alone restarts at 1 in every one
+/// of them. Two concurrent tests would then share one directory and delete
+/// each other's files mid-test — and a `_wstat64` on a path whose directory
+/// is being removed underneath it was measured to spin inside UCRT
+/// (`common_stat_handle_file_not_opened` → `call_wfullpath`) instead of
+/// returning an error, which hung whole full-suite runs at 599/600.
 class Utf8FileTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
         dir_ = fs::temp_directory_path()
-             / ("lightcpp_test_" + std::to_string(++counter_));
+             / ("lightcpp_test_" + std::to_string(processId()) + "_"
+                + std::to_string(++counter_));
         fs::create_directories(dir_);
     }
 
@@ -49,6 +64,16 @@ protected:
     fs::path dir_;
 
 private:
+    /// This process's id, so parallel ctest runs cannot land in one directory.
+    static unsigned long processId()
+    {
+#ifdef _WIN32
+        return static_cast<unsigned long>(::_getpid());
+#else
+        return static_cast<unsigned long>(::getpid());
+#endif
+    }
+
     static int counter_;
 };
 
