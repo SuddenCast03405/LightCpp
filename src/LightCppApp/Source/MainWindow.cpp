@@ -3020,10 +3020,11 @@ void MainWindow::createStatusBar()
         eolCombo_ = new QComboBox(this);
     }
     eolCombo_->clear();
-    eolCombo_->addItems({QStringLiteral("LF"), QStringLiteral("CRLF")});
+    eolCombo_->addItems({QStringLiteral("LF"), QStringLiteral("CRLF"),
+                         QStringLiteral("CR")});
     eolCombo_->setToolTip(
         tr("Line endings of the active file. LF saves with \\n, CRLF with "
-           "\\r\\n; the choice applies when the file is saved."));
+           "\\r\\n, CR with \\r; the choice applies when the file is saved."));
     connect(eolCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onEolChanged);
 
@@ -3113,6 +3114,11 @@ std::optional<QByteArray> MainWindow::encodedSavePayload(CodeEditor* ed)
     QString text = ed->toPlainText();
     if (eol == QLatin1String("CRLF")) {
         text.replace(u'\n', QStringLiteral("\r\n"));
+    } else if (eol == QLatin1String("CR")) {
+        // Classic-Mac line endings. Without this branch a pure-CR file saved
+        // here came back as the global default (CRLF) — the file's own style
+        // was detected, shown in the combo, and then ignored.
+        text.replace(u'\n', QStringLiteral("\r"));
     }
 
     const LT::ConvertResult result = LT::encodeFromQString(text, encoding, addBom);

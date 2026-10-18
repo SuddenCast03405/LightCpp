@@ -39,6 +39,7 @@ const char* toString(LineEnding ending) noexcept
     switch (ending) {
     case LineEnding::Lf: return "LF";
     case LineEnding::CrLf: return "CRLF";
+    case LineEnding::Cr: return "CR";
     case LineEnding::None: break;
     }
     return "";
@@ -61,16 +62,24 @@ LineEnding detectLineEndings(QByteArrayView bytes, TextEncoding encoding) noexce
     default: break;
     }
 
+    // `lf` counts every 0x0A, `crlf` those that follow a 0x0D, so a bare LF is
+    // `lf - crlf`. A 0x0D that is not followed by 0x0A is a line ending of its
+    // own; ignoring it made a pure-CR file report None, and None is what sends
+    // the save path to its own default (every line ending rewritten).
     qsizetype lf = 0;
     qsizetype crlf = 0;
+    qsizetype cr = 0;
     if (stride == 1) {
         for (qsizetype i = 0; i < bytes.size(); ++i) {
-            if (bytes[i] != '\n') {
-                continue;
-            }
-            ++lf;
-            if (i > 0 && bytes[i - 1] == '\r') {
-                ++crlf;
+            if (bytes[i] == '\n') {
+                ++lf;
+                if (i > 0 && bytes[i - 1] == '\r') {
+                    ++crlf;
+                }
+            } else if (bytes[i] == '\r') {
+                if (i + 1 >= bytes.size() || bytes[i + 1] != '\n') {
+                    ++cr;
+                }
             }
         }
     } else {
@@ -91,22 +100,33 @@ LineEnding detectLineEndings(QByteArrayView bytes, TextEncoding encoding) noexce
             return value;
         };
         for (qsizetype unit = 0; unit < units; ++unit) {
-            if (codeUnit(unit) != 0x0Au) {
-                continue;
-            }
-            ++lf;
-            if (unit > 0 && codeUnit(unit - 1) == 0x0Du) {
-                ++crlf;
+            const quint32 value = codeUnit(unit);
+            if (value == 0x0Au) {
+                ++lf;
+                if (unit > 0 && codeUnit(unit - 1) == 0x0Du) {
+                    ++crlf;
+                }
+            } else if (value == 0x0Du) {
+                if (unit + 1 >= units || codeUnit(unit + 1) != 0x0Au) {
+                    ++cr;
+                }
             }
         }
     }
-    if (lf == 0) {
+    const qsizetype bareLf = lf - crlf;
+    if (bareLf == 0 && crlf == 0 && cr == 0) {
         return LineEnding::None;
     }
-    // The dominant style wins; a file that genuinely mixes gets whichever
-    // has the majority, and an exact tie goes to LF (the least destructive
-    // choice — CRLF would add a byte per line).
-    return crlf * 2 > lf ? LineEnding::CrLf : LineEnding::Lf;
+    // The dominant style wins. On a tie the one-byte styles win, LF before CR:
+    // rewriting a file to CRLF adds a byte to every line, so the least
+    // destructive answer is the safe one.
+    if (crlf > bareLf && crlf > cr) {
+        return LineEnding::CrLf;
+    }
+    if (cr > bareLf) {
+        return LineEnding::Cr;
+    }
+    return LineEnding::Lf;
 }
 
 TextFileResult readDetectedTextFile(const QString& path, const TextFileOptions& options)

@@ -36,19 +36,22 @@ enum class LineEnding {
     None,  ///< no newline at all (empty file or single line without \n)
     Lf,    ///< \n line feeds (Unix style)
     CrLf,  ///< \r\n pairs (Windows style)
+    Cr,    ///< bare \r (classic Mac style — rare, but a real file format)
 };
 
-/// Human-readable name: "LF", "CRLF" or "" for None — the exact strings
+/// Human-readable name: "LF", "CRLF", "CR" or "" for None — the exact strings
 /// the status-bar line-ending combo uses.
 [[nodiscard]] const char* toString(LineEnding ending) noexcept;
 
 /// Count the line endings in the bytes and report the dominant style.
 ///
-/// A lone \r (classic Mac, essentially extinct) is ignored. Content with no
-/// newline at all reports None, meaning "no evidence" — callers fall back to
-/// their own default rather than guessing from nothing. A tie between LF and
-/// CRLF reports Lf: rewriting to CRLF would add a byte to every line, so the
-/// less destructive answer wins.
+/// A lone \r counts as a line ending of its own: a file written by a classic
+/// Mac tool has them everywhere, and answering "None" for it meant the save
+/// path fell back to its own default and rewrote every line ending in the
+/// file. Content with no newline at all reports None, meaning "no evidence" —
+/// callers fall back to their own default rather than guessing from nothing.
+/// The majority wins; on a tie the one-byte styles win (LF before CR), because
+/// rewriting to CRLF would add a byte to every line.
 ///
 /// Pass the encoding the bytes are in. For the single-byte encodings (and
 /// Unknown, which treats them as bytes) a '\n' byte only ever appears as a

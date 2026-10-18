@@ -259,10 +259,43 @@ TEST(DetectLineEndings, MixedContentTakesTheMajority)
               LightCpp::Text::LineEnding::Lf);
 }
 
-TEST(DetectLineEndings, LoneCarriageReturnsAreIgnored)
+TEST(DetectLineEndings, PureCrFileKeepsItsStyle)
 {
+    // Used to answer None ("no evidence"), and None is what makes the save
+    // path fall back to the global default — so opening a classic-Mac file and
+    // pressing Ctrl+S rewrote every line ending in it. A lone \r is a line
+    // ending; count it.
     EXPECT_EQ(LightCpp::Text::detectLineEndings(QByteArray("a\rb\rc")),
-              LightCpp::Text::LineEnding::None);
+              LightCpp::Text::LineEnding::Cr);
+    // A trailing CR (no text after it) is still one line ending.
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(QByteArray("a\r")),
+              LightCpp::Text::LineEnding::Cr);
+}
+
+TEST(DetectLineEndings, CarriageReturnCountsOnlyWhenNotFollowedByLineFeed)
+{
+    // "a\rb\r\nc\r" is 2 bare CR + 1 CRLF: the CR of a CRLF pair must not be
+    // counted twice, or every Windows file would look like it had double the
+    // line endings it has.
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(QByteArray("a\rb\r\nc\r")),
+              LightCpp::Text::LineEnding::Cr);
+}
+
+TEST(DetectLineEndings, CrLosesToLfOnATie)
+{
+    // 2 bare LF vs 2 bare CR: the one-byte styles tie, and LF is the safer
+    // answer (both are one byte, but LF is what every other tool expects).
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(QByteArray("a\nb\nc\rd\re")),
+              LightCpp::Text::LineEnding::Lf);
+}
+
+TEST(DetectLineEndings, CrBeatsCrLfOnATie)
+{
+    // 2 CR vs 2 CRLF: prefer the one-byte style rather than adding a byte to
+    // every line.
+    EXPECT_EQ(LightCpp::Text::detectLineEndings(
+                  QByteArray("a\rb\rc\r\nd\r\n")),
+              LightCpp::Text::LineEnding::Cr);
 }
 
 TEST(DetectLineEndings, Utf16LeCrLfIsCrLf)
@@ -341,6 +374,14 @@ TEST_F(TextFileTest, ReadReportsLineEndingStyle)
         writeFile("single.txt", QByteArray("no newline")));
     ASSERT_TRUE(none.hasValue());
     EXPECT_EQ(none.value().lineEndings, LightCpp::Text::LineEnding::None);
+
+    const TextFileResult cr = readDetectedTextFile(
+        writeFile("lines_cr.txt", QByteArray("a\rb\r")));
+    ASSERT_TRUE(cr.hasValue());
+    EXPECT_EQ(cr.value().lineEndings, LightCpp::Text::LineEnding::Cr);
+    // The decoded text is normalised to LF by QTextDocument, so the ending
+    // style only survives if the read reports it — which is the whole point.
+    EXPECT_EQ(cr.value().utf8, QByteArray("a\rb\r"));
 }
 
 TEST(DetectLineEndings, NamesMatchTheStatusBarCombo)
@@ -349,6 +390,8 @@ TEST(DetectLineEndings, NamesMatchTheStatusBarCombo)
                  "LF");
     EXPECT_STREQ(LightCpp::Text::toString(LightCpp::Text::LineEnding::CrLf),
                  "CRLF");
+    EXPECT_STREQ(LightCpp::Text::toString(LightCpp::Text::LineEnding::Cr),
+                 "CR");
     EXPECT_STREQ(LightCpp::Text::toString(LightCpp::Text::LineEnding::None),
                  "");
 }
