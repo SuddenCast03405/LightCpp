@@ -23,7 +23,10 @@ Six static logic libraries plus the Qt application layer:
 | `src/LightCppLua/` | Sandboxed Lua 5.4 plugin host (`ide` API via hand-written C closures) |
 | `src/LightCppApp/` | Qt Widgets application layer (MainWindow, editors, panels, dialogs) |
 
-Each logic library has a GTest suite under `tests/` (CTest, 333 tests).
+Each logic library has a GTest suite under `tests/`, registered with CTest —
+`ctest --preset msys2-ucrt64` prints the current count (593 cases on
+2026-10-18). The number is deliberately not repeated here as a fact: it changes
+with every batch, and a stale count in a README is worse than no count.
 
 ## Module: LightCpp::Core::Text (UTF-8)
 
@@ -68,14 +71,22 @@ Design notes (spec compliance):
 ```bash
 E:/msys64/ucrt64/bin/cmake.exe --preset msys2-ucrt64
 E:/msys64/ucrt64/bin/cmake.exe --build --preset msys2-ucrt64
-E:/msys64/ucrt64/bin/ctest.exe  --preset msys2-ucrt64      # 333 tests, all passing
+E:/msys64/ucrt64/bin/ctest.exe  --preset msys2-ucrt64      # every suite; prints the count
 ```
 
-Or use the helper script (it puts the toolchain on `PATH` first):
+Or use the helper script (it puts the toolchain on `PATH` first, and runs at
+`BelowNormal` priority so a full build does not take the desktop with it):
 
 ```powershell
-powershell -File build_msys2.ps1 -Test
+powershell -File build_msys2.ps1 -Test                              # build + all suites
+powershell -File build_msys2.ps1 -Test -Target LightCppTextTests -Tests 'TextFileTest'
+powershell -File build_msys2.ps1 -FullSpeed                          # do not lower priority
 ```
+
+`-Jobs` (default 2) feeds both `cmake --build --parallel` and `ctest --parallel`;
+`-Tests` is a **ctest** regex, so alternatives are separated with `|`, not with
+gtest's `:` — a filter that matches nothing now fails (`--no-tests=error`)
+instead of reporting a green run over zero tests.
 
 Notes:
 - GoogleTest 1.14.0 is vendored in `third_party/` and handed to CPM via

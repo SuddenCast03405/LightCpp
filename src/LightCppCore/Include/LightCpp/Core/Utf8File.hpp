@@ -119,6 +119,14 @@ struct ReadOptions {
 /// The file is opened with binary flags; no newline translation is performed.
 /// `options.maxBytes == 0` means "no limit".
 ///
+/// This is NOT the IDE's file-loading path: the editor reads through
+/// `LightCpp::Text::readDetectedTextFile()`, which detects the encoding
+/// (UTF-8/16/32, GBK, Big5, Shift-JIS, GB18030) before decoding and can say
+/// whether its answer was verified or guessed. What lives here is this layer's
+/// plain UTF-8 reader — the one thing a Qt-free core can offer without an
+/// encoding policy — and its tests are what exercise the decoder end to end
+/// through a real file.
+///
 /// Thread-safety: const and safe to call from any thread; no global state.
 [[nodiscard]] ReadResult readUtf8File(
     const std::filesystem::path& path,
