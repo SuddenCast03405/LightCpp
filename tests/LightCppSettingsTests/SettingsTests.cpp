@@ -1590,3 +1590,64 @@ TEST(MergedToolchains, AnIdlessOverlayEntryDoesNotHideTheBaseOne)
     EXPECT_TRUE(merged[1].id.isEmpty());
 }
 
+// --- toolchainById: the one entry the form wants, as a copy ---------------
+//
+// The kit form needs one toolchain out of a list that is built on the fly. It
+// used to keep a `const Toolchain*` aimed at a range-for over that temporary,
+// which dangled as soon as the loop ended — opening Settings then read the
+// freed entry's `compilers` hash (0xFEEEFEEE in the crash dump). The lookup
+// returns a value so no caller can hold a pointer into a temporary again.
+//
+// None of these cases would have failed on the old pointer-taking code: Qt's
+// containers are implicitly shared, so a copy keeps the data alive and the
+// dangling read stays "lucky". They pin the *contract*; the crash itself is
+// pinned by the offscreen/qwindows probe (`_probe_settings3.cpp`).
+
+TEST(ToolchainById, FindsTheEntryWithThatIdAndItsTools)
+{
+    const QList<Toolchain> toolchains = {
+        toolchainNamed(QStringLiteral("a"), QStringLiteral("A")),
+        toolchainNamed(QStringLiteral("b"), QStringLiteral("B"))};
+    const std::optional<Toolchain> found =
+        toolchainById(toolchains, QStringLiteral("b"));
+    ASSERT_TRUE(found.has_value());
+    EXPECT_EQ(found->id, QStringLiteral("b"));
+    EXPECT_EQ(found->name, QStringLiteral("B"));
+    EXPECT_EQ(found->compilers.value(QStringLiteral("gcc")),
+              QStringLiteral("b/gcc.exe"));
+}
+
+TEST(ToolchainById, AnUnknownIdIsNullopt)
+{
+    const QList<Toolchain> toolchains = {
+        toolchainNamed(QStringLiteral("a"), QStringLiteral("A"))};
+    EXPECT_FALSE(toolchainById(toolchains, QStringLiteral("nope")).has_value());
+    EXPECT_FALSE(toolchainById({}, QStringLiteral("a")).has_value());
+}
+
+TEST(ToolchainById, AnEmptyIdDoesNotSelectTheFirstEntry)
+{
+    // "Nothing selected" must stay nothing: the combo can sit at -1 with no
+    // data, and answering with the first toolchain would show paths the user
+    // never chose.
+    const QList<Toolchain> toolchains = {
+        toolchainNamed(QStringLiteral("a"), QStringLiteral("A")),
+        toolchainNamed(QStringLiteral("b"), QStringLiteral("B"))};
+    EXPECT_FALSE(toolchainById(toolchains, QString()).has_value());
+}
+
+TEST(ToolchainById, TheCopyOutlivesTheListItCameFrom)
+{
+    // The shape of the bug: the list is a temporary, the answer is used after
+    // it is gone. A copy keeps working; a pointer into the temporary did not.
+    std::optional<Toolchain> survivor;
+    {
+        const QList<Toolchain> temporary = {
+            toolchainNamed(QStringLiteral("a"), QStringLiteral("A"))};
+        survivor = toolchainById(temporary, QStringLiteral("a"));
+    }
+    ASSERT_TRUE(survivor.has_value());
+    EXPECT_EQ(survivor->compilers.value(QStringLiteral("gcc")),
+              QStringLiteral("a/gcc.exe"));
+}
+

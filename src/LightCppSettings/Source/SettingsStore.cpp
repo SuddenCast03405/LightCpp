@@ -608,4 +608,16 @@ QList<Toolchain> mergedToolchains(const QList<Toolchain>& base,
     return out;
 }
 
+std::optional<Toolchain> toolchainById(const QList<Toolchain>& toolchains,
+                                       const QString& id)
+{
+    for (const Toolchain& toolchain : toolchains) {
+        if (toolchain.id == id) {
+            return toolchain;
+        }
+    }
+    return std::nullopt;
+}
+
 }  // namespace LightCpp::Settings
+

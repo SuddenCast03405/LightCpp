@@ -177,6 +177,10 @@ private:
     /// layer's when editing the project layer — merged the way the runtime
     /// merges them. "This layer does not define it" is not "it does not
     /// exist": a project kit inheriting a global toolchain is normal (R2-36).
+    ///
+    /// **Returns a temporary list.** A pointer taken to one of its entries is
+    /// dead as soon as the statement that produced it ends; callers that need
+    /// one entry keep a copy (`Settings::toolchainById`).
     [[nodiscard]] QList<LightCpp::Settings::Toolchain> visibleToolchains(
         Scope scope) const;
     /// Fill the Toolchain drop-down from visibleToolchains() and select

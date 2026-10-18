@@ -204,4 +204,18 @@ private:
 [[nodiscard]] QList<Toolchain> mergedToolchains(const QList<Toolchain>& base,
                                                const QList<Toolchain>& overlay);
 
+/// The toolchain with this id, **by value**, or `std::nullopt`.
+///
+/// Returns a copy rather than a pointer on purpose. Every caller reaches this
+/// through a getter that builds its list on the fly (`visibleToolchains()` is
+/// QList<Toolchain> by value), so a pointer handed back here would point into
+/// a temporary that dies before the caller is done with it — that is exactly
+/// how "open Settings" became a use-after-free (the freed Toolchain's
+/// `compilers` hash was read as 0xFEEEFEEE).
+///
+/// An empty `id` matches only an entry whose own id is empty: "no selection"
+/// must not silently become "the first toolchain".
+[[nodiscard]] std::optional<Toolchain> toolchainById(const QList<Toolchain>& toolchains,
+                                                     const QString& id);
+
 }  // namespace LightCpp::Settings

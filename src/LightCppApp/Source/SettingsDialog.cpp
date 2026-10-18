@@ -2167,17 +2167,19 @@ void SettingsDialog::saveKitToolFieldsSnapshot()
 void SettingsDialog::applyKitInheritanceDisplay()
 {
     const QString toolchainId = kitToolchainId_->currentData().toString().trimmed();
-    const Settings::Toolchain* toolchain = nullptr;
-    for (const Settings::Toolchain& candidate : visibleToolchains(currentScope_)) {
-        if (candidate.id == toolchainId) {
-            toolchain = &candidate;
-            break;
-        }
-    }
-    if (toolchain == nullptr) {
+    // Take a **copy** of the inherited toolchain, never a pointer into
+    // visibleToolchains(): that getter returns its list by value, so a pointer
+    // aimed at one of its entries dangles the moment the loop that found it
+    // ends. Reading the freed entry's `compilers` hash is what crashed the
+    // program the instant Settings opened — a use-after-free, not a null deref
+    // (the dump showed the heap's 0xFEEEFEEE fill pattern).
+    const std::optional<Settings::Toolchain> inherited =
+        Settings::toolchainById(visibleToolchains(currentScope_), toolchainId);
+    if (!inherited.has_value()) {
         // Nothing to inherit from: keep showing the kit's own values.
         return;
     }
+    const Settings::Toolchain& toolchain = *inherited;
     // Mirror SettingsStore::applyToolchainInheritance — the kit's compiler
     // family picks which toolchain compilers land in the C/C++ slots, and
     // fields the kit names itself still win, so show the kit's snapshot
@@ -2191,39 +2193,39 @@ void SettingsDialog::applyKitInheritanceDisplay()
     const QString empty;
     const QString cCompiler =
         family == QLatin1String("gcc")
-            ? toolchain->compilers.value(QStringLiteral("gcc"))
+            ? toolchain.compilers.value(QStringLiteral("gcc"))
         : family == QLatin1String("llvm")
-            ? toolchain->compilers.value(QStringLiteral("clang"))
+            ? toolchain.compilers.value(QStringLiteral("clang"))
         : family == QLatin1String("msvc")
-            ? toolchain->compilers.value(QStringLiteral("cl"))
+            ? toolchain.compilers.value(QStringLiteral("cl"))
             : empty;
     const QString cppCompiler =
         family == QLatin1String("gcc")
-            ? toolchain->compilers.value(QStringLiteral("g++"))
+            ? toolchain.compilers.value(QStringLiteral("g++"))
         : family == QLatin1String("llvm")
-            ? toolchain->compilers.value(QStringLiteral("clang++"))
+            ? toolchain.compilers.value(QStringLiteral("clang++"))
         : family == QLatin1String("msvc")
-            ? toolchain->compilers.value(QStringLiteral("cl"))
+            ? toolchain.compilers.value(QStringLiteral("cl"))
             : empty;
     QString debugger;
     if (family == QLatin1String("msvc")) {
-        debugger = toolchain->compilers.value(QStringLiteral("cdb"));
+        debugger = toolchain.compilers.value(QStringLiteral("cdb"));
     } else if (family == QLatin1String("gcc")
                || family == QLatin1String("llvm")) {
-        debugger = toolchain->compilers.value(QStringLiteral("gdb"));
+        debugger = toolchain.compilers.value(QStringLiteral("gdb"));
         if (debugger.isEmpty()) {
-            debugger = toolchain->compilers.value(QStringLiteral("lldb"));
+            debugger = toolchain.compilers.value(QStringLiteral("lldb"));
         }
     }
     show(kitCCompiler_, cCompiler);
     show(kitCppCompiler_, cppCompiler);
     show(kitDebugger_, debugger);
-    show(kitClangd_, toolchain->clangd);
-    show(kitClangFormat_, toolchain->clangFormat);
-    show(kitToolCmake_, toolchain->buildTools.value(QStringLiteral("cmake")));
-    show(kitToolNinja_, toolchain->buildTools.value(QStringLiteral("ninja")));
-    show(kitToolGnuMake_, toolchain->buildTools.value(QStringLiteral("gnuMake")));
-    show(kitToolMsbuild_, toolchain->buildTools.value(QStringLiteral("msbuild")));
+    show(kitClangd_, toolchain.clangd);
+    show(kitClangFormat_, toolchain.clangFormat);
+    show(kitToolCmake_, toolchain.buildTools.value(QStringLiteral("cmake")));
+    show(kitToolNinja_, toolchain.buildTools.value(QStringLiteral("ninja")));
+    show(kitToolGnuMake_, toolchain.buildTools.value(QStringLiteral("gnuMake")));
+    show(kitToolMsbuild_, toolchain.buildTools.value(QStringLiteral("msbuild")));
 }
 
 QString SettingsDialog::uniqueKitId(const QString& base)
