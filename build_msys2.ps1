@@ -58,18 +58,31 @@ if ($Target) {
 $buildExit = $LASTEXITCODE
 
 # The `lightcpp` target ends with a POST_BUILD windeployqt step that needs a
-# pipe this environment cannot create, so a full build always exits non-zero
-# even when every object file and every test binary was produced. Treating that
-# as fatal is how `-Test` used to end before ctest ever ran; the exit code is
-# still reported, and a real compile error shows up as a missing test binary
-# (or as failures in the run itself).
+# pipe this environment cannot create, so that one build always exits non-zero
+# even when every object file was produced. Treating it as fatal is how `-Test`
+# used to end before ctest ever ran — but treating *every* failure as benign is
+# worse: ctest does not build, so a compile error would leave ctest running the
+# previous binary and reporting its results as if they were today's. That is
+# not a hypothetical (it made a reverse-verification look red for the wrong
+# reason). So the tolerance is limited to the builds that include `lightcpp`,
+# which is the only target with the deploy step.
+$buildsTheApp = (-not $Target) -or ($Target -contains 'lightcpp')
+if ($buildExit -ne 0 -and -not $buildsTheApp) {
+    Write-Error "cmake --build exited $buildExit; not running ctest against a stale binary (see the log above)"
+    exit $buildExit
+}
 if ($buildExit -ne 0) {
-    Write-Warning "cmake --build exited $buildExit (windeployqt always fails here; see the log above for real errors)"
+    Write-Warning "cmake --build exited $buildExit (the windeployqt step always fails here; check the log above for a real compile error)"
 }
 if (-not $Test) { exit $buildExit }
 
-$ctestArgs = @('--test-dir', "$root\build\msys2-ucrt64", '--output-on-failure', '--parallel', $Jobs)
+$ctestArgs = @('--test-dir', "$root\build\msys2-ucrt64", '--output-on-failure', '--parallel', $Jobs,
+               # A filter that matches nothing is a typo, not a pass: ctest
+               # otherwise exits 0 after printing "No tests were found!!!".
+               '--no-tests=error')
 if ($Tests) {
+    # A ctest regex, not gtest's filter: separate alternatives with `|`, not
+    # with `:` — `A.*:B.*` is one regex that matches nothing at all.
     $ctestArgs += @('-R', $Tests)
 }
 & $ctest @ctestArgs
