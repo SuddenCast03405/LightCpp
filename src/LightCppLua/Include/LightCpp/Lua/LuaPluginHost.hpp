@@ -4,7 +4,13 @@
 // state (see LuaSandbox) and is adapted to the same Plugin interface the
 // C++ plugins implement, so the PluginManager treats scripts and DLLs
 // identically. The IDE's whitelisted surface is exposed as the global `ide`
-// table of hand-written C closures (upvalue = binding object):
+// namespace, registered with LuaBridge 3 from free functions on LuaBridge
+// namespaces — that is what makes the dot form below work; the colon form
+// (`ide.ui:setMenuTitle(...)`) is not supported and fails as an argument
+// error. Arguments are converted by LuaBridge, so strings and numbers are
+// both accepted where a string is expected, while a table or nil is a script
+// error. A member that does not exist reads as nil (scripts feature-detect
+// that way); writing to one raises a script error.
 //
 //   ide.log(message, ...)            write a line to the Plugins channel
 //   ide.editor.activePath()          the active tab's file path ("" if untitled)

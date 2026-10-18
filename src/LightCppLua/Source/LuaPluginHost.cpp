@@ -6,6 +6,9 @@ extern "C" {
 #include "lualib.h"
 }
 
+// After the Lua headers: LuaBridge refuses to be included before them.
+#include "LuaBridge/LuaBridge.h"
+
 #include "LightCpp/Plugin/PluginManager.hpp"
 
 #include <QDir>
@@ -22,8 +25,10 @@ namespace LightCpp::Lua {
 
 // ---------------------------------------------------------------------------
 // IDE-side binding objects. One set per script. They hold no Lua state of
-// their own; their addresses are registered as the `ide` members and must
-// stay stable for the plugin's lifetime (they live inside LuaPlugin::Impl).
+// their own, and the `ide` functions registered with LuaBridge reach them
+// through the plugin's Impl (the lambdas capture it), so they must stay put
+// for the plugin's lifetime — they live inside LuaPlugin::Impl, which is
+// heap-allocated and never moved.
 // ---------------------------------------------------------------------------
 class LogApi {
 public:
@@ -89,8 +94,10 @@ public:
     CommandApi() : services(nullptr), sandbox(nullptr), active(true) {}
     /// Register one callback — a LUA_REGISTRYINDEX reference to a Lua
     /// function — as a command. Failures are logged when triggered.
-    void registerInternal(const QString& shortcut, const QString& id,
-                          const QString& label, int callbackRef);
+    /// The strings arrive as UTF-8 from Lua and turn into QString here, the
+    /// same boundary the editor and ui objects convert at.
+    void registerInternal(const std::string& shortcut, const std::string& id,
+                          const std::string& label, int callbackRef);
     /// Run callback `index` inside the sandbox budgets; failures are logged.
     void trigger(size_t index);
 
@@ -110,7 +117,7 @@ public:
 class SnippetApi {
 public:
     SnippetApi() : services(nullptr) {}
-    void registerSnippet(const QString& id, const QString& body);
+    void registerSnippet(const std::string& id, const std::string& body);
 
     ::LightCpp::Plugin::IdeServices* services;
     QString pluginName;
@@ -205,241 +212,150 @@ public:
 };
 
 // ---------------------------------------------------------------------------
-// Registration helpers
+// The `ide` surface
+//
+// Registered with LuaBridge 3. Every member is a free function on a LuaBridge
+// namespace, which is what makes the documented dot invocation work
+// (`ide.ui.setMenuTitle(...)`). A LuaBridge *class* member would only be
+// reachable through an instance userdata's __index, i.e. as colon invocation
+// (`ide.ui:setMenuTitle(...)`); the old closures took both forms, and the
+// colon form went with them — the contract never promised it.
+//
+// Argument conversion is LuaBridge's: strings and numbers arrive as
+// std::string (LUABRIDGE_STRICT_STACK_CONVERSIONS is left at upstream's 0),
+// while a table or nil where an id belongs is a Lua error. Reading a member
+// that is not there still yields nil — the language pack probes features with
+// `type(ui.setWidgetTexts) ~= "function"` — and writing one raises a
+// catchable error instead of silently growing a field.
+//
+// Nothing here may throw a C++ exception: upstream's default configuration
+// (LUABRIDGE_SAFE_LUA_C_EXCEPTION_HANDLING is 0) lets an exception unwind
+// straight through a Lua C frame, so a rejected argument goes out through
+// raise_lua_error, which is the same longjmp path as the luaL_error it
+// replaced.
 // ---------------------------------------------------------------------------
 namespace {
 
-int luaLogClosure(lua_State* L)
+/// `ide.log(...)` — variadic, and it stringifies whatever it is handed
+/// (numbers, booleans, nil, even tables). That is the one member a typed
+/// signature cannot describe, so it reads the stack itself; LuaBridge still
+/// owns how the function is reached and how a failure is raised.
+void logArguments(::LightCpp::Plugin::IdeServices* services, lua_State* L)
 {
-    auto* api = static_cast<LogApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (api == nullptr || api->services == nullptr) {
-        return 0;
+    if (services == nullptr) {
+        return;
     }
-    const int n = lua_gettop(L);
+    const int count = lua_gettop(L);  // before the loop: luaL_tolstring pushes
     QString line;
-    for (int i = 1; i <= n; ++i) {
+    for (int i = 1; i <= count; ++i) {
         size_t length = 0;
         const char* text = luaL_tolstring(L, i, &length);
         if (i > 1) {
             line += QLatin1Char('\t');
         }
         line += QString::fromUtf8(text, static_cast<qsizetype>(length));
-        lua_pop(L, 1);  // luaL_tolstring pushed the string
+        lua_pop(L, 1);  // the string luaL_tolstring pushed
     }
-    api->services->log(line);
-    return 0;
+    services->log(line);
 }
 
-/// Reads any value as a QString (strings, numbers and booleans included).
-QString luaQStringValue(lua_State* L, int index)
+/// Keeps the callback alive as a LUA_REGISTRYINDEX reference and hands that
+/// reference to the command registry. A non-function argument is a script
+/// bug, so it is reported against the calling line rather than leaving the
+/// plugin with a command that can never fire.
+void registerCommandCallback(CommandApi& api, const char* expected,
+                             const std::string& shortcut, const std::string& id,
+                             const std::string& label,
+                             const luabridge::LuaRef& callback)
 {
-    size_t length = 0;
-    const char* text = luaL_tolstring(L, index, &length);
-    QString value = QString::fromUtf8(text, static_cast<qsizetype>(length));
-    lua_pop(L, 1);  // luaL_tolstring pushed the string
-    return value;
-}
-
-/// The ide methods support dot invocation (`ide.ui.setMenuTitle(...)`) —
-/// the documented plugin contract — and, for convenience, colon invocation
-/// (`ide.ui:setMenuTitle(...)`), where the instance table lands in slot 1
-/// and the arguments shift by one.
-int firstArg(lua_State* L)
-{
-    return lua_type(L, 1) == LUA_TTABLE ? 2 : 1;
-}
-
-/// Adds one closure carrying the binding object as its upvalue.
-void addMethod(lua_State* L, const char* name, lua_CFunction fn, void* api)
-{
-    lua_pushlightuserdata(L, api);
-    lua_pushcclosure(L, fn, 1);
-    lua_setfield(L, -2, name);
-}
-
-void pushUtf8(lua_State* L, const std::string& value)
-{
-    lua_pushlstring(L, value.data(), value.size());
-}
-
-// --- ide.editor ------------------------------------------------------------
-int editorActivePath(lua_State* L)
-{
-    auto* api = static_cast<EditorApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    pushUtf8(L, api != nullptr ? api->activePath() : std::string());
-    return 1;
-}
-
-int editorText(lua_State* L)
-{
-    auto* api = static_cast<EditorApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    pushUtf8(L, api != nullptr ? api->text() : std::string());
-    return 1;
-}
-
-int editorSetText(lua_State* L)
-{
-    auto* api = static_cast<EditorApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (api != nullptr) {
-        api->setText(luaQStringValue(L, firstArg(L)).toStdString());
+    if (!api.active || api.services == nullptr) {
+        // Unloading: no registry left to own the function, and nothing that
+        // could still be triggered.
+        return;
     }
-    return 0;
-}
-
-int editorInsert(lua_State* L)
-{
-    auto* api = static_cast<EditorApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (api != nullptr) {
-        api->insert(luaQStringValue(L, firstArg(L)).toStdString());
+    lua_State* L = callback.state();
+    if (L == nullptr || !callback.isFunction()) {
+        luabridge::raise_lua_error(L, "%s", expected);
     }
-    return 0;
+    callback.push();
+    api.registerInternal(shortcut, id, label, luaL_ref(L, LUA_REGISTRYINDEX));
 }
 
-int editorGotoLine(lua_State* L)
-{
-    auto* api = static_cast<EditorApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (api != nullptr) {
-        api->gotoLine(static_cast<int>(luaL_checkinteger(L, firstArg(L))));
-    }
-    return 0;
-}
-
-// --- ide.ui ----------------------------------------------------------------
-int uiActionText(lua_State* L)
-{
-    auto* api = static_cast<UiApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    pushUtf8(L, api != nullptr
-                    ? api->actionText(luaQStringValue(L, firstArg(L))
-                                          .toStdString())
-                    : std::string());
-    return 1;
-}
-
-int uiSetActionText(lua_State* L)
-{
-    auto* api = static_cast<UiApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (api != nullptr) {
-        const int arg = firstArg(L);
-        api->setActionText(luaQStringValue(L, arg).toStdString(),
-                           luaQStringValue(L, arg + 1).toStdString());
-    }
-    return 0;
-}
-
-int uiMenuTitle(lua_State* L)
-{
-    auto* api = static_cast<UiApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    pushUtf8(L, api != nullptr
-                    ? api->menuTitle(luaQStringValue(L, firstArg(L))
-                                         .toStdString())
-                    : std::string());
-    return 1;
-}
-
-int uiSetMenuTitle(lua_State* L)
-{
-    auto* api = static_cast<UiApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (api != nullptr) {
-        const int arg = firstArg(L);
-        api->setMenuTitle(luaQStringValue(L, arg).toStdString(),
-                          luaQStringValue(L, arg + 1).toStdString());
-    }
-    return 0;
-}
-
-// --- ide.commands ----------------------------------------------------------
-int commandsRegister(lua_State* L)
-{
-    auto* api =
-        static_cast<CommandApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (api == nullptr || !api->active || api->services == nullptr) {
-        return 0;
-    }
-    const int arg = firstArg(L);
-    if (!lua_isfunction(L, arg + 2)) {
-        return luaL_error(
-            L, "ide.commands.register expects (id, label, function)");
-    }
-    lua_pushvalue(L, arg + 2);
-    const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    api->registerInternal(QString(), luaQStringValue(L, arg),
-                          luaQStringValue(L, arg + 1), ref);
-    return 0;
-}
-
-int commandsRegisterShortcut(lua_State* L)
-{
-    auto* api =
-        static_cast<CommandApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (api == nullptr || !api->active || api->services == nullptr) {
-        return 0;
-    }
-    const int arg = firstArg(L);
-    if (!lua_isfunction(L, arg + 3)) {
-        return luaL_error(L, "ide.commands.registerShortcut expects "
-                             "(shortcut, id, label, function)");
-    }
-    lua_pushvalue(L, arg + 3);
-    const int ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    api->registerInternal(luaQStringValue(L, arg), luaQStringValue(L, arg + 1),
-                          luaQStringValue(L, arg + 2), ref);
-    return 0;
-}
-
-// --- ide.snippets ----------------------------------------------------------
-int snippetsRegister(lua_State* L)
-{
-    auto* api = static_cast<SnippetApi*>(lua_touserdata(L, lua_upvalueindex(1)));
-    if (api != nullptr) {
-        const int arg = firstArg(L);
-        api->registerSnippet(luaQStringValue(L, arg),
-                             luaQStringValue(L, arg + 1));
-    }
-    return 0;
-}
-
-/// Builds the whitelisted `ide` table for one state — plain tables of C
-/// closures whose upvalue is the binding object. LuaBridge class instances
-/// were tried first, but two of its traits clash with the plugin contract:
-/// its namespace __newindex rejects unknown keys by raising outside any
-/// pcall (process abort), and its member functions only support colon
-/// invocation, while the documented contract is dot syntax
-/// (`ide.ui.setMenuTitle(...)`).
+/// Builds the whitelisted `ide` table for one state. The lambdas capture the
+/// plugin's Impl: it is heap-allocated and outlives the Lua state (the state
+/// is closed in releaseState(), before Impl itself goes away), so the pointer
+/// stays valid for as long as any closure can be called.
 void registerIdeApi(lua_State* L, LuaPlugin::Impl* impl)
 {
-    lua_newtable(L);  // ide
-
-    lua_newtable(L);
-    addMethod(L, "activePath", &editorActivePath, &impl->editor);
-    addMethod(L, "text", &editorText, &impl->editor);
-    addMethod(L, "setText", &editorSetText, &impl->editor);
-    addMethod(L, "insert", &editorInsert, &impl->editor);
-    addMethod(L, "gotoLine", &editorGotoLine, &impl->editor);
-    lua_setfield(L, -2, "editor");  // ide is a plain table: raw assignment
-
-    lua_newtable(L);
-    addMethod(L, "actionText", &uiActionText, &impl->ui);
-    addMethod(L, "setActionText", &uiSetActionText, &impl->ui);
-    addMethod(L, "menuTitle", &uiMenuTitle, &impl->ui);
-    addMethod(L, "setMenuTitle", &uiSetMenuTitle, &impl->ui);
-    lua_setfield(L, -2, "ui");
-
-    lua_newtable(L);
-    addMethod(L, "register", &commandsRegister, &impl->commands);
-    addMethod(L, "registerShortcut", &commandsRegisterShortcut,
-              &impl->commands);
-    lua_setfield(L, -2, "commands");
-
-    lua_newtable(L);
-    addMethod(L, "register", &snippetsRegister, &impl->snippets);
-    lua_setfield(L, -2, "snippets");
-
-    // ide.log(...) as a plain closure carrying the logging object.
-    lua_pushlightuserdata(L, &impl->log);
-    lua_pushcclosure(L, &luaLogClosure, 1);
-    lua_setfield(L, -2, "log");
-
-    lua_setglobal(L, "ide");
+    luabridge::getGlobalNamespace(L)
+        .beginNamespace("ide")
+            .addFunction("log", [impl](lua_State* state) {
+                logArguments(impl->log.services, state);
+            })
+            .beginNamespace("editor")
+                .addFunction("activePath", [impl] {
+                    return impl->editor.activePath();
+                })
+                .addFunction("text", [impl] { return impl->editor.text(); })
+                .addFunction("setText", [impl](const std::string& value) {
+                    impl->editor.setText(value);
+                })
+                .addFunction("insert", [impl](const std::string& value) {
+                    impl->editor.insert(value);
+                })
+                .addFunction("gotoLine", [impl](int line) {
+                    impl->editor.gotoLine(line);
+                })
+            .endNamespace()
+            .beginNamespace("ui")
+                .addFunction("actionText", [impl](const std::string& id) {
+                    return impl->ui.actionText(id);
+                })
+                .addFunction("setActionText",
+                             [impl](const std::string& id,
+                                    const std::string& text) {
+                                 impl->ui.setActionText(id, text);
+                             })
+                .addFunction("menuTitle", [impl](const std::string& id) {
+                    return impl->ui.menuTitle(id);
+                })
+                .addFunction("setMenuTitle",
+                             [impl](const std::string& id,
+                                    const std::string& title) {
+                                 impl->ui.setMenuTitle(id, title);
+                             })
+            .endNamespace()
+            .beginNamespace("commands")
+                .addFunction("register",
+                             [impl](const std::string& id,
+                                    const std::string& label,
+                                    const luabridge::LuaRef& callback) {
+                                 registerCommandCallback(
+                                     impl->commands,
+                                     "ide.commands.register expects "
+                                     "(id, label, function)",
+                                     std::string(), id, label, callback);
+                             })
+                .addFunction("registerShortcut",
+                             [impl](const std::string& shortcut,
+                                    const std::string& id,
+                                    const std::string& label,
+                                    const luabridge::LuaRef& callback) {
+                                 registerCommandCallback(
+                                     impl->commands,
+                                     "ide.commands.registerShortcut expects "
+                                     "(shortcut, id, label, function)",
+                                     shortcut, id, label, callback);
+                             })
+            .endNamespace()
+            .beginNamespace("snippets")
+                .addFunction("register",
+                             [impl](const std::string& id,
+                                    const std::string& body) {
+                                 impl->snippets.registerSnippet(id, body);
+                             })
+            .endNamespace()
+        .endNamespace();
 }
 
 /// Reads plugin.<field> from the executed script, with a fallback.
@@ -534,8 +450,8 @@ void UiApi::setMenuTitle(const std::string& id, const std::string& title)
     services->setMenuTitle(key, QString::fromStdString(title));
 }
 
-void CommandApi::registerInternal(const QString& shortcut,
-                                  const QString& id, const QString& label,
+void CommandApi::registerInternal(const std::string& shortcut,
+                                  const std::string& id, const std::string& label,
                                   int callbackRef)
 {
     if (!active || services == nullptr) {
@@ -543,7 +459,9 @@ void CommandApi::registerInternal(const QString& shortcut,
     }
     callbacks.push_back(callbackRef);
     const size_t index = callbacks.size() - 1;
-    services->registerCommand(pluginName, id, label, shortcut,
+    services->registerCommand(pluginName, QString::fromStdString(id),
+                              QString::fromStdString(label),
+                              QString::fromStdString(shortcut),
                               [this, index] { trigger(index); });
 }
 
@@ -567,21 +485,23 @@ void CommandApi::trigger(size_t index)
     }
 }
 
-void SnippetApi::registerSnippet(const QString& id, const QString& body)
+void SnippetApi::registerSnippet(const std::string& id, const std::string& body)
 {
     if (!*active || services == nullptr) {
         return;
     }
+    const QString key = QString::fromStdString(id);
+    const QString text = QString::fromStdString(body);
     // The callback holds the lifetime token, not the plugin's storage: the
     // command registry may fire it long after the script was unloaded, and
     // it has to become a no-op rather than write through a dead plugin.
     services->registerCommand(
-        pluginName, QStringLiteral("snippet.%1").arg(id), id, QString(),
-        [services = this->services, alive = active, body] {
+        pluginName, QStringLiteral("snippet.%1").arg(key), key, QString(),
+        [services = this->services, alive = active, text] {
             if (!*alive || services == nullptr) {
                 return;  // unloaded: nothing to insert into any more
             }
-            services->insertAtCursor(body);
+            services->insertAtCursor(text);
         });
 }
 

@@ -129,7 +129,7 @@ end
     EXPECT_TRUE(services.logs.contains(QStringLiteral("hello from lua")));
 }
 
-TEST(LuaPluginHost, ExposesIdeApiThroughClosures)
+TEST(LuaPluginHost, ExposesTheIdeApiWithDotInvocation)
 {
     StubServices services;
     const QTemporaryDir dir;
@@ -387,4 +387,106 @@ TEST(LuaPluginHost, DirectoryScanRegistersEveryScript)
     EXPECT_TRUE(errors.first().startsWith(QStringLiteral("ccc.lua")));
     EXPECT_EQ(manager.loaded().first().name, QStringLiteral("first"));
     EXPECT_EQ(manager.loaded().at(1).name, QStringLiteral("second"));
+}
+
+TEST(LuaPluginHost, AMemberThatIsNotThereReadsAsNil)
+{
+    // The language pack probes for capabilities it may not have:
+    // plugins/lua/zh-cn.lua does `if type(ui.setWidgetTexts) ~= "function"
+    // then ... log ... end`. The `ide` namespaces are LuaBridge namespaces,
+    // whose __index is a metamethod, so that probe depends on the metamethod
+    // answering nil instead of raising — a raise would turn every language
+    // pack's capability check into a load failure.
+    //
+    // The "present" half is what keeps this test honest: an empty `ide.ui`
+    // would satisfy a missing-member check all by itself.
+    StubServices services;
+    const QTemporaryDir dir;
+
+    const QString path = writeScript(dir, "probe.lua", R"lua(
+plugin = { name = "probe" }
+function plugin.onInit()
+    local ui = ide.ui
+    ide.log("absent=" .. tostring(ui.setWidgetTexts))
+    ide.log("present=" .. type(ui.setMenuTitle))
+    ide.log("top=" .. type(ide.noSuchMember))
+    ide.log("log=" .. type(ide.log))
+end
+)lua");
+
+    auto loaded =
+        LightCpp::Lua::LuaPluginHost::loadPlugin(path, &services,
+                                                 tightLimits());
+    ASSERT_TRUE(loaded.error.isEmpty()) << loaded.error.toStdString();
+    ASSERT_TRUE(loaded.plugin->initialize(&services));
+
+    EXPECT_TRUE(services.logs.contains(QStringLiteral("absent=nil")))
+        << services.logs.join(QStringLiteral(" | ")).toStdString();
+    EXPECT_TRUE(services.logs.contains(QStringLiteral("present=function")));
+    EXPECT_TRUE(services.logs.contains(QStringLiteral("top=nil")));
+    EXPECT_TRUE(services.logs.contains(QStringLiteral("log=function")));
+}
+
+TEST(LuaPluginHost, AnArgumentOfTheWrongTypeFailsTheScriptNotTheProcess)
+{
+    // LuaBridge raises a bad argument with lua_error, i.e. a longjmp out of
+    // the C function, so it only stays inside the sandbox because every
+    // entry point runs under pcall. That is the property this test holds
+    // down: a script that hands `ide` a table gets a script error with a
+    // line number, and the host survives to load the next plugin.
+    //
+    // It is also the one visible behaviour change of using typed arguments:
+    // the hand-written closures ran every value through luaL_tolstring, so
+    // this call used to succeed and quietly retitle a menu whose id was the
+    // string "table: 0x...".
+    StubServices services;
+    const QTemporaryDir dir;
+
+    const QString tableArg = writeScript(dir, "table_arg.lua", R"lua(
+plugin = { name = "tableArg" }
+ide.ui.setMenuTitle({}, "x")
+)lua");
+    auto first = LightCpp::Lua::LuaPluginHost::loadPlugin(
+        tableArg, &services, tightLimits());
+    EXPECT_TRUE(first.plugin == nullptr);
+    EXPECT_TRUE(first.error.contains(QStringLiteral("script failed")))
+        << first.error.toStdString();
+    // The IDE was not touched on the way out.
+    EXPECT_EQ(services.menuFileTitle, QStringLiteral("&File"));
+
+    const QString notAFunction = writeScript(dir, "not_fn.lua", R"lua(
+plugin = { name = "notFn" }
+ide.commands.register("id", "label", 42)
+)lua");
+    auto second = LightCpp::Lua::LuaPluginHost::loadPlugin(
+        notAFunction, &services, tightLimits());
+    EXPECT_TRUE(second.plugin == nullptr);
+    EXPECT_TRUE(second.error.contains(
+        QStringLiteral("expects (id, label, function)")))
+        << second.error.toStdString();
+    EXPECT_TRUE(services.commandIds.isEmpty());
+}
+
+TEST(LuaPluginHost, WritingToTheIdeNamespaceIsAScriptError)
+{
+    // A LuaBridge namespace answers __newindex with an error instead of
+    // storing the value. That is a deliberate difference from the plain
+    // tables this surface used to be: a typo such as
+    // `ide.ui.setMenuTitel = ...` would otherwise create a field nobody
+    // reads and fail silently. The error stays inside the sandbox's pcall,
+    // so the script is rejected and the IDE keeps running.
+    StubServices services;
+    const QTemporaryDir dir;
+
+    const QString path = writeScript(dir, "write.lua", R"lua(
+plugin = { name = "write" }
+ide.notARealMember = 1
+)lua");
+
+    auto loaded =
+        LightCpp::Lua::LuaPluginHost::loadPlugin(path, &services,
+                                                 tightLimits());
+    EXPECT_TRUE(loaded.plugin == nullptr);
+    EXPECT_TRUE(loaded.error.contains(QStringLiteral("script failed")))
+        << loaded.error.toStdString();
 }
