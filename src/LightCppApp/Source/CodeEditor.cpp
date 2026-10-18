@@ -40,6 +40,17 @@ constexpr int kFoldMarkerSize = 9;
 constexpr int kWordHighlightMaxBlocks = 2000;
 constexpr std::size_t kWordHighlightMaxHits = 200;
 
+/// Past this many blocks the fold analysis is not run at all.
+///
+/// `rebuildFoldRegions()` copies the whole document out (`toPlainText()`),
+/// converts every line to a `std::string` and scans the lot, and it runs from
+/// a 120 ms idle timer after *every* edit — so on a generated file of a few
+/// hundred thousand lines each pause in typing paid a full-document pass.
+/// Folding is a convenience; 20000 blocks is already far past the point where
+/// a human scrolls to a fold marker, and the word-highlight cap above is the
+/// same trade (silently cheaper, never slower).
+constexpr int kFoldMaxBlocks = 20000;
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -1729,6 +1740,20 @@ void CodeEditor::rebuildFoldRegionsOnIdle()
 
 void CodeEditor::rebuildFoldRegions()
 {
+    // See kFoldMaxBlocks. Past the cap the analysis is skipped *and* whatever
+    // was folded is released: keeping the previous regions would hide line
+    // ranges that the edits have since moved, which is worse than having no
+    // folding at all (and the gutter stops offering markers, so nothing looks
+    // broken — it simply is not available).
+    if (blockCount() > kFoldMaxBlocks) {
+        if (!foldRegions_.isEmpty() || !folded_.isEmpty()) {
+            foldRegions_.clear();
+            folded_.clear();
+            applyFoldState();
+        }
+        return;
+    }
+
     // Splitting the document text once is simpler than translating block
     // positions, and the analysis wants to see the text as a whole anyway — a
     // block comment or a raw string can span blocks.
@@ -1809,10 +1834,25 @@ void CodeEditor::applyFoldState()
         const bool visible = !hidden.contains(block.blockNumber());
         if (block.isVisible() != visible) {
             block.setVisible(visible);
-            // A block that occupies no lines takes no vertical space, and
-            // markContentsDirty invalidates its cached layout so the change is
+            // A hidden block must occupy no lines, or the document keeps the
+            // space and the fold does not look folded.
+            //
+            // A block that becomes *visible* is different: the number of lines
+            // it occupies is whatever the layout produced. With word wrap on
+            // that can be several, so pinning it to 1 made an unfolded block
+            // claim one line while it drew five, and every block below it sat
+            // too high until something forced a full relayout. Leave the count
+            // alone there — markContentsDirty below is what makes the layout
+            // recompute it, wrapping included. Without wrapping a visible block
+            // really is one line, and setting it keeps the gutter arithmetic
+            // exact before the layout runs.
+            if (!visible) {
+                block.setLineCount(0);
+            } else if (lineWrapMode() == QPlainTextEdit::NoWrap) {
+                block.setLineCount(1);
+            }
+            // markContentsDirty invalidates the cached layout so the change is
             // actually reflected on screen.
-            block.setLineCount(visible ? 1 : 0);
             document()->markContentsDirty(block.position(), block.length());
         }
         block = block.next();
