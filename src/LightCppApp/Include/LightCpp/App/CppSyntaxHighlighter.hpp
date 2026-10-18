@@ -5,10 +5,14 @@
 #include <QHash>
 #include <QList>
 #include <QRegularExpression>
-#include <QStringList>
 
 /// Minimal C/C++ syntax highlighter using QSyntaxHighlighter.
 /// Handles keywords, types, strings, comments, preprocessor, numbers.
+///
+/// What counts as a literal or a comment is decided by
+/// `LightCpp::App::CppTokenScan` (one left-to-right pass over the block), not
+/// by rules here: a rule paints, it cannot know that the `/*` it matched sits
+/// inside a string. See that header for the three passes this replaced.
 class CppSyntaxHighlighter : public QSyntaxHighlighter {
     Q_OBJECT
 public:

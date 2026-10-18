@@ -6,6 +6,7 @@
 
 #include <QHash>
 #include <QRegularExpression>
+#include <QStringList>
 #include <QTextDocument>
 
 #include "LightCpp/App/CppTokenScan.hpp"
