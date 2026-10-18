@@ -279,6 +279,28 @@ TEST(EncodingDetect, ARealGbkFileIsNotNearlyUtf8)
     EXPECT_GT(d.invalidUtf8Sequences, 3u) << "the count is what the decision was made on";
 }
 
+TEST(EncodingDetect, ARealGbkFileDamagedInTheMiddleIsNotNearlyUtf8)
+{
+    // The mirror image of ACharacterCutInHalf…: `CF EE C4 BF` is 项目 in GBK, and
+    // it is *also* exactly one broken UTF-8 sequence (`CF` starts a pair, `EE`
+    // is not a continuation) followed by a valid one (`C4 BF` = U+013F). The
+    // count-only rule called this "damaged UTF-8" and the project name came
+    // back as "�Ŀ" — not an improvement over mojibake, and it broke
+    // `DspProject.GbkEncodedDspDecodesItsName` the moment that suite was
+    // actually relinked. A few broken sequences are only evidence when they
+    // sit at the tail, where truncation is the story.
+    QByteArray bytes("Name=\"");
+    bytes += QByteArrayLiteral("\xCF\xEE\xC4\xBF" "1");
+    bytes += QByteArray(" has plenty of plain ascii around it");
+    bytes += QByteArray(300, 'x');  // ratio test must not be the one saying no
+
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, LightCpp::Text::localAnsiEncoding());
+    EXPECT_EQ(d.invalidUtf8Sequences, 2u)
+        << "two broken sequences, well under the count and ratio limits, and "
+           "not at the tail — only the tail rule can reject this";
+}
+
 TEST(EncodingDetect, PlainUtf8CarriesNoBrokenSequences)
 {
     const auto d = LightCpp::Text::detectEncoding(QByteArray("中文注释\n"));

@@ -42,6 +42,23 @@ constexpr std::array kBoms{
 /// file: `invalid * 100 <= size` means "at most one per cent".
 constexpr std::size_t kMaxBrokenUtf8Sequences = 3;
 
+/// How close to the end of the buffer the damage has to be for "truncated
+/// UTF-8" to be the better story.
+///
+/// The reported causes are all *tail* events: a writer that died mid-save, a
+/// file cut at a byte boundary, a legacy tool appending a line. In each one
+/// the broken bytes are the last thing in the file, so the damage is inside
+/// the final character's worth of bytes (4 for a four-byte sequence, 1 for an
+/// appended stray byte).
+///
+/// Damage *inside* the buffer is the case this rule must not claim: there
+/// `CF EE C4 BF` (GBK for 项目) has exactly one broken sequence too, and
+/// decoding it as UTF-8 turned the project name into "�Ŀ" — a real
+/// regression caught by `DspProject.GbkEncodedDspDecodesItsName` once that
+/// suite was actually relinked. Interior damage cannot be told apart from
+/// another encoding, so it keeps the old answer (the local code page).
+constexpr qsizetype kTailDamageBytes = 4;
+
 /// True when the buffer "looks like" UTF-16 without a BOM: even length and
 /// a large majority of code units carry NUL in the same position (high byte
 /// for LE, low byte for BE). Pure-Latin UTF-16 has NUL in every unit, but
@@ -306,9 +323,10 @@ EncodingDetection detectEncoding(QByteArrayView bytes)
 
     // -- 3. UTF-8 (with or without multi-byte sequences) --------------------
     std::size_t utf8Errors = 0;
+    std::size_t firstUtf8Error = std::string_view::npos;
     {
         const std::string_view view(bytes.constData(), static_cast<std::size_t>(size));
-        utf8Errors = LightCpp::Core::Text::validateUtf8(view);
+        utf8Errors = LightCpp::Core::Text::validateUtf8(view, &firstUtf8Error);
         if (utf8Errors == 0) {
             result.encoding = TextEncoding::Utf8;
             result.score = 800;
@@ -331,7 +349,17 @@ EncodingDetection detectEncoding(QByteArrayView bytes)
     // damaged bytes cannot be written back (they have no character). The
     // caller decodes leniently and treats the result as something the user
     // must confirm before it is saved over the original bytes.
-    if (utf8Errors <= kMaxBrokenUtf8Sequences
+    //
+    // The damage must be *at the tail* (see kTailDamageBytes). "A few broken
+    // sequences" alone is not evidence: GBK text hits that shape all the time,
+    // and believing it there is the mirror image of the bug above — the user's
+    // project name comes back as U+FFFD instead of mojibake, which is not an
+    // improvement.
+    const bool damageAtTail =
+        firstUtf8Error != std::string_view::npos
+        && static_cast<qsizetype>(size) - static_cast<qsizetype>(firstUtf8Error)
+               <= kTailDamageBytes;
+    if (damageAtTail && utf8Errors <= kMaxBrokenUtf8Sequences
         && utf8Errors * 100 <= static_cast<std::size_t>(size)) {
         result.encoding = TextEncoding::Utf8;
         result.score = 300;
