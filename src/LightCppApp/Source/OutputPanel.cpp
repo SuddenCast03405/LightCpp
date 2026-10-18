@@ -12,9 +12,12 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QScrollBar>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QStringList>
+#include <QTextCursor>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -292,14 +295,37 @@ int OutputPanel::openTerminalChannel(const QString& title, bool resetBuffer)
 
 void OutputPanel::appendTerminalOutput(const QString& text)
 {
-    if (terminalLog_ == nullptr) {
+    if (terminalLog_ == nullptr || text.isEmpty()) {
         return;
     }
-    // Raw appending: insertPlainText at the end keeps an unfinished last
-    // line open (a prompt without a newline), so what follows continues on
+    // Raw appending: the text goes in at the end so an unfinished last line
+    // (a prompt without a newline) stays open and what follows continues on
     // the same line — exactly how a console renders its prompt.
-    terminalLog_->moveCursor(QTextCursor::End);
-    terminalLog_->insertPlainText(text);
+    //
+    // It must not, however, take the view away from the user. `insertPlainText`
+    // works on the widget's own cursor: it *replaces the selection* and drags
+    // the viewport to the end. Selecting a block of build output to copy it
+    // while the program is still printing destroyed the selection and jumped
+    // the view. So: insert through a cursor of our own, and only follow the
+    // tail when the view was already at the tail.
+    QScrollBar* bar = terminalLog_->verticalScrollBar();
+    const bool followingTail = bar == nullptr || bar->value() >= bar->maximum() - 4;
+    const int previousScroll = bar != nullptr ? bar->value() : 0;
+
+    QTextCursor appender(terminalLog_->document());
+    appender.movePosition(QTextCursor::End);
+    appender.insertText(text);
+
+    if (bar == nullptr) {
+        return;
+    }
+    if (followingTail) {
+        bar->setValue(bar->maximum());
+    } else {
+        // Stale maximum after an insert would clamp this; setting the value we
+        // read keeps the lines the user is looking at under the viewport.
+        bar->setValue(previousScroll);
+    }
 }
 
 void OutputPanel::setTerminalInputEnabled(bool enabled)
@@ -439,6 +465,23 @@ void OutputPanel::updateProblemsChannel(QTreeWidget* tree, int comboIndex,
 void OutputPanel::rebuildProblemsTree(QTreeWidget* tree,
                                       const QList<ProblemEntry>& problems)
 {
+    // Every build rewrites the whole tree, and the user is usually looking at
+    // it while that happens (F7 prints the list as it goes). Remembering the
+    // scroll offset and which file groups were open keeps the rebuild from
+    // reading as "the panel flickered and threw me back to the top".
+    QScrollBar* bar = tree->verticalScrollBar();
+    const int previousScroll = bar != nullptr ? bar->value() : 0;
+    const bool hadRows = tree->topLevelItemCount() > 0;
+    QSet<QString> expandedGroups;
+    if (hadRows) {
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            QTreeWidgetItem* item = tree->topLevelItem(i);
+            if (item->isExpanded()) {
+                expandedGroups.insert(item->data(0, kRolePath).toString());
+            }
+        }
+    }
+
     tree->setUpdatesEnabled(false);
     tree->clear();
 
@@ -497,8 +540,18 @@ void OutputPanel::rebuildProblemsTree(QTreeWidget* tree,
         item->setData(0, kRoleColumn, p.column);
     }
 
-    tree->expandAll();
+    // First fill opens everything (the tree appears already readable); a
+    // rebuild restores what the user had open, so a group they collapsed to
+    // get a long list out of the way stays collapsed.
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem* group = tree->topLevelItem(i);
+        const QString path = group->data(0, kRolePath).toString();
+        group->setExpanded(hadRows ? expandedGroups.contains(path) : true);
+    }
     tree->setUpdatesEnabled(true);
+    if (bar != nullptr) {
+        bar->setValue(previousScroll);
+    }
 }
 
 QWidget* OutputPanel::makeInputLogPage(QPlainTextEdit* log, QLineEdit** inputOut,
