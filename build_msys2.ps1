@@ -79,7 +79,15 @@ if (-not $Test) { exit $buildExit }
 $ctestArgs = @('--test-dir', "$root\build\msys2-ucrt64", '--output-on-failure', '--parallel', $Jobs,
                # A filter that matches nothing is a typo, not a pass: ctest
                # otherwise exits 0 after printing "No tests were found!!!".
-               '--no-tests=error')
+               '--no-tests=error',
+               # Bounded, not because tests are slow — every case here finishes
+               # in well under 15 s — but because a *stalled* child used to hold
+               # the whole run open forever. Measured on this machine: one
+               # Utf8FileTest process spun a single core for 12 minutes while
+               # ctest sat at 599/600, and the batch's "full run" never ended.
+               # With this, such a stall is reported by name ("***Timeout") in
+               # three minutes and the rest of the suite still gets a verdict.
+               '--timeout', '180')
 if ($Tests) {
     # A ctest regex, not gtest's filter: separate alternatives with `|`, not
     # with `:` — `A.*:B.*` is one regex that matches nothing at all.
