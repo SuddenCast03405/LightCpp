@@ -20,7 +20,7 @@ Six static logic libraries plus the Qt application layer:
 | `src/LightCppProject/` | Project/build-configuration parsing (`.vcxproj`/`.vcproj`/`.dev`/`.dsp`/`.dsw`/CMake), compiler diagnostics |
 | `src/LightCppSettings/` | Preferences/toolchains/kits, JSON config store |
 | `src/LightCppPlugin/` | Plugin interface and registry |
-| `src/LightCppLua/` | Sandboxed Lua 5.4 plugin host (`ide` API via hand-written C closures) |
+| `src/LightCppLua/` | Sandboxed Lua 5.4 plugin host (`ide` API bound with LuaBridge3) |
 | `src/LightCppApp/` | Qt Widgets application layer (MainWindow, editors, panels, dialogs) |
 
 Each logic library has a GTest suite under `tests/`, registered with CTest —
@@ -93,8 +93,10 @@ Notes:
   `SOURCE_DIR`, so configure works offline. Override with
   `-DLIGHTCPP_GTEST_SOURCE=<path>`.
 - Lua 5.4.7 is vendored in `third_party/lua-5.4.7/src` and built from
-  source. The Lua binding layer is hand-written C closures (upvalue =
-  binding object); LuaBridge3 is vendored but not used by the `ide` API.
+  source. The `ide` surface is registered with LuaBridge3 (vendored in
+  `third_party/LuaBridge3-3.0-rc12`): one `addFunction` per member on the
+  `ide`/`ide.editor`/`ide.ui`/`ide.commands`/`ide.snippets` namespaces, so
+  scripts call it with dot syntax.
 - On MinGW the test binaries link the GCC runtime statically
   (`-static-libgcc -static-libstdc++`) so `ctest` does not need
   `E:\msys64\ucrt64\bin` on `PATH`.

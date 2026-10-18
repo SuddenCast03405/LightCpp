@@ -2,9 +2,10 @@
 #
 # LightCppLuaCore is the upstream Lua VM (vendored under third_party/, built
 # from source with warnings off — it is C code we do not own). LightCppLua
-# itself adds the sandbox allocator/hooks and the `ide` API (hand-written
-# C closures whose upvalue is the binding object; LuaBridge3 is vendored but
-# unused) plus the plugin adapter that turns a *.lua file into a Plugin.
+# itself adds the sandbox allocator/hooks plus the plugin adapter that turns a
+# *.lua file into a Plugin. The `ide` surface is bound with LuaBridge3
+# (LightCppLuaBridge below) — one addFunction per member, on namespaces rather
+# than classes, because scripts call it with dot syntax.
 
 set(LUA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/lua-5.4.7/src")
 set(LUA_SOURCES
