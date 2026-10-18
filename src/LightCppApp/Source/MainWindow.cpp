@@ -97,9 +97,44 @@ Q_DECLARE_METATYPE(LightCpp::Text::TextEncoding)
 namespace {
 
 // The tool paths live in ToolchainPaths.hpp so the compiler, the language
-// server and the formatter cannot disagree about where the toolchain is.
-using LightCpp::App::kClangdPath;
-using LightCpp::App::kMingwBin;
+// server and the formatter cannot disagree about where the toolchain is. They
+// are fallbacks — a kit or a setting names the tools first — and every answer
+// is a path that exists, so "empty" stays an honest "not found" here.
+namespace ToolchainPaths = LightCpp::App::ToolchainPaths;
+
+/// Puts `dir` in front of the child's PATH. Empty means the toolchain was not
+/// found: an empty element on PATH is not "nothing", Windows reads it as the
+/// current directory, so the variable is left alone instead.
+void prependToPath(QProcessEnvironment& env, const QString& dir)
+{
+    const QString existing = env.value(QStringLiteral("PATH"));
+    if (dir.isEmpty()) {
+        return;
+    }
+    env.insert(QStringLiteral("PATH"),
+               dir + QDir::listSeparator() + existing);
+}
+
+/// What to tell the user when clang-format cannot be found. Named once
+/// because two commands report it (Format Document, Format Folder) and each
+/// had its own copy of the sentence — including the part that printed the
+/// build toolchain's directory, which used to be a compiled-in path and could
+/// name a directory that does not exist on this machine.
+QString missingFormatterMessage()
+{
+    const QString bin = ToolchainPaths::mingwBin();
+    if (bin.isEmpty()) {
+        // No toolchain was found at all, so there is no "next to the
+        // compilers" to speak of.
+        return QCoreApplication::translate(
+            "MainWindow", "clang-format was not found on PATH.");
+    }
+    return QCoreApplication::translate(
+               "MainWindow",
+               "clang-format was not found next to the compilers (%1) or on "
+               "PATH.")
+        .arg(bin);
+}
 
 /// Where ConsolePauser.exe lives today on this machine — the last resort
 /// when neither the program's directory nor the IDE's own has a copy. When
@@ -207,7 +242,8 @@ MainWindow::MainWindow(QWidget* parent)
     , statusFile_(new QLabel(this))
     , statusGit_(new QLabel(this))
     , lsp_(new LightCpp::App::LanguageServerClient(
-          kClangdPath, QDir(QDir::currentPath()).absolutePath(), this))
+          ToolchainPaths::clangdPath(),
+          QDir(QDir::currentPath()).absolutePath(), this))
     , lintDebounceTimer_(new QTimer(this))
 {
     setWindowTitle(QStringLiteral("LightC++"));
@@ -1908,8 +1944,9 @@ LightCpp::Plugin::BuildRequest MainWindow::makeBuildRequest() const
     // Defaults straight from the MSYS2 toolchain, then the kit's overrides —
     // the same resolution the built-in paths used before .dev support moved
     // into a plugin.
-    QString make = QDir(kMingwBin).filePath(QStringLiteral("mingw32-make.exe"));
-    QString gxx = QDir(kMingwBin).filePath(QStringLiteral("g++.exe"));
+    const QString buildBin = ToolchainPaths::mingwBin();
+    QString make = QDir(buildBin).filePath(QStringLiteral("mingw32-make.exe"));
+    QString gxx = QDir(buildBin).filePath(QStringLiteral("g++.exe"));
     if (const auto kit = activeKit(); kit.has_value()) {
         const QString kitMake = kit->buildTools.value(QStringLiteral("gnuMake"));
         if (!kitMake.isEmpty() && QFileInfo::exists(kitMake)) {
@@ -4806,9 +4843,7 @@ void MainWindow::onFormatDocument()
                 &MainWindow::onFormatFailed);
     }
     if (!LightCpp::App::CodeFormatter::isAvailable()) {
-        const QString message = tr("clang-format was not found next to the "
-                                   "compilers (%1) or on PATH.")
-                                    .arg(LightCpp::App::kMingwBin);
+        const QString message = missingFormatterMessage();
         outputPanel_->showChannel(OutputPanel::ChannelBuild);
         outputPanel_->appendBuildOutput(message);
         statusBar()->showMessage(message, 6000);
@@ -4883,9 +4918,7 @@ void MainWindow::formatFolder(const QString& dir)
         return;
     }
     if (!LightCpp::App::CodeFormatter::isAvailable()) {
-        const QString message = tr("clang-format was not found next to the "
-                                   "compilers (%1) or on PATH.")
-                                    .arg(LightCpp::App::kMingwBin);
+        const QString message = missingFormatterMessage();
         outputPanel_->appendBuildOutput(message);
         statusBar()->showMessage(message, 6000);
         return;
@@ -5606,7 +5639,10 @@ void MainWindow::runNextProjectStep()
     if (!kitBin.isEmpty()) {
         pathParts.append(kitBin);
     }
-    pathParts.append(kMingwBin);
+    const QString buildBin = ToolchainPaths::mingwBin();
+    if (!buildBin.isEmpty()) {
+        pathParts.append(buildBin);
+    }
     pathParts.append(env.value(QStringLiteral("PATH")));
     env.insert(QStringLiteral("PATH"), pathParts.join(QDir::listSeparator()));
     projectProcess_->setProcessEnvironment(env);
@@ -6174,14 +6210,15 @@ void MainWindow::onCompileCurrentFile()
         // GNU-style: the kit's compilers, or the built-in MSYS2 GCC when no
         // kit is selected. The binary dir travels with the compiler: the
         // runtime DLLs it (and its output) need live next to it.
+        const QString fallbackBin = ToolchainPaths::mingwBin();
         QString cppCompiler =
             kit.has_value() && !kit->cppCompiler.isEmpty()
                 ? kit->cppCompiler
-                : QDir(kMingwBin).filePath(QStringLiteral("g++.exe"));
+                : QDir(fallbackBin).filePath(QStringLiteral("g++.exe"));
         QString cCompiler =
             kit.has_value() && !kit->cCompiler.isEmpty()
                 ? kit->cCompiler
-                : QDir(kMingwBin).filePath(QStringLiteral("gcc.exe"));
+                : QDir(fallbackBin).filePath(QStringLiteral("gcc.exe"));
         compilerExe = isC ? cCompiler : cppCompiler;
         toolDirs << QFileInfo(compilerExe).absolutePath();
 
@@ -6290,11 +6327,17 @@ void MainWindow::onCompileCurrentFile()
         connect(compiler_, &QProcess::errorOccurred, this,
                 [this](QProcess::ProcessError e) {
             if (e != QProcess::FailedToStart) return;
+            // "Which compiler?" — the one that was asked for, or the shape
+            // of the name that would have been used had one been found.
+            const QString attempted =
+                lastCompilerPath_.isEmpty()
+                    ? QDir(ToolchainPaths::mingwBin())
+                          .filePath(
+                              QStringLiteral("<gcc|g++|clang|clang++>.exe"))
+                    : lastCompilerPath_;
             outputPanel_->appendBuildOutput(
                 tr("Compiler failed to start. Check that %1 exists.")
-                    .arg(lastCompilerPath_.isEmpty()
-                             ? QDir(kMingwBin).filePath(QStringLiteral("<gcc|g++|clang|clang++>.exe"))
-                             : lastCompilerPath_));
+                    .arg(attempted));
             runAfterBuild_ = false;
             updateRunActionStates();
         });
@@ -6604,7 +6647,7 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
     // The binary links against the toolchain's runtime DLLs (libstdc++-6,
     // libgcc_s, libwinpthread), so its bin directory must be on PATH — the
     // active kit's compiler directory when there is one.
-    QString runtimeBinDir = kMingwBin;
+    QString runtimeBinDir = ToolchainPaths::mingwBin();
     if (const auto kit = activeKit(); kit.has_value() && !isMsvcKit(*kit)) {
         const QString dir = QFileInfo(kit->cppCompiler).absolutePath();
         if (!dir.isEmpty()) {
@@ -6612,9 +6655,7 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
         }
     }
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("PATH"),
-               runtimeBinDir + QDir::listSeparator()
-                   + env.value(QStringLiteral("PATH")));
+    prependToPath(env, runtimeBinDir);
     runner_->setProcessEnvironment(env);
     runner_->setWorkingDirectory(workDir);
 
@@ -6737,7 +6778,7 @@ void MainWindow::startWithConsolePauser(const QString& exePath,
 
     // Same PATH handling as the embedded runner: even in its own console the
     // program still needs its toolchain's runtime DLLs to load.
-    QString runtimeBinDir = kMingwBin;
+    QString runtimeBinDir = ToolchainPaths::mingwBin();
     if (const auto kit = activeKit(); kit.has_value() && !isMsvcKit(*kit)) {
         const QString dir = QFileInfo(kit->cppCompiler).absolutePath();
         if (!dir.isEmpty()) {
@@ -6745,9 +6786,7 @@ void MainWindow::startWithConsolePauser(const QString& exePath,
         }
     }
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("PATH"),
-               runtimeBinDir + QDir::listSeparator()
-                   + env.value(QStringLiteral("PATH")));
+    prependToPath(env, runtimeBinDir);
 
     // ConsolePauser.exe <filename> <parameters> — we never pass extra
     // parameters, so the program itself is the only argument. Launched via
@@ -6820,7 +6859,7 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
 
     // The program needs its toolchain's runtime DLLs wherever it ends up
     // running, so the active kit's compiler directory goes on PATH first.
-    QString runtimeBinDir = kMingwBin;
+    QString runtimeBinDir = ToolchainPaths::mingwBin();
     if (const auto kit = activeKit(); kit.has_value() && !isMsvcKit(*kit)) {
         const QString dir = QFileInfo(kit->cppCompiler).absolutePath();
         if (!dir.isEmpty()) {
@@ -6828,9 +6867,7 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
         }
     }
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("PATH"),
-               runtimeBinDir + QDir::listSeparator()
-                   + env.value(QStringLiteral("PATH")));
+    prependToPath(env, runtimeBinDir);
 
     const QString terminalLabel =
         runTerminalName_.isEmpty() ? program : runTerminalName_;
@@ -7415,9 +7452,9 @@ void MainWindow::loadSettings()
 {
     // Compiled-in locations back the settings up: with no config files at
     // all, the IDE behaves exactly as it did before they existed.
-    settings_->setFallbackToolPaths(LightCpp::App::kClangdPath,
-                                    LightCpp::App::kClangFormatPath,
-                                    LightCpp::App::kGitPath);
+    settings_->setFallbackToolPaths(ToolchainPaths::clangdPath(),
+                                    ToolchainPaths::clangFormatPath(),
+                                    ToolchainPaths::gitPath());
 
     // First run: write the starter configuration next to the executable so
     // the settings are discoverable and editable. Files that already exist

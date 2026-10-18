@@ -11,7 +11,6 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
-#include <QStandardPaths>
 
 namespace LightCpp::App::DefaultSettings {
 
@@ -22,17 +21,6 @@ using LightCpp::Settings::Kit;
 using LightCpp::Settings::KitBuildConfiguration;
 using LightCpp::Settings::Preferences;
 using LightCpp::Settings::Toolchain;
-
-/// The first existing candidate, or empty when none does.
-QString existingPath(const QStringList& candidates)
-{
-    for (const QString& candidate : candidates) {
-        if (QFileInfo::exists(candidate)) {
-            return candidate;
-        }
-    }
-    return QString();
-}
 
 /// The bin directory of a toolchain shipped next to the IDE:
 /// <exe>/MinGW64, <exe>/Clang64, <exe>/MinGW32, <exe>/Clang32 — the first
@@ -234,9 +222,10 @@ WriteResult ensureDefaultConfigFiles(const QString& dir)
         ? QString() : binTool(portableBin, {"clangd.exe"});
     const QString effectiveClangFormat = portableBin.isEmpty()
         ? QString() : binTool(portableBin, {"clang-format.exe"});
-    const QString git = existingPath(
-        {LightCpp::App::kGitPath,
-         QStandardPaths::findExecutable(QStringLiteral("git"))});
+    // Same two steps as everywhere else, and the same guarantee: only a path
+    // that exists comes back, so a starter file never points at a directory
+    // this machine does not have.
+    const QString git = LightCpp::App::ToolchainPaths::gitPath();
 
     // --- toolchains.json (an array of per-toolchain documents) --------------
     QList<Toolchain> toolchains;

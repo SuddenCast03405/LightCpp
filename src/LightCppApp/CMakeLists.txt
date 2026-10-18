@@ -63,6 +63,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/StartupPage.cpp
     Source/TerminalLaunch.cpp
     Source/TextColumns.cpp
+    Source/ToolchainPaths.cpp
 )
 
 add_executable(lightcpp ${LIGHTCPP_APP_SOURCES})

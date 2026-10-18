@@ -44,10 +44,12 @@ add_executable(LightCppAppTests
     KitToolchainOptionsTests.cpp
     LspResponseTests.cpp
     MsvcNamesTests.cpp
+    MsvcRegistryTests.cpp
     ProcessShutdownTests.cpp
     ProcessTreeTests.cpp
     TerminalLaunchTests.cpp
     TextColumnsTests.cpp
+    ToolchainPathsTests.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CodeFormatter.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/CompileDatabase.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ConsoleDecoder.cpp
@@ -59,10 +61,12 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/KitToolchainOptions.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/LspResponse.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/MsvcNames.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/MsvcToolchain.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessShutdown.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessTree.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TerminalLaunch.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TextColumns.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ToolchainPaths.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CodeFormatter.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/CompileDatabase.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ConsoleDecoder.hpp
@@ -74,10 +78,12 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/KitToolchainOptions.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/LspResponse.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/MsvcNames.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/MsvcToolchain.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ProcessShutdown.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ProcessTree.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/TerminalLaunch.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/TextColumns.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/ToolchainPaths.hpp
 )
 
 # The app target sets this on itself; CodeFormatter declares Q_OBJECT, so the

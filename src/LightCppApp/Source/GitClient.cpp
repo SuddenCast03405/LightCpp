@@ -2,19 +2,16 @@
 
 #include "LightCpp/App/ToolchainPaths.hpp"
 
-#include <QFileInfo>
 #include <QProcessEnvironment>
-#include <QStandardPaths>
 #include <QTimer>
 
 namespace LightCpp::App {
 
 QString GitClient::defaultToolPath()
 {
-    if (QFileInfo::exists(kGitPath)) {
-        return kGitPath;
-    }
-    return QStandardPaths::findExecutable(QStringLiteral("git"));
+    // Same two steps as the formatter: the copy in the build toolchain, then
+    // whatever PATH resolves. Only an existing path comes back.
+    return ToolchainPaths::gitPath();
 }
 
 QString GitClient::toolPath() const

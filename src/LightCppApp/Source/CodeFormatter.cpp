@@ -2,8 +2,6 @@
 
 #include "LightCpp/App/ToolchainPaths.hpp"
 
-#include <QFileInfo>
-#include <QStandardPaths>
 #include <QTimer>
 
 namespace LightCpp::App {
@@ -20,11 +18,9 @@ QString CodeFormatter::toolPath()
 {
     // The copy next to the compilers first, because that is the clang-format
     // matching the clangd the editor already talks to. Then PATH, for anyone
-    // who installed it some other way.
-    if (QFileInfo::exists(kClangFormatPath)) {
-        return kClangFormatPath;
-    }
-    return QStandardPaths::findExecutable(QStringLiteral("clang-format"));
+    // who installed it some other way. Both halves live in ToolchainPaths,
+    // which only answers with a path that exists.
+    return ToolchainPaths::clangFormatPath();
 }
 
 bool CodeFormatter::isAvailable()

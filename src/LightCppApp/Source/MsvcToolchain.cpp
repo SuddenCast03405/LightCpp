@@ -187,11 +187,10 @@ QList<Candidate> rootsFromRegistry()
     };
     for (const QString& key : keys) {
         QSettings settings(key, QSettings::NativeFormat);
-        for (const QString& name : settings.childGroups()) {
-            const QString root = settings.value(name + QStringLiteral("/.")).toString();
-            if (!root.isEmpty()) {
-                out.append({root, scoreFromVersion(name)});
-            }
+        // The reading itself lives in the public installRootsIn() so a test can
+        // hand it a QSettings file; see the header for the key's shape.
+        for (const QPair<QString, QString>& pair : Msvc::installRootsIn(settings)) {
+            out.append({pair.second, scoreFromVersion(pair.first)});
         }
     }
     return out;
@@ -367,6 +366,38 @@ bool appendWindowsSdk(const QString& arch, Msvc::Toolchain* toolchain)
 }  // namespace
 
 namespace LightCpp::App::Msvc {
+
+QList<QPair<QString, QString>> installRootsIn(QSettings& settings)
+{
+    QList<QPair<QString, QString>> out;
+
+    // The documented shape: one *value* per version, the data being the
+    // install root. This is what `reg query` prints and what the key has held
+    // since Visual Studio 2002 — and what this code used to miss entirely,
+    // because it asked for subkeys.
+    const QStringList versions = settings.childKeys();
+    for (const QString& version : versions) {
+        const QString root = settings.value(version).toString().trimmed();
+        if (!root.isEmpty()) {
+            out.append({version, root});
+        }
+    }
+
+    // The shape the old code assumed: a subkey per version whose *default*
+    // value is the path. Kept because reading it costs one call and no
+    // candidate is trusted anyway — anything that is not an install with a
+    // cl.exe under it is dropped a few lines later.
+    const QStringList groups = settings.childGroups();
+    for (const QString& version : groups) {
+        const QString root =
+            settings.value(version + QStringLiteral("/.")).toString().trimmed();
+        if (!root.isEmpty()) {
+            out.append({version, root});
+        }
+    }
+
+    return out;
+}
 
 Toolchain detect()
 {

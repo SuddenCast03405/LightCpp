@@ -1,15 +1,18 @@
 #pragma once
 
 #include <QObject>
+#include <QPair>
 #include <QString>
 #include <QStringList>
 
 #include "LightCpp/App/ToolchainHeaders.hpp"
 
-// Forward declaration *outside* the namespace on purpose: inside
-// LightCpp::App::Msvc it would declare a nested class named QThread, and
-// every use of the real Qt class would fail with an incomplete type.
+// Forward declarations *outside* the namespace on purpose: inside
+// LightCpp::App::Msvc they would declare nested classes named QThread and
+// QSettings, and every use of the real Qt classes would fail with an
+// incomplete type.
 class QThread;
+class QSettings;
 
 namespace LightCpp::App::Msvc {
 
@@ -57,6 +60,26 @@ struct Toolchain {
         return !clPath.isEmpty() && problem.isEmpty();
     }
 };
+
+/// Every "version → install root" pair the given settings object holds; it must
+/// already be positioned at the key that lists Visual Studio installs.
+///
+/// Public because the registry cannot be faked for a test, a QSettings file
+/// can, and the shape of this key is exactly what went wrong: from Visual
+/// Studio 2002 to 2019 the installs are **values** of
+/// `HKLM\SOFTWARE\Microsoft\VisualStudio\SxS\VS7`, named by version —
+///
+///     reg query HKLM\SOFTWARE\Wow6432Node\Microsoft\VisualStudio\SxS\VS7
+///     15.0    REG_SZ    C:\Program Files (x86)\Microsoft Visual Studio\2017\Community
+///
+/// (no trailing backslash on that path: inside a `///` comment it would join
+/// the next line, and the build treats that warning as an error)
+/// — while the code here asked for `childGroups()`, i.e. subkeys, and so found
+/// nothing at all. Both shapes are read now (a subkey whose default value is
+/// the path is what the old code assumed some installer wrote); either way each
+/// candidate is probed for cl.exe before it is used, so a shape nobody expected
+/// costs a `stat`, not a wrong answer.
+[[nodiscard]] QList<QPair<QString, QString>> installRootsIn(QSettings& settings);
 
 /// Locate the newest usable MSVC on this machine.
 ///
