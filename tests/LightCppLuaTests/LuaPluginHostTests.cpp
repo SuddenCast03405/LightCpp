@@ -7,7 +7,9 @@
 
 #include <gtest/gtest.h>
 
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include <QTextStream>
 
@@ -495,4 +497,47 @@ ide.notARealMember = 1
     EXPECT_TRUE(loaded.plugin == nullptr);
     EXPECT_TRUE(loaded.error.contains(QStringLiteral("script failed")))
         << loaded.error.toStdString();
+}
+
+// --- the language pack that ships with the IDE -----------------------------
+
+TEST(LuaPluginHost, TheShippedLanguagePackLoadsAndRenamesTheUi)
+{
+    // Everything else in this file writes its own toy script, so nothing
+    // proved that the file the build actually stages into dist/plugins/lua
+    // loads at all — `zh-cn.lua` was only audited by reading it and by
+    // running an equivalent script. It is the one plugin every user of the
+    // Chinese build runs, and it is the only caller of the contract this
+    // suite pins (the `local ui = ide.ui` alias, feature-detected
+    // `type(ui.setWidgetTexts) ~= "function"`, menu/action ids by objectName).
+    const QDir pluginDir(QStringLiteral(LIGHTCPP_LUA_PLUGIN_DIR));
+    const QString path = pluginDir.filePath(QStringLiteral("zh-cn.lua"));
+    ASSERT_TRUE(QFileInfo::exists(path))
+        << "the language pack is missing from the source tree: "
+        << path.toStdString();
+
+    StubServices services;
+    auto loaded =
+        LightCpp::Lua::LuaPluginHost::loadPlugin(path, &services,
+                                                 tightLimits());
+    ASSERT_TRUE(loaded.error.isEmpty()) << loaded.error.toStdString();
+    ASSERT_NE(loaded.plugin, nullptr);
+    EXPECT_EQ(loaded.plugin->name(), QStringLiteral("zh-CN 简体中文"));
+    EXPECT_EQ(loaded.plugin->version(), QStringLiteral("1.1.0"));
+
+    ASSERT_TRUE(loaded.plugin->initialize(&services));
+
+    // The two ids the stub knows about: an untranslated title here means
+    // onInit ran but its writes went nowhere.
+    EXPECT_EQ(services.menuFileTitle, QStringLiteral("文件(&F)"));
+    EXPECT_EQ(services.actionNewText, QStringLiteral("新建(&N)"));
+    EXPECT_TRUE(services.logs.join(QLatin1Char('\n'))
+                    .contains(QStringLiteral("简体中文语言包已加载")))
+        << services.logs.join(QLatin1Char('\n')).toStdString();
+
+    // The settings-dialog table must be skipped, not fatal: this build has no
+    // `ide.ui.setWidgetTexts`, which is exactly what the pack feature-detects.
+    EXPECT_TRUE(services.logs.join(QLatin1Char('\n'))
+                    .contains(QStringLiteral("setWidgetTexts")))
+        << services.logs.join(QLatin1Char('\n')).toStdString();
 }

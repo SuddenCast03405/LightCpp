@@ -5,6 +5,12 @@ add_executable(LightCppLuaTests
     LuaPluginHostTests.cpp
 )
 
+# The language pack ships from the source tree (the build stages it into
+# dist/plugins/lua). One test loads that very file rather than a toy script,
+# so it needs the path — a copy would stop verifying what users get.
+target_compile_definitions(LightCppLuaTests PRIVATE
+    LIGHTCPP_LUA_PLUGIN_DIR="${CMAKE_SOURCE_DIR}/plugins/lua")
+
 target_link_libraries(LightCppLuaTests PRIVATE
     LightCppLua
     GTest::gtest_main
