@@ -48,6 +48,7 @@
 #include <QStringList>
 #include <QTemporaryDir>
 
+#include <string>
 #include <utility>
 
 using LightCpp::App::DebugBreakpoint;
@@ -200,6 +201,19 @@ QString lldbPlant(const QString& fileName, int oneBasedLine)
         .arg(oneBasedLine);
 }
 
+/// gtest has no printer for QString, so a failed comparison would show raw
+/// UTF-16 code units ("<62-00>, <63-00>") instead of the command that was
+/// actually written. Comparing std::string keeps the failure readable.
+std::string text(const QString& value)
+{
+    return value.toStdString();
+}
+
+std::string text(const QStringList& commands)
+{
+    return commands.join(QStringLiteral("\n")).toStdString();
+}
+
 }  // namespace
 
 TEST(DebuggerController, ACdbRemovalTakesTheOneBreakpointAndReArmsTheOthers)
@@ -213,7 +227,7 @@ TEST(DebuggerController, ACdbRemovalTakesTheOneBreakpointAndReArmsTheOthers)
     const QStringList expected{QStringLiteral("bc *"),
                                cdbPlant(QStringLiteral("/proj/src/main.cpp:7")),
                                cdbPlant(QStringLiteral("/proj/src/util.cpp:12"))};
-    EXPECT_EQ(commands, expected);
+    EXPECT_EQ(text(commands), text(expected));
 
     // Stated as the requirement rather than as a string comparison: every
     // breakpoint that was not removed is planted again afterwards.
@@ -229,7 +243,7 @@ TEST(DebuggerController, ACdbRemovalOfTheOnlyBreakpointIsJustTheClear)
 {
     const QStringList commands = LightCpp::App::removeBreakpointCommands(
         Backend::Cdb, kMiddle, {});
-    EXPECT_EQ(commands, QStringList{QStringLiteral("bc *")});
+    EXPECT_EQ(text(commands), std::string("bc *"));
 }
 
 TEST(DebuggerController, AGdbRemovalTakesTheOneLocationAndNothingElse)
@@ -238,8 +252,7 @@ TEST(DebuggerController, AGdbRemovalTakesTheOneLocationAndNothingElse)
     // clear-everything command.
     const QStringList commands = LightCpp::App::removeBreakpointCommands(
         Backend::Gdb, kMiddle, {kFirst, kLast});
-    EXPECT_EQ(commands,
-              QStringList{QStringLiteral("clear /proj/src/main.cpp:8")});
+    EXPECT_EQ(text(commands), std::string("clear /proj/src/main.cpp:8"));
     EXPECT_FALSE(commands.join(QLatin1Char('|')).contains(QLatin1String("bc")));
     EXPECT_FALSE(commands.join(QLatin1Char('|')).contains(QLatin1String("delete")));
 }
@@ -252,12 +265,14 @@ TEST(DebuggerController, ALldbRemovalDoesNotUseTheFileDotLineIdThatDoesNothing)
     const QStringList commands = LightCpp::App::removeBreakpointCommands(
         Backend::Lldb, kMiddle, {kFirst, kLast});
 
-    EXPECT_EQ(commands.first(), QStringLiteral("breakpoint delete -f"));
-    EXPECT_EQ(commands.size(), 3);  // the clear plus one plant per survivor
+    EXPECT_EQ(text(commands.first()), std::string("breakpoint delete -f"));
+    // A size assertion first: `at()` on a shorter list is undefined behaviour,
+    // and a test that crashes instead of failing hides which line disagreed.
+    ASSERT_EQ(commands.size(), 3);  // the clear plus one plant per survivor
     const QString joined = commands.join(QLatin1Char('\n'));
     EXPECT_FALSE(joined.contains(QStringLiteral("main.cpp.8")));
-    EXPECT_EQ(commands.at(1), lldbPlant(QStringLiteral("main.cpp"), 7));
-    EXPECT_EQ(commands.at(2), lldbPlant(QStringLiteral("util.cpp"), 12));
+    EXPECT_EQ(text(commands.at(1)), text(lldbPlant(QStringLiteral("main.cpp"), 7)));
+    EXPECT_EQ(text(commands.at(2)), text(lldbPlant(QStringLiteral("util.cpp"), 12)));
 }
 
 TEST(DebuggerController, TheReArmKeepsThePlantingOrder)
@@ -269,21 +284,21 @@ TEST(DebuggerController, TheReArmKeepsThePlantingOrder)
         Backend::Cdb, kMiddle, {kFirst, kLast, third});
 
     ASSERT_EQ(commands.size(), 4);
-    EXPECT_EQ(commands.at(1), cdbPlant(QStringLiteral("/proj/src/main.cpp:7")));
-    EXPECT_EQ(commands.at(2), cdbPlant(QStringLiteral("/proj/src/util.cpp:12")));
-    EXPECT_EQ(commands.at(3), cdbPlant(QStringLiteral("/proj/src/util.cpp:31")));
+    EXPECT_EQ(text(commands.at(1)), text(cdbPlant(QStringLiteral("/proj/src/main.cpp:7"))));
+    EXPECT_EQ(text(commands.at(2)), text(cdbPlant(QStringLiteral("/proj/src/util.cpp:12"))));
+    EXPECT_EQ(text(commands.at(3)), text(cdbPlant(QStringLiteral("/proj/src/util.cpp:31"))));
 }
 
 TEST(DebuggerController, ThePlantCommandSpeaksEachBackendDialect)
 {
     using LightCpp::App::addBreakpointCommand;
-    EXPECT_EQ(addBreakpointCommand(Backend::Gdb, kMiddle),
-              QStringLiteral("-break-insert \"/proj/src/main.cpp:8\""));
-    EXPECT_EQ(addBreakpointCommand(Backend::Cdb, kMiddle),
-              QStringLiteral("bp `/proj/src/main.cpp:8`"));
+    EXPECT_EQ(text(addBreakpointCommand(Backend::Gdb, kMiddle)),
+              std::string("-break-insert \"/proj/src/main.cpp:8\""));
+    EXPECT_EQ(text(addBreakpointCommand(Backend::Cdb, kMiddle)),
+              std::string("bp `/proj/src/main.cpp:8`"));
     // LLDB resolves by file name, not by path.
-    EXPECT_EQ(addBreakpointCommand(Backend::Lldb, kMiddle),
-              QStringLiteral("breakpoint set --file \"main.cpp\" --line 8"));
+    EXPECT_EQ(text(addBreakpointCommand(Backend::Lldb, kMiddle)),
+              std::string("breakpoint set --file \"main.cpp\" --line 8"));
     EXPECT_TRUE(addBreakpointCommand(Backend::Unknown, kMiddle).isEmpty());
 }
 
@@ -293,8 +308,8 @@ TEST(DebuggerController, ALocationIsOneBasedAndUsesForwardSlashes)
     // debugger counts lines from 1, and Windows paths reach them with forward
     // slashes (all three accept that form).
     const DebugBreakpoint native{QStringLiteral("E:\\proj\\src\\main.cpp"), 0};
-    EXPECT_EQ(LightCpp::App::breakpointLocation(native),
-              QStringLiteral("E:/proj/src/main.cpp:1"));
+    EXPECT_EQ(text(LightCpp::App::breakpointLocation(native)),
+              std::string("E:/proj/src/main.cpp:1"));
 }
 
 TEST(DebuggerController, ABackendThatIsNotSupportedGetsNoRemovalCommands)
