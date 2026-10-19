@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
+#include <QSet>
 
 namespace {
 
@@ -58,6 +59,26 @@ QString unescapeMi(const QString& value)
 QString normalizePath(const QString& path)
 {
     return QDir::fromNativeSeparators(path);
+}
+
+/// Drops repeated file:line entries, keeping first-seen order. The plant batch
+/// and the set remembered for re-arming are both built from this list, so a
+/// location the caller listed twice can never be planted twice and re-armed
+/// once.
+QList<DebugBreakpoint> uniqueLocations(const QList<DebugBreakpoint>& in)
+{
+    QList<DebugBreakpoint> out;
+    out.reserve(in.size());
+    QSet<QString> seen;
+    for (const DebugBreakpoint& bp : in) {
+        const QString key = LightCpp::App::breakpointLocation(bp);
+        if (seen.contains(key)) {
+            continue;
+        }
+        seen.insert(key);
+        out.append(bp);
+    }
+    return out;
 }
 
 }  // namespace
@@ -117,7 +138,8 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
     exePath_ = exePath;
     paused_ = false;
     startFailed_ = false;
-    pendingCommands_ = startCommands(breakpoints);
+    const QList<DebugBreakpoint> toPlant = uniqueLocations(breakpoints);
+    pendingCommands_ = startCommands(toPlant);
 
     process_ = new QProcess(this);
     process_->setProcessChannelMode(QProcess::MergedChannels);
@@ -208,6 +230,10 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
         process_->write((command + QLatin1Char('\n')).toUtf8());
     }
     pendingCommands_.clear();
+    // From here on these are the breakpoints the session believes are armed.
+    // cdb and LLDB can only clear all of them, so this list is what a single
+    // removal re-arms afterwards.
+    armed_ = toPlant;
     emit started();
     return true;
 }
@@ -228,6 +254,7 @@ void DebuggerController::stop()
     discardProcess();
     running_ = false;
     paused_ = false;
+    armed_.clear();  // the debugger took the breakpoints with it
     emit logLine(tr("--- debug session ended ---"));
     // The finished handler above is disconnected, so a manual stop would
     // otherwise never announce its own end — anything keyed on stopped()
@@ -260,6 +287,7 @@ bool DebuggerController::abortStart()
     running_ = false;
     paused_ = false;
     pendingCommands_.clear();
+    armed_.clear();  // nothing was planted if the debugger never came up
     emit logLine(tr("debugger did not start"));
     emit stopped();
     return false;
@@ -273,16 +301,40 @@ bool DebuggerController::isRunning() const
 
 void DebuggerController::addBreakpoint(const DebugBreakpoint& bp)
 {
-    if (isRunning()) {
-        writeCommand(addBreakpointCommand(bp));
+    if (!isRunning()) {
+        return;
     }
+    const QString key = breakpointLocation(bp);
+    for (const DebugBreakpoint& armed : std::as_const(armed_)) {
+        if (breakpointLocation(armed) == key) {
+            // Already planted. cdb answers "breakpoint N redefined" and LLDB
+            // would quietly create a twin numbering, so refuse up front.
+            return;
+        }
+    }
+    writeCommand(addBreakpointCommand(backend_, bp));
+    armed_.append(bp);
 }
 
 void DebuggerController::removeBreakpoint(const DebugBreakpoint& bp)
 {
-    if (isRunning()) {
-        writeCommand(removeBreakpointCommand(bp));
+    if (!isRunning()) {
+        return;
     }
+    const QString key = breakpointLocation(bp);
+    for (qsizetype i = 0; i < armed_.size(); ++i) {
+        if (breakpointLocation(armed_.at(i)) != key) {
+            continue;
+        }
+        armed_.removeAt(i);
+        for (const QString& command :
+             removeBreakpointCommands(backend_, bp, armed_)) {
+            writeCommand(command);
+        }
+        return;
+    }
+    // Not one of ours: there is nothing to take back. Writing a delete anyway
+    // is exactly how "remove one breakpoint" used to become "remove them all".
 }
 
 void DebuggerController::cont()
@@ -310,12 +362,66 @@ void DebuggerController::writeCommand(const QString& command)
 // Per-backend command dialects
 // ---------------------------------------------------------------------------
 
-QString DebuggerController::breakpointLocation(const DebugBreakpoint& bp) const
+QString breakpointLocation(const DebugBreakpoint& bp)
 {
     // Forward slashes for the Unix-ish backends, native separators for cdb;
     // all of them accept forward slashes, so keep one form.
     return QDir::fromNativeSeparators(bp.filePath) + QLatin1Char(':')
            + QString::number(bp.line + 1);
+}
+
+QString addBreakpointCommand(DebuggerController::Backend backend,
+                             const DebugBreakpoint& bp)
+{
+    switch (backend) {
+    case DebuggerController::Backend::Gdb:
+        return QStringLiteral("-break-insert \"%1\"").arg(breakpointLocation(bp));
+    case DebuggerController::Backend::Cdb:
+        return QStringLiteral("bp `%1`").arg(breakpointLocation(bp));
+    case DebuggerController::Backend::Lldb:
+        // LLDB sets by file *name* and line number, not by path:line.
+        return QStringLiteral("breakpoint set --file \"%1\" --line %2")
+            .arg(QFileInfo(bp.filePath).fileName())
+            .arg(bp.line + 1);
+    default:
+        return {};
+    }
+}
+
+QStringList removeBreakpointCommands(DebuggerController::Backend backend,
+                                     const DebugBreakpoint& target,
+                                     const QList<DebugBreakpoint>& stillArmed)
+{
+    switch (backend) {
+    case DebuggerController::Backend::Gdb:
+        // GDB's console has delete-by-location, so one command is enough and
+        // no other breakpoint is touched.
+        return {QStringLiteral("clear %1").arg(breakpointLocation(target))};
+    case DebuggerController::Backend::Cdb:
+    case DebuggerController::Backend::Lldb: {
+        // Neither backend can delete one breakpoint from a location, and
+        // neither can be told which id belongs to it:
+        //   cdb  — `bc` only takes ids, and a source-line breakpoint's id is
+        //          never printed: `bp` says nothing when it succeeds, `bl`
+        //          shows the symbol (`msvcprog!main+0x4`) and `.bpcmds` shows
+        //          an address, so the location cannot be mapped back to an id.
+        //   lldb — `breakpoint delete <file>.<line>` looks like an id but is
+        //          not: it answers "0 breakpoints deleted" and leaves the
+        //          breakpoint armed, which is what this code used to send.
+        // So: clear everything, then re-arm what is still supposed to be
+        // there. Getting `stillArmed` wrong here silently drops breakpoints.
+        QStringList commands;
+        commands << (backend == DebuggerController::Backend::Cdb
+                         ? QStringLiteral("bc *")
+                         : QStringLiteral("breakpoint delete -f"));
+        for (const DebugBreakpoint& bp : stillArmed) {
+            commands << addBreakpointCommand(backend, bp);
+        }
+        return commands;
+    }
+    default:
+        return {};
+    }
 }
 
 QStringList DebuggerController::startCommands(
@@ -334,16 +440,13 @@ QStringList DebuggerController::startCommands(
         // effect for every command below.
         commands << QStringLiteral("-gdb-set charset UTF-8");
         for (const DebugBreakpoint& bp : breakpoints) {
-            commands << QStringLiteral("-break-insert \"%1\"")
-                            .arg(breakpointLocation(bp));
+            commands << addBreakpointCommand(Backend::Gdb, bp);
         }
         commands << QStringLiteral("-exec-run");
         break;
     case Backend::Lldb:
         for (const DebugBreakpoint& bp : breakpoints) {
-            commands << QStringLiteral("breakpoint set --file \"%1\" --line %2")
-                            .arg(QFileInfo(bp.filePath).fileName())
-                            .arg(bp.line + 1);
+            commands << addBreakpointCommand(Backend::Lldb, bp);
         }
         // "run" would give the debuggee LLDB's own stdio handles, and LLDB's
         // Windows launcher fails with "The parameter is incorrect" when those
@@ -361,7 +464,7 @@ QStringList DebuggerController::startCommands(
         // `bp `file:line`` plants each breakpoint.
         commands << QStringLiteral(".lines -e");
         for (const DebugBreakpoint& bp : breakpoints) {
-            commands << QStringLiteral("bp `%1`").arg(breakpointLocation(bp));
+            commands << addBreakpointCommand(Backend::Cdb, bp);
         }
         commands << QStringLiteral("g");
         break;
@@ -413,33 +516,6 @@ QString DebuggerController::quitCommand() const
     case Backend::Gdb:  return QStringLiteral("-gdb-exit");
     case Backend::Cdb:  return QStringLiteral("q");
     default:            return QStringLiteral("quit");
-    }
-}
-
-QString DebuggerController::addBreakpointCommand(const DebugBreakpoint& bp) const
-{
-    switch (backend_) {
-    case Backend::Gdb:  return QStringLiteral("-break-insert \"%1\"")
-                                    .arg(breakpointLocation(bp));
-    case Backend::Cdb:  return QStringLiteral("bp `%1`").arg(breakpointLocation(bp));
-    default:            return QStringLiteral("breakpoint set --file \"%1\" --line %2")
-                                    .arg(QFileInfo(bp.filePath).fileName())
-                                    .arg(bp.line + 1);
-    }
-}
-
-QString DebuggerController::removeBreakpointCommand(const DebugBreakpoint& bp) const
-{
-    switch (backend_) {
-    case Backend::Gdb:
-        // MI's -break-delete wants a breakpoint number we do not track; the
-        // console `clear` command deletes by location, which is what we have.
-        return QStringLiteral("clear %1").arg(breakpointLocation(bp));
-    case Backend::Cdb:
-        return QStringLiteral("bc *");  // cdb has no by-location delete; clear all
-    default:
-        return QStringLiteral("breakpoint delete %1.%2")
-            .arg(QFileInfo(bp.filePath).fileName()).arg(bp.line + 1);
     }
 }
 
