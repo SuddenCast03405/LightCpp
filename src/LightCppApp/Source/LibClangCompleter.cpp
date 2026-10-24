@@ -10,15 +10,42 @@
 #include <QSet>
 #include <QThread>
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 // The real C API declarations (CXString layout, chunk-kind enums, cursor
 // kinds). Included only here; the DLL itself is loaded at run time through
-// QLibrary, so the exe never links against clang — every function call below
-// goes through a pointer resolved in load().
+// LoadLibraryExW, so the exe never links against clang — every function call
+// below goes through a pointer resolved in load().
 #include <clang-c/Index.h>
 
 namespace {
 
 using LightCpp::App::LspCompletionItem;
+
+/// FormatMessageW text for a Win32 error, or an empty string when the system
+/// has no description (loader errors are often terse but still useful).
+QString windowsErrorText(unsigned long error)
+{
+    wchar_t* buffer = nullptr;
+    const DWORD length = FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM
+            | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr, error, 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
+    QString text;
+    if (length > 0 && buffer != nullptr) {
+        text = QString::fromWCharArray(buffer, int(length)).trimmed();
+    }
+    if (buffer != nullptr) {
+        LocalFree(buffer);
+    }
+    return text;
+}
 
 /// Clang's columns are 1-based and counted in UTF-8 bytes from the line
 /// start, while QTextCursor columns (what the editor sends, and what LSP
@@ -125,8 +152,8 @@ LibClangCompleter::~LibClangCompleter()
     // global state must not be torn down on a different thread than the one
     // that created it.
     index_ = nullptr;
-    // lib_ is deliberately leaked: unloading libclang.dll crashes the
-    // process, and the completer lives as long as the IDE anyway.
+    // module_ is deliberately never freed: unloading libclang.dll crashes
+    // the process, and the completer lives as long as the IDE anyway.
 }
 
 bool LibClangCompleter::load(const QString& libraryPath)
@@ -134,50 +161,58 @@ bool LibClangCompleter::load(const QString& libraryPath)
     if (usable_) {
         return true;  // one engine per process; the DLL is never swapped
     }
-    if (lib_ == nullptr) {
-        lib_ = new QLibrary();  // leaked on purpose, see the header
-    }
-    lib_->setFileName(libraryPath);
-    lib_->load();
-    if (!lib_->isLoaded()) {
-        emit logMessage(tr("libclang: cannot load %1: %2")
-                            .arg(QDir::toNativeSeparators(libraryPath),
-                                 lib_->errorString()));
+    // LOAD_WITH_ALTERED_SEARCH_PATH is the load that makes a DLL directory
+    // self-contained: libclang.dll's siblings (libLLVM-*.dll, libclang*.dll,
+    // the MinGW runtime) are looked up next to libclang.dll rather than only
+    // in the executable's directory and PATH. Plain LoadLibrary cannot find
+    // them when the IDE is started from Explorer and the toolchain is not on
+    // PATH.
+    const QString nativePath = QDir::toNativeSeparators(libraryPath);
+    module_ = reinterpret_cast<void*>(LoadLibraryExW(
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()), nullptr,
+        LOAD_WITH_ALTERED_SEARCH_PATH));
+    if (module_ == nullptr) {
+        const unsigned long error = GetLastError();
+        emit logMessage(tr("libclang: cannot load %1: %2 (error %3)")
+                            .arg(nativePath, windowsErrorText(error))
+                            .arg(error));
         return false;
     }
     libPath_ = libraryPath;
 
-    createIndex_ = reinterpret_cast<void* (*)(int, int)>(
-        lib_->resolve("clang_createIndex"));
-    disposeIndex_ = reinterpret_cast<void (*)(void*)>(
-        lib_->resolve("clang_disposeIndex"));
-    parseTU2_ = reinterpret_cast<int (*)(void*, const char*, const char* const*,
-                                         int, void*, unsigned, unsigned, void**)>(
-        lib_->resolve("clang_parseTranslationUnit2"));
-    disposeTU_ = reinterpret_cast<void (*)(void*)>(
-        lib_->resolve("clang_disposeTranslationUnit"));
-    codeCompleteAt_ = reinterpret_cast<void* (*)(void*, const char*, unsigned,
-                                                unsigned, void*, unsigned,
-                                                unsigned)>(
-        lib_->resolve("clang_codeCompleteAt"));
-    disposeCodeCompleteResults_ = reinterpret_cast<void (*)(void*)>(
-        lib_->resolve("clang_disposeCodeCompleteResults"));
-    getNumCompletionChunks_ = reinterpret_cast<unsigned (*)(void*)>(
-        lib_->resolve("clang_getNumCompletionChunks"));
-    getCompletionChunkKind_ = reinterpret_cast<int (*)(void*, unsigned)>(
-        lib_->resolve("clang_getCompletionChunkKind"));
-    getCompletionChunkText_ = reinterpret_cast<ClangString (*)(void*, unsigned)>(
-        lib_->resolve("clang_getCompletionChunkText"));
-    getCompletionAvailability_ = reinterpret_cast<int (*)(void*)>(
-        lib_->resolve("clang_getCompletionAvailability"));
-    getCompletionBriefComment_ = reinterpret_cast<ClangString (*)(void*)>(
-        lib_->resolve("clang_getCompletionBriefComment"));
-    getCString_ = reinterpret_cast<const char* (*)(ClangString)>(
-        lib_->resolve("clang_getCString"));
-    disposeString_ = reinterpret_cast<void (*)(ClangString*)>(
-        lib_->resolve("clang_disposeString"));
-    getClangVersion_ = reinterpret_cast<ClangString (*)()>(
-        lib_->resolve("clang_getClangVersion"));
+    const HMODULE module = static_cast<HMODULE>(module_);
+    const auto resolve = [module](const char* name) -> void (*)() {
+        return reinterpret_cast<void (*)()>(GetProcAddress(module, name));
+    };
+
+    createIndex_ = reinterpret_cast<decltype(createIndex_)>(
+        resolve("clang_createIndex"));
+    disposeIndex_ = reinterpret_cast<decltype(disposeIndex_)>(
+        resolve("clang_disposeIndex"));
+    parseTU2_ = reinterpret_cast<decltype(parseTU2_)>(
+        resolve("clang_parseTranslationUnit2"));
+    disposeTU_ = reinterpret_cast<decltype(disposeTU_)>(
+        resolve("clang_disposeTranslationUnit"));
+    codeCompleteAt_ = reinterpret_cast<decltype(codeCompleteAt_)>(
+        resolve("clang_codeCompleteAt"));
+    disposeCodeCompleteResults_ = reinterpret_cast<decltype(disposeCodeCompleteResults_)>(
+        resolve("clang_disposeCodeCompleteResults"));
+    getNumCompletionChunks_ = reinterpret_cast<decltype(getNumCompletionChunks_)>(
+        resolve("clang_getNumCompletionChunks"));
+    getCompletionChunkKind_ = reinterpret_cast<decltype(getCompletionChunkKind_)>(
+        resolve("clang_getCompletionChunkKind"));
+    getCompletionChunkText_ = reinterpret_cast<decltype(getCompletionChunkText_)>(
+        resolve("clang_getCompletionChunkText"));
+    getCompletionAvailability_ = reinterpret_cast<decltype(getCompletionAvailability_)>(
+        resolve("clang_getCompletionAvailability"));
+    getCompletionBriefComment_ = reinterpret_cast<decltype(getCompletionBriefComment_)>(
+        resolve("clang_getCompletionBriefComment"));
+    getCString_ = reinterpret_cast<decltype(getCString_)>(
+        resolve("clang_getCString"));
+    disposeString_ = reinterpret_cast<decltype(disposeString_)>(
+        resolve("clang_disposeString"));
+    getClangVersion_ = reinterpret_cast<decltype(getClangVersion_)>(
+        resolve("clang_getClangVersion"));
 
     static constexpr const char* kRequired[] = {
         "clang_createIndex",            "clang_disposeIndex",
@@ -188,10 +223,9 @@ bool LibClangCompleter::load(const QString& libraryPath)
         "clang_disposeString",
     };
     for (const char* name : kRequired) {
-        if (lib_->resolve(name) == nullptr) {
+        if (resolve(name) == nullptr) {
             emit logMessage(tr("libclang: %1 is missing export %2")
-                                .arg(QDir::toNativeSeparators(libraryPath),
-                                     QString::fromLatin1(name)));
+                                .arg(nativePath, QString::fromLatin1(name)));
             // Keep the DLL resident (unloading it would crash) but mark the
             // completer unusable, so callers fall back to the language server.
             return false;

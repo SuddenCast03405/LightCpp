@@ -7428,21 +7428,32 @@ QString MainWindow::resolveCompletionServerPath(const QString& backend) const
     return onPath.isEmpty() ? exeName : onPath;
 }
 
-QString MainWindow::resolveLibClangPath() const
+QStringList MainWindow::resolveLibClangPaths() const
 {
     QStringList dirs;
+    // The engine parses in-process, so it has to be built against the same
+    // C++ runtime the IDE already loaded. A libclang from another GCC build
+    // (for example a bundled MinGW 14 toolchain under a GCC 16 IDE) fails to
+    // bind its libstdc++ imports and the whole DLL refuses to load, so the
+    // toolchain the IDE runs on is tried before any bundled one.
+    dirs << ToolchainPaths::mingwBin();
     const QString clangdPath = settings_->clangdPath();
     if (!clangdPath.isEmpty()) {
         dirs << QFileInfo(clangdPath).absolutePath();
     }
     dirs << QCoreApplication::applicationDirPath();
+
+    QStringList paths;
     for (const QString& dir : dirs) {
-        const QString candidate = dir + QLatin1Char('/') + QStringLiteral("libclang.dll");
-        if (QFileInfo::exists(candidate)) {
-            return candidate;
+        if (dir.isEmpty()) {
+            continue;
+        }
+        const QString candidate = QDir(dir).filePath(QStringLiteral("libclang.dll"));
+        if (QFileInfo::exists(candidate) && !paths.contains(candidate)) {
+            paths << candidate;
         }
     }
-    return QString();
+    return paths;
 }
 
 // ---------------------------------------------------------------------------
@@ -7610,19 +7621,27 @@ void MainWindow::applyPreferences()
         ? QStringLiteral("clangd") : prefs.completion.backend;
     completionRetryCount_ = qMax(0, prefs.completion.retryCount);
     completionAttempts_ = 0;
-    if (completionBackend_ == QStringLiteral("libclang")) {
-        if (libClang_ != nullptr && !libClang_->isLoaded()) {
-            const QString libPath = resolveLibClangPath();
-            if (!libPath.isEmpty()) {
-                libClang_->load(libPath);
-            } else {
-                appendLanguageServerLog(
-                    tr("libclang.dll was not found next to clangd or the "
-                       "executable; completion stays on clangd"));
-                completionBackend_ = QStringLiteral("clangd");
+    if (completionBackend_ == QStringLiteral("libclang")
+        && libClang_ != nullptr && !libClang_->isLoaded()) {
+        // Try every candidate until one loads: existence alone is not
+        // enough, because a libclang built by a different toolchain than the
+        // IDE resolves its runtime imports against the already-loaded
+        // libstdc++ and fails with ERROR_PROC_NOT_FOUND.
+        const QStringList candidates = resolveLibClangPaths();
+        for (const QString& candidate : candidates) {
+            if (libClang_->load(candidate)) {
+                break;
             }
         }
-    } else {
+        if (!libClang_->isLoaded()) {
+            appendLanguageServerLog(
+                tr("no loadable libclang.dll was found in the toolchain, "
+                   "next to clangd or next to the executable; completion "
+                   "stays on clangd"));
+            completionBackend_ = QStringLiteral("clangd");
+        }
+    }
+    if (completionBackend_ != QStringLiteral("libclang")) {
         // clangd (the default) or ccls — both are language servers.
         if (completionBackend_ != QStringLiteral("clangd")
             && completionBackend_ != QStringLiteral("ccls")) {

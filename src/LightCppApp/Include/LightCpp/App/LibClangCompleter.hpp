@@ -1,5 +1,5 @@
 // LibClangCompleter — code completion through libclang's C API, loaded at
-// run time (QLibrary) so the IDE has no link-time dependency on clang.
+// run time (LoadLibraryExW) so the IDE has no link-time dependency on clang.
 //
 // libclang answers a completion request by parsing the buffer in-process:
 // slower than clangd for repeated queries (no persistent index) but it needs
@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include <QLibrary>
 #include <QMutex>
 #include <QObject>
 #include <QQueue>
@@ -30,7 +29,7 @@ public:
     /// Load `libraryPath` (e.g. ...\libclang.dll) and resolve the C API entry
     /// points this completer uses. Returns false and logs the reason when the
     /// library cannot be loaded or is missing a required export. Once loaded,
-    /// the DLL stays resident for the process lifetime (see lib_).
+    /// the DLL stays resident for the process lifetime (see module_).
     bool load(const QString& libraryPath);
     [[nodiscard]] bool isLoaded() const { return usable_; }
     [[nodiscard]] const QString& libraryPath() const { return libPath_; }
@@ -125,11 +124,11 @@ private:
         unsigned privateFlags = 0;
     };
 
-    /// Deliberately leaked: libclang.dll must never be unloaded once loaded
-    /// (its teardown runs global cleanup that crashes on this platform), so
-    /// the QLibrary object is created detached and kept for the process
-    /// lifetime. load() is effectively a once-per-process operation.
-    QLibrary* lib_ = nullptr;
+    /// HMODULE of the loaded DLL (stored as void* so <windows.h> stays out
+    /// of this header). Deliberately never freed: libclang.dll must not be
+    /// unloaded once loaded (its teardown runs global cleanup that crashes
+    /// on this platform), so load() is a keep-it-forever operation.
+    void* module_ = nullptr;
     QString libPath_;
     bool usable_ = false;
     QStringList compilerArgs_;

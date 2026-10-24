@@ -600,8 +600,11 @@ private:
     /// file name comes back when nothing was found, so the failure surfaces
     /// in the server log with the path that was tried.
     [[nodiscard]] QString resolveCompletionServerPath(const QString& backend) const;
-    /// Where libclang.dll lives (toolchain dir, exe dir), or empty.
-    [[nodiscard]] QString resolveLibClangPath() const;
+    /// Candidate libclang.dll locations, best first: the toolchain the IDE
+    /// itself runs on (its libstdc++/libwinpthread are already in the
+    /// process), the configured clangd directory, then the executable's
+    /// directory. Empty when none exists.
+    [[nodiscard]] QStringList resolveLibClangPaths() const;
 
     /// A completion request kept around so a failed one can be re-issued.
     struct PendingCompletion {
