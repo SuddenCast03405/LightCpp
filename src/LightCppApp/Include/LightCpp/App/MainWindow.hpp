@@ -1090,7 +1090,7 @@ private:
     /// Drop the Plugins-menu commands that belong to one Lua plugin
     /// (object names "pluginCommand.<plugin>.<id>"). Hot unloading removes
     /// the script, so its commands must not linger until a restart.
-    void removePluginCommands(const QString& pluginName);
+    void removePluginCommands(const QString& pluginName) override;
     /// The plugins-directory-relative paths of the disabled plugins plus
     /// the files still waiting to be deleted, as read by settings_.
     [[nodiscard]] LightCpp::Settings::Preferences pluginPrefsSnapshot() const;

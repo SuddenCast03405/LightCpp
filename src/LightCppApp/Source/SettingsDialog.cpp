@@ -61,8 +61,6 @@ namespace {
 constexpr const char* kConfigFiles[] = {
     "toolchains.json", "kits.json", "defaults.json", "preferences.json"};
 
-constexpr const char* kBuildToolKeys[] = {"cmake", "ninja", "gnuMake", "msbuild"};
-
 constexpr const char* kStylePresets[] = {
     "file", "LLVM", "Google", "Chromium", "Mozilla", "WebKit", "Microsoft", "GNU"};
 

@@ -129,6 +129,12 @@ void BatchFormatter::startNext()
     // (that path is handled synchronously below), so the next file must not
     // inherit the flag.
     errorSeen_ = false;
+    // Same for the timeout mark, and it needs the reset even more: it is
+    // consumed *only* by onFinished()'s timeout branch, so a batch that was
+    // superseded between the watchdog's kill() and the finished signal leaves
+    // it set — the next batch's first file then gets counted as "timed out"
+    // and its success is lost, even though clang-format exited 0.
+    timedOutFile_ = false;
     currentFile_ = files_.first();
     const QString tool = toolPathOverride_.isEmpty() ? CodeFormatter::toolPath()
                                                      : toolPathOverride_;

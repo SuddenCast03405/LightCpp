@@ -3854,7 +3854,7 @@ void MainWindow::showSymbolSearch()
         list->setCurrentRow(0);
     }
 
-    auto jumpFrom = [this, dialog, list](QListWidgetItem* item) {
+    auto jumpFrom = [this, dialog](QListWidgetItem* item) {
         if (item == nullptr) {
             return;
         }
@@ -6921,7 +6921,7 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
         } else {
             // One-shot: once the shell is up, type the program path into it.
             QObject::connect(runner, &QProcess::started, this,
-                             [this, runner, firstInput] {
+                             [runner, firstInput] {
                                  if (runner->state() == QProcess::Running) {
                                      runner->write(firstInput.toLocal8Bit()
                                                    + QByteArray("\r\n"));

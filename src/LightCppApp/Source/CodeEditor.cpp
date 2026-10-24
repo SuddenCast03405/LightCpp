@@ -145,11 +145,6 @@ CodeEditor::CodeEditor(QWidget* parent)
             this, [this](const LightCpp::App::LspCompletionItem& it) {
         applyCompletionItem(it);
     });
-    connect(popup_, &LightCpp::App::CompletionPopup::dismissed,
-            this, [this] {
-        // The popup hides itself; nothing else to do here.
-    });
-
     // "As-you-type" completion: after a short idle following ANY text edit
     // (identifier keystroke or backspace), re-request completions from
     // clangd — regardless of whether the popup is currently visible. This
@@ -284,9 +279,13 @@ void CodeEditor::paintEvent(QPaintEvent* event)
                 ++i;
             }
             if (x > 0) {
-                // tab stops passed on the way in, then the content start
-                for (qreal g = tabStop; g < x; g += tabStop) {
-                    painter.drawLine(qRound(g) - 1, top, qRound(g) - 1, bottom);
+                // Tab stops passed on the way in, then the content start.
+                // Counted rather than accumulated: `g += tabStop` on a qreal
+                // drifts, and the drift decides whether a guide is drawn one
+                // pixel before the content or not at all.
+                for (int stop = 1; stop * tabStop < x; ++stop) {
+                    const int guideX = qRound(stop * tabStop) - 1;
+                    painter.drawLine(guideX, top, guideX, bottom);
                 }
                 painter.drawLine(qRound(x) - 1, top, qRound(x) - 1, bottom);
             }
