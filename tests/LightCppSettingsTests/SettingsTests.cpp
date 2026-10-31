@@ -511,15 +511,24 @@ TEST(SettingsJson, RunOutputParsesAndRoundTrips)
 
 TEST(SettingsJson, RunTerminalsParseAndRoundTrip)
 {
-    // Absent -> the two default Windows terminals are seeded.
+    // Absent -> two native interactive shells are seeded.
     Preferences fresh;
     fromJson(QJsonObject{{"type", "preferences"}}, fresh);
     ASSERT_EQ(fresh.terminals.size(), 2);
+#ifdef Q_OS_WIN
     EXPECT_EQ(fresh.terminals[0].id, "cmd");
     EXPECT_EQ(fresh.terminals[0].name,
               QString::fromUtf8("Windows Command Prompt"));
-    EXPECT_TRUE(fresh.terminals[0].embedded);
     EXPECT_EQ(fresh.terminals[1].id, "powershell");
+    EXPECT_EQ(fresh.terminals[1].command, "powershell.exe -NoExit -Command");
+#else
+    EXPECT_EQ(fresh.terminals[0].id, "sh");
+    EXPECT_EQ(fresh.terminals[0].name, "POSIX Shell");
+    EXPECT_EQ(fresh.terminals[0].command, "sh -i");
+    EXPECT_EQ(fresh.terminals[1].id, "bash");
+    EXPECT_EQ(fresh.terminals[1].command, "bash -i");
+#endif
+    EXPECT_TRUE(fresh.terminals[0].embedded);
     EXPECT_TRUE(fresh.terminals[1].embedded);
 
     // Present -> the list replaces the defaults verbatim (an empty array
