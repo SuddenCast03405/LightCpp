@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFileDevice>
 #include <QTemporaryDir>
 
 using LightCpp::Settings::Toolchain;
@@ -16,15 +17,27 @@ using LightCpp::Settings::scanForToolchains;
 
 namespace {
 
-/// Create an empty file, creating parent directories as needed. The scan
-/// only checks existence, so an empty file behaves like a real executable.
+/// Create an empty executable fixture, creating parent directories as
+/// needed. Windows recognizes executable suffixes; POSIX needs execute bits.
 bool touch(const QString& path)
 {
     if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
         return false;
     }
     QFile file(path);
-    return file.open(QIODevice::WriteOnly);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    file.close();
+#ifndef Q_OS_WIN
+    return QFile::setPermissions(
+        path, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                  | QFileDevice::ExeOwner | QFileDevice::ReadGroup
+                  | QFileDevice::ExeGroup | QFileDevice::ReadOther
+                  | QFileDevice::ExeOther);
+#else
+    return true;
+#endif
 }
 
 }  // namespace
@@ -361,3 +374,48 @@ TEST(ToolchainScannerTests, EveryCompilerFoundIsRecordedSeparately)
     EXPECT_EQ(found[0].compilers.value("gdb"), root + "/gdb.exe");
     EXPECT_EQ(found[0].compilers.value("lldb"), root + "/lldb.exe");
 }
+
+
+TEST(ToolchainScannerTests, IgnoresDirectoriesAndNonExecutableFiles)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString root = dir.filePath("root");
+    ASSERT_TRUE(QDir().mkpath(root + "/g++"));
+    const QString fakeCompiler = root + "/gcc";
+    ASSERT_TRUE(touch(fakeCompiler));
+#ifndef Q_OS_WIN
+    ASSERT_TRUE(QFile::setPermissions(
+        fakeCompiler, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+#endif
+
+    EXPECT_TRUE(scanForToolchains(root).isEmpty());
+}
+
+#ifndef Q_OS_WIN
+TEST(ToolchainScannerTests, DiscoversNativeExecutablesWithoutExeSuffix)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString root = dir.filePath("native-bin");
+    ASSERT_TRUE(touch(root + "/gcc"));
+    ASSERT_TRUE(touch(root + "/g++"));
+    ASSERT_TRUE(touch(root + "/gdb"));
+    ASSERT_TRUE(touch(root + "/clangd"));
+    ASSERT_TRUE(touch(root + "/clang-format"));
+    ASSERT_TRUE(touch(root + "/cmake"));
+    ASSERT_TRUE(touch(root + "/ninja"));
+    ASSERT_TRUE(touch(root + "/make"));
+
+    const QList<Toolchain> found = scanForToolchains(root);
+    ASSERT_EQ(found.size(), 1);
+    EXPECT_EQ(found.first().compilers.value("gcc"), root + "/gcc");
+    EXPECT_EQ(found.first().compilers.value("g++"), root + "/g++");
+    EXPECT_EQ(found.first().compilers.value("gdb"), root + "/gdb");
+    EXPECT_EQ(found.first().clangd, root + "/clangd");
+    EXPECT_EQ(found.first().clangFormat, root + "/clang-format");
+    EXPECT_EQ(found.first().buildTools.value("cmake"), root + "/cmake");
+    EXPECT_EQ(found.first().buildTools.value("ninja"), root + "/ninja");
+    EXPECT_EQ(found.first().buildTools.value("gnuMake"), root + "/make");
+}
+#endif

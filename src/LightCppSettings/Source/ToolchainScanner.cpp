@@ -91,7 +91,8 @@ QStringList fillFromDirectory(const QString& dir, Toolchain* out)
     for (const ScanSpec& spec : kScanSpecs) {
         for (const char* fileName : spec.fileNames) {
             const QString path = QDir(dir).filePath(QLatin1String(fileName));
-            if (!QFileInfo::exists(path)) {
+            const QFileInfo info(path);
+            if (!info.isFile() || !info.isExecutable()) {
                 continue;
             }
             if (toolPath(*out, QLatin1String(spec.key)).isEmpty()) {
