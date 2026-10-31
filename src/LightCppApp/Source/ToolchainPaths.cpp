@@ -15,14 +15,24 @@ QString dirOnPath(const QString& tool)
     return found.isEmpty() ? QString() : QFileInfo(found).absolutePath();
 }
 
-/// A tool: the copy in the build bin directory first, then PATH.
-QString toolPath(const QString& exe)
+/// A tool: the copy in the compiler bin directory first, then PATH.
+/// Check both Unix names and Windows .exe names without assuming the host.
+QString toolPath(const QStringList& names)
 {
     const QString bin = mingwBin();
-    if (hasFile(bin, exe)) {
-        return QDir(bin).filePath(exe);
+    for (const QString& name : names) {
+        if (!bin.isEmpty()) {
+            const QString local = QDir(bin).filePath(name);
+            if (QFileInfo::exists(local)) {
+                return local;
+            }
+        }
+        const QString found = QStandardPaths::findExecutable(name);
+        if (!found.isEmpty()) {
+            return found;
+        }
     }
-    return QStandardPaths::findExecutable(QFileInfo(exe).completeBaseName());
+    return {};
 }
 
 }  // namespace
@@ -44,25 +54,34 @@ QString firstWithTool(const QStringList& candidates,
 
 QString mingwBin()
 {
-    static const QString resolved = dirOnPath(QStringLiteral("g++"));
+    static const QString resolved = [] {
+        QString found = QStandardPaths::findExecutable(QStringLiteral("g++"));
+        if (found.isEmpty()) {
+            found = QStandardPaths::findExecutable(QStringLiteral("g++.exe"));
+        }
+        return found.isEmpty() ? QString() : QFileInfo(found).absolutePath();
+    }();
     return resolved;
 }
 
 QString clangdPath()
 {
-    static const QString resolved = toolPath(QStringLiteral("clangd"));
+    static const QString resolved = toolPath(
+        {QStringLiteral("clangd"), QStringLiteral("clangd.exe")});
     return resolved;
 }
 
 QString clangFormatPath()
 {
-    static const QString resolved = toolPath(QStringLiteral("clang-format"));
+    static const QString resolved = toolPath(
+        {QStringLiteral("clang-format"), QStringLiteral("clang-format.exe")});
     return resolved;
 }
 
 QString gitPath()
 {
-    static const QString resolved = toolPath(QStringLiteral("git"));
+    static const QString resolved = toolPath(
+        {QStringLiteral("git"), QStringLiteral("git.exe")});
     return resolved;
 }
 
