@@ -1,4 +1,5 @@
 #include "LightCpp/Project/DspProject.hpp"
+#include "LightCpp/Project/ProjectPathUtils.hpp"
 
 #include <QDir>
 #include <QFile>
@@ -80,8 +81,7 @@ void appendProjectFile(DspProject& project, FileSlot slot, const QString& path)
 
 QString resolveFilePath(const QString& projectDir, const QString& reference)
 {
-    const QString native = QDir::fromNativeSeparators(stripQuotes(reference));
-    return QDir::cleanPath(QDir(projectDir).absoluteFilePath(native));
+    return Paths::resolveReference(projectDir, stripQuotes(reference));
 }
 
 /// Splits a `# ADD CPP` argument line into its /D "NAME" definitions and
@@ -163,8 +163,8 @@ std::optional<DspProject> parseDspProject(const QString& filePath,
     }
 
     DspProject project;
-    project.filePath = QFileInfo(filePath).absoluteFilePath();
-    project.projectDir = QFileInfo(project.filePath).absolutePath();
+    project.filePath = Paths::absoluteFilePath(filePath);
+    project.projectDir = Paths::directoryForFile(project.filePath);
 
     DspTargetKind pendingKind = DspTargetKind::Application;
     DspConfiguration* current = nullptr;
@@ -362,8 +362,8 @@ std::optional<DswWorkspace> parseDswWorkspace(const QString& filePath,
     }
 
     DswWorkspace workspace;
-    workspace.filePath = QFileInfo(filePath).absoluteFilePath();
-    workspace.projectDir = QFileInfo(workspace.filePath).absolutePath();
+    workspace.filePath = Paths::absoluteFilePath(filePath);
+    workspace.projectDir = Paths::directoryForFile(workspace.filePath);
 
     // `Project: "hello"=.\hello\hello.dsp - Package Owner=<4>` — one line
     // per member project; everything else is package boilerplate. The path
