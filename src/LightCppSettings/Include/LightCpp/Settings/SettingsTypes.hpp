@@ -9,9 +9,11 @@
 
 /// LightCpp::Settings — the IDE's configuration model.
 ///
-/// Configuration lives in JSON documents next to the executable
-/// (<exe dir>/config/*.json), in the spirit of VSCode's settings but keyed
-/// by an explicit "type" field instead of a dotted key namespace:
+/// Configuration lives in JSON documents in a writable portable
+/// <exe dir>/config directory, or falls back to the per-user application
+/// config directory when the installation is read-only. Workspace config
+/// directories can overlay either base. Documents are keyed by an explicit
+/// "type" field instead of a dotted key namespace:
 ///
 ///   "toolchains"   — registries of discovered compilers/debuggers/tools
 ///   "defaults"     — which kit / configuration / tools to use by default
