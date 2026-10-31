@@ -1,10 +1,9 @@
 name: CI
 
-# The product is a Windows-only Qt6 IDE (Qt Widgets + Win32 APIs for process
-# trees, the MSVC registry probe and libclang loading), and the build system is
-# pinned to the MSYS2 UCRT64 toolchain the presets describe. So CI runs the
-# same toolchain on a Windows runner rather than pretending a Linux job would
-# tell us something about the shipped binary.
+# Validate the native Windows, Linux and macOS builds. The Windows job
+# exercises MSYS2 UCRT64 and the Windows-only MSVC integration; the POSIX jobs
+# exercise the separate process backend, host compiler discovery and iconv
+# text conversion.
 #
 # Scope: master only. main is a stub branch (README + LICENSE) and is not
 # built here.
@@ -83,9 +82,99 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ctest-log
+          name: ctest-log-windows
           path: |
             build/ci/Testing/Temporary/LastTest.log
             build/ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  linux-native:
+    name: Linux / Qt 6 / native / ctest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          host: linux
+          target: desktop
+          arch: gcc_64
+          modules: qtbase
+
+      - name: Install LLVM headers and build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build llvm-dev libclang-dev
+
+      - name: Vendor third-party sources
+        run: cmake -P _fetch_deps.cmake
+
+      - name: Configure
+        run: cmake --preset native -DLLVM_ROOT="$(llvm-config --prefix)"
+
+      - name: Build
+        run: cmake --build --preset native --parallel 2
+
+      - name: CTest
+        run: ctest --preset native
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Upload CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-linux
+          path: |
+            build/native/Testing/Temporary/LastTest.log
+            build/native/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  macos-native:
+    name: macOS / Qt 6 / native / ctest
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+
+      - name: Install Qt, LLVM and build tools
+        run: |
+          brew install qt@6 llvm cmake ninja
+          echo "$(brew --prefix qt@6)" >> "$GITHUB_PATH"
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Vendor third-party sources
+        run: cmake -P _fetch_deps.cmake
+
+      - name: Configure
+        run: |
+          LLVM_ROOT="$(brew --prefix llvm)"
+          QT_PREFIX="$(brew --prefix qt@6)"
+          cmake --preset native -DLLVM_ROOT="$LLVM_ROOT" \
+            -DCMAKE_PREFIX_PATH="$QT_PREFIX;$LLVM_ROOT"
+
+      - name: Build
+        run: cmake --build --preset native --parallel 2
+
+      - name: CTest
+        run: ctest --preset native
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Upload CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-macos
+          path: |
+            build/native/Testing/Temporary/LastTest.log
+            build/native/Testing/Temporary/LastTestsFailed.log
           if-no-files-found: ignore
           retention-days: 14
