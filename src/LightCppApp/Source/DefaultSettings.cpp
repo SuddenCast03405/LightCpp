@@ -94,17 +94,17 @@ Toolchain toolchainFromBin(const QString& bin, const QString& id,
             out.compilers.insert(QLatin1String(key), path);
         }
     };
-    note("gcc", binTool(bin, {"gcc.exe"}));
-    note("g++", binTool(bin, {"g++.exe"}));
-    note("clang", binTool(bin, {"clang.exe"}));
-    note("clang++", binTool(bin, {"clang++.exe"}));
-    note("gdb", binTool(bin, {"gdb.exe"}));
-    note("lldb", binTool(bin, {"lldb.exe"}));
-    out.clangd = binTool(bin, {"clangd.exe"});
-    out.clangFormat = binTool(bin, {"clang-format.exe"});
+    note("gcc", binTool(bin, {"gcc", "gcc.exe"}));
+    note("g++", binTool(bin, {"g++", "g++.exe"}));
+    note("clang", binTool(bin, {"clang", "clang.exe"}));
+    note("clang++", binTool(bin, {"clang++", "clang++.exe"}));
+    note("gdb", binTool(bin, {"gdb", "gdb.exe"}));
+    note("lldb", binTool(bin, {"lldb", "lldb.exe"}));
+    out.clangd = binTool(bin, {"clangd", "clangd.exe"});
+    out.clangFormat = binTool(bin, {"clang-format", "clang-format.exe"});
     out.buildTools = toolchainBuildTools(
-        binTool(bin, {"cmake.exe"}), binTool(bin, {"ninja.exe"}),
-        binTool(bin, {"mingw32-make.exe", "make.exe"}));
+        binTool(bin, {"cmake", "cmake.exe"}), binTool(bin, {"ninja", "ninja.exe"}),
+        binTool(bin, {"mingw32-make.exe", "gmake", "make.exe", "make"}));
     return out;
 }
 
@@ -223,9 +223,9 @@ WriteResult ensureDefaultConfigFiles(const QString& dir)
     // come from that bin when it carries them.
     const QString portableBin = portableToolchainBin();
     const QString effectiveClangd = portableBin.isEmpty()
-        ? QString() : binTool(portableBin, {"clangd.exe"});
+        ? QString() : binTool(portableBin, {"clangd", "clangd.exe"});
     const QString effectiveClangFormat = portableBin.isEmpty()
-        ? QString() : binTool(portableBin, {"clang-format.exe"});
+        ? QString() : binTool(portableBin, {"clang-format", "clang-format.exe"});
     // Same two steps as everywhere else, and the same guarantee: only a path
     // that exists comes back, so a starter file never points at a directory
     // this machine does not have.
