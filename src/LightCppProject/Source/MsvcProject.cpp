@@ -181,7 +181,7 @@ QStringList splitSemicolonList(const QString& value)
     for (QString& part : parts) {
         // MSVC writes these with native backslashes; the IDE's path handling
         // is forward-slash everywhere, so normalise on the way in.
-        part = QDir::fromNativeSeparators(part.trimmed());
+        part = Paths::normalizeSeparators(part.trimmed());
     }
     parts.removeAll(QString());
     return parts;
@@ -381,8 +381,8 @@ std::optional<MsvcProject> parseVcproj(const QString& filePath,
                                        const QDomDocument& document)
 {
     MsvcProject project;
-    project.filePath = QFileInfo(filePath).absoluteFilePath();
-    project.projectDir = QFileInfo(project.filePath).absolutePath();
+    project.filePath = Paths::absoluteFilePath(filePath);
+    project.projectDir = Paths::directoryForFile(project.filePath);
     project.isLegacyVcproj = true;
 
     const QDomElement root = document.documentElement();
@@ -522,7 +522,7 @@ QString expandMsvcMacros(const QString& value, const MsvcProject& project,
     }
     // The IDE's path handling is forward-slash everywhere; $(OutDir) and
     // friends carry native backslashes, so normalise on the way out.
-    return QDir::fromNativeSeparators(expanded);
+    return Paths::normalizeSeparators(expanded);
 }
 
 // --- configuration selection ----------------------------------------------
@@ -613,11 +613,7 @@ QString MsvcProject::outputPathFor(const MsvcConfiguration& config) const
         relative = outDir + target + ext;
     }
 
-    const QString native = QDir::fromNativeSeparators(relative);
-    if (QDir::isAbsolutePath(native)) {
-        return QDir::cleanPath(native);
-    }
-    return QDir::cleanPath(QDir(projectDir).absoluteFilePath(native));
+    return Paths::resolveReference(projectDir, relative);
 }
 
 // --- dispatch --------------------------------------------------------------
