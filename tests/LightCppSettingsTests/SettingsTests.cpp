@@ -16,6 +16,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <QStandardPaths>
 
 #include <optional>
 
@@ -1660,3 +1661,30 @@ TEST(ToolchainById, TheCopyOutlivesTheListItCameFrom)
               QStringLiteral("a/gcc.exe"));
 }
 
+
+
+TEST(SettingsStore, RebindsMissingAbsoluteCompilerPathThroughPath)
+{
+    const QString hostGpp = QStandardPaths::findExecutable(QStringLiteral("g++"));
+    if (hostGpp.isEmpty()) {
+        GTEST_SKIP() << "No g++ executable is available on PATH";
+    }
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QJsonObject toolchain = exampleToolchainJson();
+    QJsonObject compilers = toolchain.value(QStringLiteral("compilers")).toObject();
+    compilers.insert(
+        QStringLiteral("g++"),
+        QDir(dir.path()).filePath(QStringLiteral("old-machine/bin/g++.exe")));
+    toolchain.insert(QStringLiteral("compilers"), compilers);
+    writeJson(dir.filePath(QStringLiteral("toolchain.json")), toolchain);
+
+    SettingsStore store;
+    store.setBaseDirectory(dir.path());
+    ASSERT_TRUE(store.reload());
+
+    const QList<Toolchain> loaded = store.toolchains();
+    ASSERT_EQ(loaded.size(), 1);
+    EXPECT_EQ(loaded.first().compilers.value(QStringLiteral("g++")), hostGpp);
+}
