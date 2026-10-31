@@ -7703,9 +7703,15 @@ void MainWindow::applyPreferences()
     runTerminalName_.clear();
     runTerminalCommand_.clear();
     runTerminalEmbedded_ = true;
+#ifdef Q_OS_WIN
     if (prefs.programOutput == QLatin1String("consolePauser")) {
         programOutputMode_ = prefs.programOutput;
-    } else if (prefs.programOutput != QLatin1String("program")) {
+    } else
+#endif
+    if (prefs.programOutput != QLatin1String("program")
+        && prefs.programOutput != QLatin1String("consolePauser")) {
+        // A legacy Windows-only Console Pauser preference on POSIX falls
+        // back to captured Program Output instead of selecting an unusable mode.
         for (const auto& terminal : prefs.terminals) {
             if (terminal.id == prefs.programOutput
                 && !terminal.command.trimmed().isEmpty()) {
