@@ -7713,14 +7713,28 @@ void MainWindow::applyPreferences()
         // A legacy Windows-only Console Pauser preference on POSIX falls
         // back to captured Program Output instead of selecting an unusable mode.
         for (const auto& terminal : prefs.terminals) {
-            if (terminal.id == prefs.programOutput
-                && !terminal.command.trimmed().isEmpty()) {
-                programOutputMode_ = terminal.id;
-                runTerminalName_ = terminal.name;
-                runTerminalCommand_ = terminal.command;
-                runTerminalEmbedded_ = terminal.embedded;
-                break;
+            if (terminal.id != prefs.programOutput
+                || terminal.command.trimmed().isEmpty()) {
+                continue;
             }
+            const QStringList commandParts =
+                QProcess::splitCommand(terminal.command);
+            if (commandParts.isEmpty()) {
+                continue;
+            }
+            const QString executable = commandParts.first();
+            if (!QFileInfo(executable).isExecutable()
+                && QStandardPaths::findExecutable(executable).isEmpty()) {
+                // A persisted terminal from another OS (for example cmd.exe
+                // in an old Windows profile) must not become the active run
+                // mode on this host. Keep the safe captured-output default.
+                continue;
+            }
+            programOutputMode_ = terminal.id;
+            runTerminalName_ = terminal.name;
+            runTerminalCommand_ = terminal.command;
+            runTerminalEmbedded_ = terminal.embedded;
+            break;
         }
     }
     // Only the captured Program Output mode uses the Program channel's
