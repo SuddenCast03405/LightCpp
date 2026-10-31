@@ -3555,7 +3555,7 @@ void MainWindow::onSwitchHeaderSource()
     const QString base = info.completeBaseName();
     for (const QString& targetExt : targets) {
         const QString candidate = dir.filePath(base + u'.' + targetExt);
-        if (QFileInfo::exists(candidate)) {
+        if (QFileInfo(candidate).isFile()) {
             openFileInTab(candidate);
             return;
         }
@@ -7539,8 +7539,9 @@ QString MainWindow::resolveCompletionServerPath(const QString& backend) const
         }
     }
     for (const QString& candidate : candidates) {
-        if (QFileInfo::exists(candidate)) {
-            return candidate;
+        const QFileInfo info(candidate);
+        if (info.isFile() && info.isExecutable()) {
+            return info.absoluteFilePath();
         }
     }
     return QStringLiteral("ccls");
@@ -7609,10 +7610,9 @@ void MainWindow::loadSettings()
                                     ToolchainPaths::clangFormatPath(),
                                     ToolchainPaths::gitPath());
 
-    // First run: write the starter configuration next to the executable so
-    // the settings are discoverable and editable. Files that already exist
-    // are never touched, so this is also a self-repair for a deleted file —
-    // but never an override of an edited one.
+    // First run: write starter configuration to the selected writable base
+    // directory (portable beside the executable when possible, otherwise in
+    // the per-user config location). Existing files are never overwritten.
     const QString baseDir =
         LightCpp::Settings::SettingsStore::baseConfigDirectory();
     const auto result =
