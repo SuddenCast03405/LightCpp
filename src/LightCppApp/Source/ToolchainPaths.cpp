@@ -18,7 +18,7 @@ QString compilerBinIfPresent(const QString& bin)
                                 QStringLiteral("g++.exe"),
                                 QStringLiteral("clang++"),
                                 QStringLiteral("clang++.exe")}) {
-        if (QFileInfo::isFile(QDir(bin).filePath(name))) {
+        if (QFileInfo(QDir(bin).filePath(name)).isFile()) {
             return QDir(bin).absolutePath();
         }
     }
@@ -87,13 +87,16 @@ QString mingwBin()
 {
     static const QString resolved = [] {
         const QString prefix = qEnvironmentVariable("MINGW_PREFIX");
-        if (const QString bin = compilerBinIfPresent(prefix); !bin.isEmpty()) {
-            return bin;
-        }
-        if (const QString bin = compilerBinIfPresent(
-                QDir(prefix).filePath(QStringLiteral("bin")));
-            !bin.isEmpty()) {
-            return bin;
+        if (!prefix.isEmpty()) {
+            if (const QString bin = compilerBinIfPresent(prefix);
+                !bin.isEmpty()) {
+                return bin;
+            }
+            if (const QString bin = compilerBinIfPresent(
+                    QDir(prefix).filePath(QStringLiteral("bin")));
+                !bin.isEmpty()) {
+                return bin;
+            }
         }
 
         if (const QString bin = msys2BinFromRoot(
