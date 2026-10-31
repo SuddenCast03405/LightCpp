@@ -7,45 +7,16 @@
 #include <QFileInfo>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QLibrary>
 #include <QSet>
 #include <QThread>
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-
-// The real C API declarations (CXString layout, chunk-kind enums, cursor
-// kinds). Included only here; the DLL itself is loaded at run time through
-// LoadLibraryExW, so the exe never links against clang — every function call
-// below goes through a pointer resolved in load().
+// libclang C API declarations; symbols are resolved at run time.
 #include <clang-c/Index.h>
 
 namespace {
 
 using LightCpp::App::LspCompletionItem;
-
-/// FormatMessageW text for a Win32 error, or an empty string when the system
-/// has no description (loader errors are often terse but still useful).
-QString windowsErrorText(unsigned long error)
-{
-    wchar_t* buffer = nullptr;
-    const DWORD length = FormatMessageW(
-        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM
-            | FORMAT_MESSAGE_IGNORE_INSERTS,
-        nullptr, error, 0, reinterpret_cast<LPWSTR>(&buffer), 0, nullptr);
-    QString text;
-    if (length > 0 && buffer != nullptr) {
-        text = QString::fromWCharArray(buffer, int(length)).trimmed();
-    }
-    if (buffer != nullptr) {
-        LocalFree(buffer);
-    }
-    return text;
-}
 
 /// Clang's columns are 1-based and counted in UTF-8 bytes from the line
 /// start, while QTextCursor columns (what the editor sends, and what LSP
@@ -152,8 +123,7 @@ LibClangCompleter::~LibClangCompleter()
     // global state must not be torn down on a different thread than the one
     // that created it.
     index_ = nullptr;
-    // module_ is deliberately never freed: unloading libclang.dll crashes
-    // the process, and the completer lives as long as the IDE anyway.
+    // QLibrary uses PreventUnloadHint so the module remains resident until exit.
 }
 
 bool LibClangCompleter::load(const QString& libraryPath)
@@ -161,28 +131,21 @@ bool LibClangCompleter::load(const QString& libraryPath)
     if (usable_) {
         return true;  // one engine per process; the DLL is never swapped
     }
-    // LOAD_WITH_ALTERED_SEARCH_PATH is the load that makes a DLL directory
-    // self-contained: libclang.dll's siblings (libLLVM-*.dll, libclang*.dll,
-    // the MinGW runtime) are looked up next to libclang.dll rather than only
-    // in the executable's directory and PATH. Plain LoadLibrary cannot find
-    // them when the IDE is started from Explorer and the toolchain is not on
-    // PATH.
+    // QLibrary provides the platform loader and keeps the IDE independent
+    // of the installed libclang version. PreventUnloadHint is intentional:
+    // libclang's process-global teardown is not safe to invoke here.
     const QString nativePath = QDir::toNativeSeparators(libraryPath);
-    module_ = reinterpret_cast<void*>(LoadLibraryExW(
-        reinterpret_cast<LPCWSTR>(nativePath.utf16()), nullptr,
-        LOAD_WITH_ALTERED_SEARCH_PATH));
-    if (module_ == nullptr) {
-        const unsigned long error = GetLastError();
-        emit logMessage(tr("libclang: cannot load %1: %2 (error %3)")
-                            .arg(nativePath, windowsErrorText(error))
-                            .arg(error));
+    library_.setFileName(libraryPath);
+    library_.setLoadHints(QLibrary::PreventUnloadHint);
+    if (!library_.load()) {
+        emit logMessage(tr("libclang: cannot load %1: %2")
+                            .arg(nativePath, library_.errorString()));
         return false;
     }
     libPath_ = libraryPath;
 
-    const HMODULE module = static_cast<HMODULE>(module_);
-    const auto resolve = [module](const char* name) -> void (*)() {
-        return reinterpret_cast<void (*)()>(GetProcAddress(module, name));
+    const auto resolve = [this](const char* name) -> void (*)() {
+        return reinterpret_cast<void (*)()>(library_.resolve(name));
     };
 
     createIndex_ = reinterpret_cast<decltype(createIndex_)>(

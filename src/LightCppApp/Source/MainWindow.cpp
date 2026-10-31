@@ -35,11 +35,6 @@
 #include <algorithm>
 #include <functional>
 
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <tlhelp32.h>
 
 #include <QAction>
 #include <QActionGroup>

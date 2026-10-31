@@ -1,5 +1,5 @@
 // LibClangCompleter — code completion through libclang's C API, loaded at
-// run time (LoadLibraryExW) so the IDE has no link-time dependency on clang.
+// run time (QLibrary) so the IDE has no link-time dependency on clang.
 //
 // libclang answers a completion request by parsing the buffer in-process:
 // slower than clangd for repeated queries (no persistent index) but it needs
@@ -11,6 +11,7 @@
 #pragma once
 
 #include <QMutex>
+#include <QLibrary>
 #include <QObject>
 #include <QQueue>
 #include <QStringList>
@@ -124,11 +125,8 @@ private:
         unsigned privateFlags = 0;
     };
 
-    /// HMODULE of the loaded DLL (stored as void* so <windows.h> stays out
-    /// of this header). Deliberately never freed: libclang.dll must not be
-    /// unloaded once loaded (its teardown runs global cleanup that crashes
-    /// on this platform), so load() is a keep-it-forever operation.
-    void* module_ = nullptr;
+    /// Cross-platform loader; PreventUnloadHint keeps libclang resident.
+    QLibrary library_;
     QString libPath_;
     bool usable_ = false;
     QStringList compilerArgs_;
