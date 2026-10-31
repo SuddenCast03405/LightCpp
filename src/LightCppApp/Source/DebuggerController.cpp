@@ -201,10 +201,12 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
         // when it creates the debuggee; launched from a GUI process (no
         // console at all) CreateProcess fails with "The parameter is
         // incorrect". Grant a console but keep its window hidden.
+#ifdef Q_OS_WIN
         process_->setCreateProcessArgumentsModifier(
             [](QProcess::CreateProcessArguments* args) {
                 args->flags |= 0x08000000;  // CREATE_NO_WINDOW
             });
+#endif
         break;
     case Backend::Cdb:
         // -lines: source-line breakpoints; -y: symbol path from _NT_SYMBOL_PATH
