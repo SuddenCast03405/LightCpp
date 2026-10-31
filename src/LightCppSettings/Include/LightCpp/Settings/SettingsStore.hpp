@@ -95,7 +95,8 @@ public:
     }
 
     /// Test/alternative-root hook: use `dir` as the base layer instead of
-    /// <exe dir>/config. Empty (the default) restores the executable path.
+    /// The platform-selected writable portable or per-user config directory.
+    /// Empty (the default) restores that location.
     void setBaseDirectory(const QString& dir);
 
     /// Compiled-in tool locations used when the settings do not name one.
@@ -178,7 +179,7 @@ private:
     QList<QPair<QString, QJsonObject>> toolchainDocs_;  ///< id -> merged doc
     QJsonObject mergedDefaults_;
     QJsonObject mergedPreferences_;
-    QString baseDir_;  ///< empty = the executable-relative default
+    QString baseDir_;  ///< empty = the platform-selected writable config base
     QStringList overlayDirs_;
     QString fallbackClangd_;
     QString fallbackClangFormat_;
