@@ -142,3 +142,14 @@ TEST(MsvcRegistry, AKeyThatHoldsNothingYieldsNothing)
 
     EXPECT_TRUE(readRoots(path).isEmpty());
 }
+
+#ifndef Q_OS_WIN
+TEST(MsvcRegistry, DetectionReportsUnsupportedPlatform)
+{
+    const LightCpp::App::Msvc::Toolchain toolchain =
+        LightCpp::App::Msvc::detect();
+    EXPECT_FALSE(toolchain.isValid());
+    EXPECT_NE(toolchain.problem.indexOf(QStringLiteral("only on Windows")),
+              -1);
+}
+#endif
