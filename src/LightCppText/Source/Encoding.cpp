@@ -220,10 +220,13 @@ TextEncoding localAnsiEncoding() noexcept
     default:    return TextEncoding::Windows1252;
     }
 #else
-    QByteArray codeset = QByteArray(nl_langinfo(CODESET)).toUpper();
-    codeset.remove('-');
-    codeset.remove('_');
-    codeset.remove('.');
+    const QByteArray rawCodeset = QByteArray(nl_langinfo(CODESET)).toUpper();
+    QByteArray codeset;
+    for (const char ch : rawCodeset) {
+        if (ch != '-' && ch != '_' && ch != '.') {
+            codeset.append(ch);
+        }
+    }
     if (codeset == "UTF8" || codeset == "ANSIX341968"
         || codeset == "USASCII" || codeset == "ASCII") {
         return TextEncoding::Utf8;
