@@ -28,6 +28,18 @@
       "cacheVariables": {
         "LIGHTCPP_ENABLE_COVERAGE": "ON"
       }
+    },
+    {
+      "name": "ci",
+      "displayName": "CI (MSYS2 UCRT64 shell)",
+      "description": "Same toolchain as msys2-ucrt64, but with no hard-coded install path: the compiler, ninja and Qt come from PATH, and CMAKE_PREFIX_PATH is passed by the caller (the CI workflow passes the MSYS2 UCRT64 prefix).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "LIGHTCPP_DEPLOY_QT": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -38,6 +50,10 @@
     {
       "name": "msys2-ucrt64-coverage",
       "configurePreset": "msys2-ucrt64-coverage"
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci"
     }
   ],
   "testPresets": [
@@ -50,6 +66,16 @@
       "name": "msys2-ucrt64-coverage",
       "configurePreset": "msys2-ucrt64-coverage",
       "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "output": { "outputOnFailure": true },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error",
+        "timeout": 180
+      }
     }
   ]
 }

@@ -119,6 +119,23 @@ TEST(LuaSandbox, PrintGoesToTheSink)
     EXPECT_EQ(printed.first(), QStringLiteral("hello\t42"));
 }
 
+TEST(LuaSandbox, OsDateHonoursTheUtcMarkerAndTheTimestamp)
+{
+    // os.date("!...") is UTC by definition, and the second argument is the
+    // timestamp to render. Both were dropped: the `!` was merely stripped
+    // (so "%H" reported wall-clock hours) and the timestamp was ignored (so
+    // the function always reported "now"). Epoch 0 pins the expectation to
+    // 1970-01-01T00:00:00Z, which no local timezone can fake.
+    EXPECT_EQ(errorMessageOf("error(os.date('!%Y-%m-%d', 0))"),
+              QStringLiteral("1970-01-01"));
+    EXPECT_EQ(errorMessageOf("error(os.date('!%H:%M', 0))"),
+              QStringLiteral("00:00"));
+    // Without the marker the same instant renders in local time, which the
+    // fixture cannot predict — assert only that it parses, i.e. the call
+    // still answers instead of erroring out.
+    EXPECT_FALSE(errorMessageOf("error(tostring(#os.date('%Y', 0)))").isEmpty());
+}
+
 TEST(LuaSandbox, Lua54IntegerSubtypeAndGenerationalGc)
 {
     // 7//2 is integer division in 5.4; math.type distinguishes 3 (integer)

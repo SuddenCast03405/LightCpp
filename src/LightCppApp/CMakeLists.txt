@@ -113,7 +113,10 @@ foreach(script ${LIGHTCPP_LUA_PLUGINS})
 endforeach()
 
 # WinDeployQt: auto-deploy Qt DLLs next to the exe.
-if(WIN32)
+# LIGHTCPP_DEPLOY_QT=OFF skips it: the deployment step needs a working pipe and
+# a writable Qt install, neither of which a CI runner should have to provide,
+# and no test binary depends on the deployed copy.
+if(WIN32 AND LIGHTCPP_DEPLOY_QT)
     find_program(WINDOWS_DEPLOY_QT NAMES windeployqt6 windeployqt
         HINTS ${CMAKE_PREFIX_PATH}/bin $ENV{PATH})
     if(WINDOWS_DEPLOY_QT)

@@ -42,7 +42,11 @@ int luaOsClock(lua_State* L)
 int luaOsDate(lua_State* L)
 {
     const char* fmt = luaL_optstring(L, 1, "%c");
-    if (*fmt == '!') {  // no UTC handling beyond the standard marker
+    // Lua's `!` prefix asks for UTC (`gmtime`), not merely a decoration to
+    // strip: dropping it made os.date("!%H") report wall-clock hours.
+    bool utc = false;
+    if (*fmt == '!') {
+        utc = true;
         ++fmt;
     }
     if (*fmt == '%' && *(fmt + 1) == 'c') {
@@ -50,9 +54,29 @@ int luaOsDate(lua_State* L)
         fmt = "%Y-%m-%d %H:%M:%S";
     }
     char buffer[256];
-    const time_t t = ::time(nullptr);
+    // Lua's os.date(fmt [, t]) takes the timestamp as a second argument; the
+    // version before this ignored it and always reported "now", which also
+    // made the function untestable without a wall-clock race.
+    const time_t t = static_cast<time_t>(
+        luaL_optinteger(L, 2, static_cast<lua_Integer>(::time(nullptr))));
     struct tm local;
-    ::localtime_s(&local, &t);
+    // MSVC spells these _s() with the output first; POSIX spells them _r()
+    // with the output last. MSYS2's MinGW runtime has the _s() form, glibc
+    // only the _r() one — without the split this file does not compile on
+    // Linux, which is what CI runs.
+#if defined(_WIN32)
+    if (utc) {
+        ::gmtime_s(&local, &t);
+    } else {
+        ::localtime_s(&local, &t);
+    }
+#else
+    if (utc) {
+        ::gmtime_r(&t, &local);
+    } else {
+        ::localtime_r(&t, &local);
+    }
+#endif
     const size_t written = ::strftime(buffer, sizeof(buffer), fmt, &local);
     lua_pushlstring(L, buffer, written);
     return 1;

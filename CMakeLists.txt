@@ -39,6 +39,11 @@ include(cmake/CPM.cmake)
 # ---------------------------------------------------------------------------
 option(LIGHTCPP_ENABLE_COVERAGE "Enable gcov instrumentation for coverage reports" OFF)
 
+# windeployqt after building `lightcpp`. On by default so a local Windows build
+# still produces a runnable dist/; CI turns it off (no test needs it, and the
+# step is the one part of the build that depends on a writable Qt install).
+option(LIGHTCPP_DEPLOY_QT "Deploy the Qt runtime next to lightcpp (Windows only)" ON)
+
 if(LIGHTCPP_ENABLE_COVERAGE)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         message(FATAL_ERROR "Coverage requires GCC or Clang (gcov-based).")

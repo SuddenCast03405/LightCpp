@@ -68,6 +68,12 @@ Design notes (spec compliance):
 
 ## Build (MSYS2 UCRT64)
 
+Toolchain packages: `mingw-w64-ucrt-x86_64-gcc`, `-cmake`, `-ninja`,
+`-qt6-base`, and `-clang` — the last one only for `clang-c/Index.h`, which
+`LibClangCompleter.cpp` includes at build time (the DLL itself is opened with
+`LoadLibraryExW` at run time). Without it the build stops at
+`fatal error: clang-c/Index.h: No such file or directory`.
+
 ```bash
 E:/msys64/ucrt64/bin/cmake.exe --preset msys2-ucrt64
 E:/msys64/ucrt64/bin/cmake.exe --build --preset msys2-ucrt64
@@ -103,6 +109,34 @@ Notes:
 
 Coverage build: `cmake --build build/msys2-ucrt64-coverage --target LightCppCoverage`
 (requires lcov/genhtml; enable with the `msys2-ucrt64-coverage` preset).
+
+## CI
+
+`.github/workflows/ci.yml` builds and tests **master** on a Windows runner with
+the same toolchain as the section above: MSYS2 UCRT64 with Qt6 from pacman,
+`_fetch_deps.cmake` for Lua/LuaBridge3, then `cmake --preset ci` →
+`cmake --build --preset ci` → `ctest --preset ci`.
+
+The `ci` preset differs from `msys2-ucrt64` in the two ways that make a CI job
+possible: nothing is hard-coded to `E:/msys64` (compiler, ninja and Qt come from
+`PATH`; `CMAKE_PREFIX_PATH` is passed by the caller), and
+`LIGHTCPP_DEPLOY_QT=OFF` skips the windeployqt step — no test needs the deployed
+copy, and it is the only part of the build that needs a writable Qt install.
+`ctest --preset ci` runs with `--no-tests=error`, so a preset or filter that
+matches nothing fails instead of reporting a green run over zero tests.
+
+The same three commands work locally from an MSYS2 UCRT64 shell:
+
+```bash
+cmake -P _fetch_deps.cmake
+cmake --preset ci -DCMAKE_PREFIX_PATH="$MINGW_PREFIX"
+cmake --build --preset ci && ctest --preset ci
+```
+
+CI is Windows-only because the product is: `ProcessTree`, `DebuggerController`,
+`LibClangCompleter` and `MainWindow` include `windows.h` or call Win32 APIs
+unconditionally, and the project suites assert Windows path shapes (`E:/proj`).
+A Linux job would be red for reasons that say nothing about the shipped binary.
 
 ## Layout
 

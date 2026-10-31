@@ -1,0 +1,91 @@
+name: CI
+
+# The product is a Windows-only Qt6 IDE (Qt Widgets + Win32 APIs for process
+# trees, the MSVC registry probe and libclang loading), and the build system is
+# pinned to the MSYS2 UCRT64 toolchain the presets describe. So CI runs the
+# same toolchain on a Windows runner rather than pretending a Linux job would
+# tell us something about the shipped binary.
+#
+# Scope: master only. main is a stub branch (README + LICENSE) and is not
+# built here.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: MSYS2 UCRT64 / Debug / ctest
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+
+      # update: true refreshes the package database first. Without it a stale
+      # mirror snapshot can make `pacman -S` resolve to a version that is no
+      # longer in the pool, which fails before a single line of C++ is built.
+      - name: Install toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-clang
+
+      - name: Report toolchain versions
+        run: |
+          g++ --version | head -n 1
+          cmake --version | head -n 1
+          ninja --version
+          qmake6 -query QT_VERSION || qmake -query QT_VERSION || true
+
+      # Lua 5.4.7 and LuaBridge3 are not committed (third_party/ is ignored by
+      # .gitignore); _fetch_deps.cmake is what vendors them. Configure fails
+      # with "third_party/lua-5.4.7/src/lapi.c not found" if this is skipped.
+      - name: Vendor third-party sources (Lua, LuaBridge3)
+        run: cmake -P _fetch_deps.cmake
+
+      # cygpath -m turns the MSYS2 prefix (/ucrt64) into the Windows form
+      # (C:/msys64/ucrt64) that the native cmake.exe understands. Passing it
+      # as an argument, not from the preset, keeps the preset free of
+      # machine-specific paths.
+      - name: Configure
+        run: cmake --preset ci -DCMAKE_PREFIX_PATH="$(cygpath -m "$MINGW_PREFIX")"
+
+      - name: Build
+        run: cmake --build --preset ci --parallel "$(nproc)"
+
+      # --no-tests=error (set in the preset) turns "the filter/preset matched
+      # nothing" into a failure instead of a green run over zero tests.
+      - name: CTest
+        run: ctest --preset ci
+
+      - name: Upload CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log
+          path: |
+            build/ci/Testing/Temporary/LastTest.log
+            build/ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 14

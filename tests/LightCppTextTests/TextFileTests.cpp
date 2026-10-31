@@ -146,8 +146,19 @@ TEST_F(TextFileTest, ReadsUtf16LeFile)
 // On a zh-CN Windows system the local ANSI code page is GBK (CP936). A GBK
 // file is therefore detected as the local ANSI encoding — which on this
 // build machine is GBK. Both names are accepted.
+//
+// The premise is the *machine's* code page (auto-detection falls back to
+// localAnsiEncoding()), so the assertion only means something where the ACP
+// is 936. On a runner with ACP 1252 the same bytes decode as Windows-1252 and
+// the test would be checking the runner's locale instead of the reader —
+// which is exactly how it failed on the first CI run.
 TEST_F(TextFileTest, ReadsGbkFileAsUtf8)
 {
+    const UINT ansiCodePage = ::GetACP();
+    if (ansiCodePage != 936) {
+        GTEST_SKIP() << "local ANSI code page is " << ansiCodePage
+                     << ", not GBK (936)";
+    }
     const QString text = "你好，世界！这是一个 GBK 文件。";
     const QString path = writeFile("gbk.txt", winEncode(text, 936));
     const auto result = LightCpp::Text::readDetectedTextFile(path);
