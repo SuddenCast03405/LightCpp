@@ -417,6 +417,21 @@ TEST(EncodingConvert, InvalidGbkRejected)
 #endif  // _WIN32
 
 #ifndef _WIN32
+TEST(EncodingDetect, InvalidBytesOnUtf8LocaleUseLosslessFallback)
+{
+    if (LightCpp::Text::localAnsiEncoding() != TextEncoding::Utf8) {
+        GTEST_SKIP() << "test requires a UTF-8 POSIX locale";
+    }
+    const QByteArray bytes = QByteArray::fromHex("C4E3BAC3");
+    const auto detection = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(detection.encoding, TextEncoding::Latin1);
+    EXPECT_FALSE(detection.reliable);
+    const auto decoded =
+        LightCpp::Text::decodeToQString(bytes, detection.encoding);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(*decoded, QString::fromLatin1(bytes));
+}
+
 TEST(EncodingConvert, PosixLegacyCodecsRoundTrip)
 {
     struct Case {
