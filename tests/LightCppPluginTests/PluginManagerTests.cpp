@@ -112,6 +112,7 @@ TEST(PluginManager, AMissingPluginsDirectoryIsQuiet)
     EXPECT_TRUE(manager.loaded().isEmpty());
 }
 
+#ifdef Q_OS_WIN
 TEST(PluginManager, DevCppPluginLoadsOpensAndAnswersBuildSteps)
 {
     SilentServices services;
@@ -207,6 +208,8 @@ private:
 
 }  // namespace
 
+#endif  // Q_OS_WIN
+
 TEST(PluginManager, RegisteredPluginHotUnloadsBySource)
 {
     SilentServices services;
@@ -253,7 +256,9 @@ TEST(PluginManager, DisabledSharedPluginsAreSkipped)
             dlls.append(info.fileName());
         }
     }
-    ASSERT_FALSE(dlls.isEmpty()) << "no plugin dll was built to disable";
+    if (dlls.isEmpty()) {
+        GTEST_SKIP() << "no native shared plugin is built for this platform";
+    }
 
     SilentServices services;
     LightCpp::Plugin::PluginManager manager;
@@ -337,12 +342,12 @@ TEST(PluginManager, APluginThatInitializesKeepsItsCommands)
     EXPECT_TRUE(services.removals.isEmpty());
 }
 
-TEST(PluginManager, AnUnloadableDllReportsWhyItFailed)
+TEST(PluginManager, AnUnloadableLibraryReportsWhyItFailed)
 {
-    // A text file wearing a .dll name: the path check passes and the load
+    // A text file wearing a shared-library suffix: the path check passes and the load
     // itself fails, which is the shape of a plugin with missing
     // dependencies. The manager must hand the user a reason, not a bare
-    // "broken.dll: ".
+    // "broken shared library: ".
     //
     // This is a *characterization* test, not a reverse-proof. The review
     // claimed the old code read errorString() before load(), where it "must
@@ -383,6 +388,7 @@ TEST(PluginManager, AnUnloadableDllReportsWhyItFailed)
 // A failed reopen must not leave the previous project behind (R2-29)
 // ---------------------------------------------------------------------------
 
+#ifdef Q_OS_WIN
 TEST(PluginManager, AFailedReopenDropsThePreviousProject)
 {
     SilentServices services;
@@ -429,3 +435,5 @@ TEST(PluginManager, AFailedReopenDropsThePreviousProject)
         << error.toStdString();
     EXPECT_FALSE(backend->buildSteps(request).isEmpty());
 }
+
+#endif  // Q_OS_WIN
