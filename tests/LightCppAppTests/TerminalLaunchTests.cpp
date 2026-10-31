@@ -56,6 +56,7 @@ int shellWordCount(const QString& line)
 
 }  // namespace
 
+#ifdef Q_OS_WIN
 TEST(TerminalLaunch, ACmdPathWithSpacesStaysOneWord)
 {
     const QString line = programCommandLine(QStringLiteral("C:/My Project/bin/hello.exe"),
@@ -63,6 +64,23 @@ TEST(TerminalLaunch, ACmdPathWithSpacesStaysOneWord)
     EXPECT_EQ(line, QStringLiteral("\"C:/My Project/bin/hello.exe\""));
     EXPECT_EQ(shellWordCount(line), 1);
 }
+#else
+TEST(TerminalLaunch, PosixPathWithSpacesStaysOneWord)
+{
+    const QString line = programCommandLine(QStringLiteral("/home/user/My Project/bin/hello"),
+                                            /*powerShellStyle=*/false);
+    EXPECT_EQ(line, QStringLiteral("'/home/user/My Project/bin/hello'"));
+    EXPECT_EQ(shellWordCount(line), 1);
+}
+
+TEST(TerminalLaunch, PosixSingleQuotesAreEscaped)
+{
+    const QString line = programCommandLine(QStringLiteral("/home/user/O'Brien/hello"),
+                                            /*powerShellStyle=*/false);
+    EXPECT_EQ(line, QStringLiteral("'/home/user/O'\\''Brien/hello'"));
+    EXPECT_EQ(shellWordCount(line), 1);
+}
+#endif
 
 TEST(TerminalLaunch, TheUnquotedPathWouldBeReadAsTwoWords)
 {
