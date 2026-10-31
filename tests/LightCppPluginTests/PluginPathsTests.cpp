@@ -15,6 +15,15 @@
 
 namespace {
 
+QString testPluginLibraryName()
+{
+#ifdef Q_OS_WIN
+    return testPluginLibraryName();
+#else
+    return QStringLiteral("libdevcppplugin.so");
+#endif
+}
+
 /// Drop an empty file at `path` — the resolver only ever looks at names.
 bool touch(const QString& path)
 {
@@ -66,11 +75,11 @@ TEST(PluginPaths, PrefersTheDirectoryNextToTheExecutable)
     ASSERT_FALSE(exeDir.isEmpty());
     const QString beside =
         makePluginDirectory(dir.filePath(QStringLiteral("bin/plugins")),
-                            QStringLiteral("libdevcppplugin.dll"));
+                            testPluginLibraryName());
     ASSERT_FALSE(beside.isEmpty());
     // Also present one level up: the one next to the exe still wins.
     ASSERT_FALSE(makePluginDirectory(dir.filePath(QStringLiteral("plugins")),
-                                     QStringLiteral("libdevcppplugin.dll"))
+                                     testPluginLibraryName())
                      .isEmpty());
     EXPECT_EQ(LightCpp::Plugin::resolvePluginsDirectory(exeDir), beside);
 }
@@ -87,7 +96,7 @@ TEST(PluginPaths, TheDirectoryNextToTheExecutableNeedsNoPluginDllToWin)
         makeDirectory(dir.filePath(QStringLiteral("bin/plugins")));
     ASSERT_FALSE(beside.isEmpty());
     ASSERT_FALSE(makePluginDirectory(dir.filePath(QStringLiteral("plugins")),
-                                     QStringLiteral("libdevcppplugin.dll"))
+                                     testPluginLibraryName())
                      .isEmpty());
     EXPECT_EQ(LightCpp::Plugin::resolvePluginsDirectory(exeDir), beside);
 }
@@ -100,7 +109,7 @@ TEST(PluginPaths, FallsBackToTheBuildTreeDirectory)
     const QTemporaryDir dir;
     const QString buildTree =
         makePluginDirectory(dir.filePath(QStringLiteral("plugins")),
-                            QStringLiteral("libdevcppplugin.dll"));
+                            testPluginLibraryName());
     ASSERT_FALSE(buildTree.isEmpty());
     const QString exeDir =
         makeDirectory(dir.filePath(QStringLiteral("build/src/LightCppApp")));
@@ -129,10 +138,10 @@ TEST(PluginPaths, TheNearestBuildTreeDirectoryWins)
     const QTemporaryDir dir;
     const QString nearest =
         makePluginDirectory(dir.filePath(QStringLiteral("a/plugins")),
-                            QStringLiteral("libdevcppplugin.dll"));
+                            testPluginLibraryName());
     ASSERT_FALSE(nearest.isEmpty());
     ASSERT_FALSE(makePluginDirectory(dir.filePath(QStringLiteral("plugins")),
-                                     QStringLiteral("libdevcppplugin.dll"))
+                                     testPluginLibraryName())
                      .isEmpty());
     const QString exeDir = makeDirectory(dir.filePath(QStringLiteral("a/b/c")));
     ASSERT_FALSE(exeDir.isEmpty());
@@ -144,7 +153,7 @@ TEST(PluginPaths, StopsAtTheSearchLimit)
     const QTemporaryDir dir;
     const QString sixUp =
         makePluginDirectory(dir.filePath(QStringLiteral("plugins")),
-                            QStringLiteral("libdevcppplugin.dll"));
+                            testPluginLibraryName());
     ASSERT_FALSE(sixUp.isEmpty());
     // Six levels down: the default four-level walk cannot get there...
     const QString exeDir =
