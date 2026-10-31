@@ -7211,6 +7211,9 @@ QString MainWindow::resolveDebuggerPath() const
         }
     }
 #endif
+    if (activeKitIsMsvc()) {
+        return {};  // never launch an unrelated GDB/LLDB against an MSVC kit
+    }
     // GDB and LLDB may be installed independently of the compiler directory
     // (especially on macOS, where LLDB ships with the developer tools).
     for (const QString& name : {QStringLiteral("gdb"),
