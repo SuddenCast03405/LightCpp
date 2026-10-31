@@ -80,6 +80,14 @@ struct FailingLaunch {
         targetPath = dir.filePath(QStringLiteral("program.exe"));
         ready = writeFile(debuggerPath, "not an executable image")
                 && writeFile(targetPath, "not an executable image");
+#ifndef Q_OS_WIN
+        if (ready) {
+            const QFile::Permissions permissions =
+                QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner;
+            ready = QFile::setPermissions(debuggerPath, permissions)
+                    && QFile::setPermissions(targetPath, permissions);
+        }
+#endif
     }
 };
 
