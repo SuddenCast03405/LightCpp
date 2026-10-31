@@ -87,6 +87,13 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 // Required so QVariant can carry a TextEncoding in QComboBox item data.
 Q_DECLARE_METATYPE(LightCpp::Text::TextEncoding)
 
@@ -6037,6 +6044,7 @@ QString MainWindow::systemConsoleCharset()
         // What a fresh console window decodes the program's narrow bytes
         // as: cmd — and so ConsolePauser and the standalone terminals —
         // starts at the OEM default code page (936, GBK, on zh-CN Windows).
+#ifdef Q_OS_WIN
         UINT codePage = GetOEMCP();
         if (codePage == 0) {
             codePage = GetACP();
@@ -6048,6 +6056,11 @@ QString MainWindow::systemConsoleCharset()
         case 932:   return QStringLiteral("SHIFT_JIS");
         case 949:   return QStringLiteral("UHC");
         default:    return QStringLiteral("CP%1").arg(codePage);
+#else
+        // POSIX terminals use the user's locale; UTF-8 is the portable
+        // default for the compiler's execution character set.
+        return QStringLiteral("UTF-8");
+#endif
         }
     }();
     return charset;
