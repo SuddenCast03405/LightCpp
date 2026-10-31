@@ -267,10 +267,19 @@ WriteResult ensureDefaultConfigFiles(const QString& dir)
             // toolchain records every compiler it found, the kits select
             // by compilerFamily — a "… Clang" kit compiles with clang
             // because the family says so, not because a path was copied.
-            const bool hasGcc =
-                !primary.compilers.value(QStringLiteral("g++")).isEmpty();
             const bool hasClang =
                 !primary.compilers.value(QStringLiteral("clang++")).isEmpty();
+#ifdef Q_OS_MACOS
+            // Apple's /usr/bin/g++ is a compatibility alias for AppleClang,
+            // not a separate GNU compiler. Prefer one truthful Clang kit
+            // rather than offering two kits that invoke the same compiler.
+            const bool hasGcc =
+                !hasClang
+                && !primary.compilers.value(QStringLiteral("g++")).isEmpty();
+#else
+            const bool hasGcc =
+                !primary.compilers.value(QStringLiteral("g++")).isEmpty();
+#endif
             if (hasGcc) {
                 kits.append(gnuKit(
                     lower + QStringLiteral("-gcc"),
