@@ -5,5 +5,9 @@
 # Lua host from <exe dir>/plugins/lua.
 
 add_subdirectory(DevCppPlugin)
-add_subdirectory(MsvcPlugin)
+
+# MSBuild, vswhere and the Windows SDK registry are Windows-specific.
+if(WIN32)
+    add_subdirectory(MsvcPlugin)
+endif()
 

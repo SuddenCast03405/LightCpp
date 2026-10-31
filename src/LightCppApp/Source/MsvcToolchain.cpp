@@ -34,6 +34,8 @@ QString msg(const char* text)
     return QCoreApplication::translate("MsvcToolchain", text);
 }
 
+#ifdef Q_OS_WIN
+
 /// Order two dotted version strings numerically, so "14.9" sorts below "14.30"
 /// — a plain string compare gets that backwards and picks the older toolset.
 int compareVersionStrings(const QString& lhs, const QString& rhs)
@@ -362,6 +364,8 @@ bool appendWindowsSdk(const QString& arch, Msvc::Toolchain* toolchain)
     toolchain->libDirs.append(lib.filePath(QStringLiteral("um/") + arch));
     return true;
 }
+
+#endif  // Q_OS_WIN
 
 }  // namespace
 
