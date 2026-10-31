@@ -73,6 +73,8 @@ set(LIGHTCPP_APP_SOURCES
 # compiler's default include path contains clang-c/Index.h.
 find_path(LIGHTCPP_CLANG_C_INCLUDE_DIR clang-c/Index.h
     HINTS
+        "${LLVM_ROOT}/include"
+        "${CLANG_ROOT}/include"
         "$ENV{LLVM_ROOT}/include"
         "$ENV{CLANG_ROOT}/include"
 )
