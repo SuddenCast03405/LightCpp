@@ -687,7 +687,7 @@ DevCppMakefilePlan devCppMakefilePlan(const DevCppProject& project,
                           QStringLiteral("rm.exe -f"));
     if (project.type == kDevCppDynamicLibrary) {
         // A DLL also produces its import library and .def next to the output.
-        const QString binDir = QFileInfo(project.outputPath()).absolutePath();
+        const QString binDir = Paths::directoryForFile(project.outputPath());
         const QString libStem = Paths::normalizeSeparators(pathRelativeTo(
             project.projectDir,
             QDir(binDir).filePath(QStringLiteral("lib")
@@ -867,14 +867,14 @@ bool writeDevCppMakefile(const DevCppMakefilePlan& plan,
     QDir(project.outputDirectory()).mkpath(QStringLiteral("."));
     if (!plan.resourceScript.isEmpty()) {
         QFile script(project.iconResourcePath());
-        QDir().mkpath(QFileInfo(project.iconResourcePath()).absolutePath());
+        QDir().mkpath(Paths::directoryForFile(project.iconResourcePath()));
         if (!script.open(QIODevice::WriteOnly | QIODevice::Truncate)
             || script.write(plan.resourceScript) != plan.resourceScript.size()) {
             return fail(QStringLiteral("cannot write the resource script %1")
                             .arg(project.iconResourcePath()));
         }
     }
-    QDir().mkpath(QFileInfo(plan.path).absolutePath());
+    QDir().mkpath(Paths::directoryForFile(plan.path));
     QFile file(plan.path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
         || file.write(plan.content) != plan.content.size()) {
