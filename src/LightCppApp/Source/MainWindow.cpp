@@ -1943,8 +1943,27 @@ LightCpp::Plugin::BuildRequest MainWindow::makeBuildRequest() const
     // the same resolution the built-in paths used before .dev support moved
     // into a plugin.
     const QString buildBin = ToolchainPaths::mingwBin();
-    QString make = QDir(buildBin).filePath(QStringLiteral("mingw32-make.exe"));
-    QString gxx = QDir(buildBin).filePath(QStringLiteral("g++.exe"));
+    const auto findTool = [&buildBin](const QStringList& names,
+                                      const QString& fallback) {
+        for (const QString& name : names) {
+            const QString local = buildBin.isEmpty()
+                ? QString() : QDir(buildBin).filePath(name);
+            if (!local.isEmpty() && QFileInfo::exists(local)) {
+                return local;
+            }
+            const QString onPath = QStandardPaths::findExecutable(name);
+            if (!onPath.isEmpty()) {
+                return onPath;
+            }
+        }
+        return fallback;
+    };
+    QString make = findTool({QStringLiteral("mingw32-make.exe"),
+                             QStringLiteral("gmake"), QStringLiteral("make"),
+                             QStringLiteral("make.exe")},
+                            QStringLiteral("make"));
+    QString gxx = findTool({QStringLiteral("g++"), QStringLiteral("g++.exe")},
+                            QStringLiteral("g++"));
     if (const auto kit = activeKit(); kit.has_value()) {
         const QString kitMake = kit->buildTools.value(QStringLiteral("gnuMake"));
         if (!kitMake.isEmpty() && QFileInfo::exists(kitMake)) {
@@ -6223,11 +6242,15 @@ void MainWindow::onCompileCurrentFile()
         QString cppCompiler =
             kit.has_value() && !kit->cppCompiler.isEmpty()
                 ? kit->cppCompiler
-                : QDir(fallbackBin).filePath(QStringLiteral("g++.exe"));
+                : (QStandardPaths::findExecutable(QStringLiteral("g++")).isEmpty()
+                       ? QStringLiteral("g++")
+                       : QStandardPaths::findExecutable(QStringLiteral("g++")));
         QString cCompiler =
             kit.has_value() && !kit->cCompiler.isEmpty()
                 ? kit->cCompiler
-                : QDir(fallbackBin).filePath(QStringLiteral("gcc.exe"));
+                : (QStandardPaths::findExecutable(QStringLiteral("gcc")).isEmpty()
+                       ? QStringLiteral("gcc")
+                       : QStandardPaths::findExecutable(QStringLiteral("gcc")));
         compilerExe = isC ? cCompiler : cppCompiler;
         toolDirs << QFileInfo(compilerExe).absolutePath();
 
@@ -7436,22 +7459,30 @@ QString MainWindow::resolveCompletionServerPath(const QString& backend) const
     if (backend != QStringLiteral("ccls")) {
         return clangdPath;
     }
-    const QString exeName = QStringLiteral("ccls.exe");
+    const QStringList executableNames = {
+        QStringLiteral("ccls"), QStringLiteral("ccls.exe")
+    };
     QStringList candidates;
     // ccls usually sits in the same toolchain directory as clangd.
     if (!clangdPath.isEmpty()) {
-        candidates << QFileInfo(clangdPath).absolutePath()
-                          + QLatin1Char('/') + exeName;
+        const QString bin = QFileInfo(clangdPath).absolutePath();
+        for (const QString& name : executableNames) {
+            candidates << QDir(bin).filePath(name);
+        }
     }
-    candidates << QCoreApplication::applicationDirPath()
-                      + QLatin1Char('/') + exeName;
+    for (const QString& name : executableNames) {
+        candidates << QDir(QCoreApplication::applicationDirPath()).filePath(name);
+        const QString onPath = QStandardPaths::findExecutable(name);
+        if (!onPath.isEmpty()) {
+            return onPath;
+        }
+    }
     for (const QString& candidate : candidates) {
         if (QFileInfo::exists(candidate)) {
             return candidate;
         }
     }
-    const QString onPath = QStandardPaths::findExecutable(exeName);
-    return onPath.isEmpty() ? exeName : onPath;
+    return QStringLiteral("ccls");
 }
 
 QStringList MainWindow::resolveLibClangPaths() const
