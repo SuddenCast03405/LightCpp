@@ -15,9 +15,19 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QPluginLoader>
+#include <QLibrary>
 #include <QTemporaryDir>
 
 namespace {
+
+QString testLibrarySuffix()
+{
+#ifdef Q_OS_WIN
+    return QStringLiteral(".dll");
+#else
+    return QStringLiteral(".so");
+#endif
+}
 
 /// The quietest possible services: plugins initialize against it, and tests
 /// that care about one specific call derive from it.
@@ -90,7 +100,7 @@ TEST(PluginManager, AMissingPluginsDirectoryIsQuiet)
 {
     // A directory with nothing in it yields no errors and no plugins. The
     // "a file that is not a plugin" case is *not* this one — it lives in
-    // AnUnloadableDllReportsWhyItFailed below, which puts a real file in
+    // AnUnloadableLibraryReportsWhyItFailed below, which puts a real file in
     // front of the loader. This test used to be called
     // NonPluginDllsAreSkippedWithErrors and asserted nothing of the sort.
     const QTemporaryDir dir;
@@ -238,9 +248,10 @@ TEST(PluginManager, DisabledSharedPluginsAreSkipped)
     // while testing nothing.
     const QDir pluginDir(QStringLiteral(LIGHTCPP_BUILT_PLUGIN_DIR));
     QStringList dlls;
-    for (const QFileInfo& info :
-         pluginDir.entryInfoList({QStringLiteral("*.dll")}, QDir::Files)) {
-        dlls.append(info.fileName());
+    for (const QFileInfo& info : pluginDir.entryInfoList(QDir::Files)) {
+        if (QLibrary::isLibrary(info.filePath())) {
+            dlls.append(info.fileName());
+        }
     }
     ASSERT_FALSE(dlls.isEmpty()) << "no plugin dll was built to disable";
 
@@ -347,7 +358,8 @@ TEST(PluginManager, AnUnloadableDllReportsWhyItFailed)
     // wording rather than our behaviour, so the check stays at "a reason is
     // always attached to the file name".
     const QTemporaryDir dir;
-    QFile broken(dir.filePath(QStringLiteral("broken.dll")));
+    const QString brokenName = QStringLiteral("broken") + testLibrarySuffix();
+    QFile broken(dir.filePath(brokenName));
     ASSERT_TRUE(broken.open(QIODevice::WriteOnly));
     broken.write("this is not a plugin");
     broken.close();
@@ -357,7 +369,7 @@ TEST(PluginManager, AnUnloadableDllReportsWhyItFailed)
     const QStringList errors = manager.loadSharedPlugins(dir.path(), &services);
 
     ASSERT_EQ(errors.size(), 1);
-    const QString prefix = QStringLiteral("broken.dll: ");
+    const QString prefix = brokenName + QStringLiteral(": ");
     EXPECT_TRUE(errors.first().startsWith(prefix))
         << errors.first().toStdString();
     // Something was said about the failure, not just the file name.
