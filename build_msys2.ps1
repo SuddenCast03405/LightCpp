@@ -5,6 +5,7 @@
 #   powershell -File build_msys2.ps1 -Test                 # ... then the whole ctest
 #   powershell -File build_msys2.ps1 -Target LightCppTextTests -Tests 'DetectLineEndings.*'
 #   powershell -File build_msys2.ps1 -FullSpeed            # do not lower priority
+#   powershell -File build_msys2.ps1 -DeployQt             # stage Qt DLLs with windeployqt
 #
 # Why the priority switch is the default: a full build plus ctest is 576 test
 # processes on this machine and saturates every core for minutes, which makes
@@ -19,7 +20,8 @@ param(
     [int]$Jobs = 2,
     [string[]]$Target,
     [string]$Tests,
-    [switch]$FullSpeed
+    [switch]$FullSpeed,
+    [switch]$DeployQt
 )
 
 # Find the active UCRT64 installation from PATH or an explicit MSYS2_ROOT.
@@ -62,7 +64,8 @@ if ($Clean -and (Test-Path "$root\build")) {
     Remove-Item -Recurse -Force "$root\build"
 }
 
-& $cmake --preset msys2-ucrt64
+$deployQtValue = if ($DeployQt) { "ON" } else { "OFF" }
+& $cmake --preset msys2-ucrt64 "-DLIGHTCPP_DEPLOY_QT=$deployQtValue"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $buildArgs = @('--build', '--preset', 'msys2-ucrt64', '--parallel', $Jobs)
@@ -72,25 +75,11 @@ if ($Target) {
 }
 & $cmake @buildArgs
 $buildExit = $LASTEXITCODE
-
-# The `lightcpp` target ends with a POST_BUILD windeployqt step that needs a
-# pipe this environment cannot create, so that one build always exits non-zero
-# even when every object file was produced. Treating it as fatal is how `-Test`
-# used to end before ctest ever ran — but treating *every* failure as benign is
-# worse: ctest does not build, so a compile error would leave ctest running the
-# previous binary and reporting its results as if they were today's. That is
-# not a hypothetical (it made a reverse-verification look red for the wrong
-# reason). So the tolerance is limited to the builds that include `lightcpp`,
-# which is the only target with the deploy step.
-$buildsTheApp = (-not $Target) -or ($Target -contains 'lightcpp')
-if ($buildExit -ne 0 -and -not $buildsTheApp) {
-    Write-Error "cmake --build exited $buildExit; not running ctest against a stale binary (see the log above)"
+if ($buildExit -ne 0) {
+    Write-Error "cmake --build exited $buildExit; refusing to run ctest against possibly stale binaries (see the log above)"
     exit $buildExit
 }
-if ($buildExit -ne 0) {
-    Write-Warning "cmake --build exited $buildExit (the windeployqt step always fails here; check the log above for a real compile error)"
-}
-if (-not $Test) { exit $buildExit }
+if (-not $Test) { exit 0 }
 
 $ctestArgs = @('--test-dir', "$root\build\msys2-ucrt64", '--output-on-failure', '--parallel', $Jobs,
                # A filter that matches nothing is a typo, not a pass: ctest
