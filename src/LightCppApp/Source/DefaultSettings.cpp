@@ -7,6 +7,7 @@
 #include "LightCpp/Settings/SettingsStore.hpp"
 
 #include <QCoreApplication>
+#include <QFontDatabase>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -164,11 +165,19 @@ Kit gnuKit(const QString& id, const QString& name, const QString& toolchainId,
 Preferences starterPreferences()
 {
     Preferences prefs;
+#ifdef Q_OS_WIN
     prefs.toolbarFont.family = QStringLiteral("Segoe UI");
-    prefs.toolbarFont.size = 9;
     prefs.editorFont.family = QStringLiteral("Cascadia Mono");
-    prefs.editorFont.size = 11;
     prefs.outputFont.family = QStringLiteral("Cascadia Mono");
+#else
+    prefs.toolbarFont.family =
+        QFontDatabase::systemFont(QFontDatabase::GeneralFont).family();
+    prefs.editorFont.family =
+        QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+    prefs.outputFont.family = prefs.editorFont.family;
+#endif
+    prefs.toolbarFont.size = 9;
+    prefs.editorFont.size = 11;
     prefs.outputFont.size = 10;
 
     prefs.defaultEncoding = QStringLiteral("UTF-8");
