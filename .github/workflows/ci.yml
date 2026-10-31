@@ -114,7 +114,7 @@ jobs:
         run: cmake -P _fetch_deps.cmake
 
       - name: Configure
-        run: cmake --preset native -DLLVM_ROOT="$(llvm-config --prefix)"
+        run: cmake --preset native
 
       - name: Build
         run: cmake --build --preset native --parallel 2
