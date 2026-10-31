@@ -12,7 +12,7 @@ namespace LightCpp::Project::Paths {
 /// both separator styles explicitly and use forward slashes internally.
 inline QString normalizeSeparators(QString path)
 {
-    path.replace(QLatin1Char('\\\\'), QLatin1Char('/'));
+    path.replace(QLatin1Char('\\'), QLatin1Char('/'));
     return path;
 }
 
