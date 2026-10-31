@@ -17,16 +17,23 @@ const QString kCmakeLists = QStringLiteral("CMakeLists.txt");
 /// CMake's own marker that a build tree has been configured.
 const QString kCacheFile = QStringLiteral("CMakeCache.txt");
 
-bool hasExecutableSuffix(const QString& fileName)
+bool isExecutableArtifact(const QString& path)
 {
-    // This IDE builds for Windows, so .exe is the whole story. Checked
-    // case-insensitively because the suffix can come from anywhere.
-    return fileName.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive);
+#ifdef Q_OS_WIN
+    // PE executables conventionally carry this suffix on Windows.
+    return QFileInfo(path).fileName().endsWith(
+        QStringLiteral(".exe"), Qt::CaseInsensitive);
+#else
+    // Unix executables are identified by their executable permission bits,
+    // not by a filename suffix. This also handles CMake's extensionless
+    // compiler probes and app binaries inside macOS bundles.
+    return QFileInfo(path).isFile() && QFileInfo(path).isExecutable();
+#endif
 }
 
 bool isInsideCMakeFiles(const QString& path)
 {
-    // Compiler feature probes land here (cmTC_1a2b3c.exe) and are never the
+    // Compiler feature probes land here (cmTC_1a2b3c) and are never the
     // program the user asked for.
     return path.contains(QStringLiteral("/CMakeFiles/"), Qt::CaseInsensitive);
 }
@@ -114,7 +121,7 @@ QStringList builtExecutables(const QString& buildTree)
                     QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString path = it.next();
-        if (!hasExecutableSuffix(it.fileName()) || isInsideCMakeFiles(path)) {
+        if (!isExecutableArtifact(path) || isInsideCMakeFiles(path)) {
             continue;
         }
         found.append(path);
