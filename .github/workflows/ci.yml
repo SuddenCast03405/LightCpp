@@ -104,7 +104,6 @@ jobs:
           host: linux
           target: desktop
           arch: gcc_64
-          modules: qtbase
 
       - name: Install LLVM headers and build tools
         run: |
@@ -138,7 +137,7 @@ jobs:
 
   macos-native:
     name: macOS / Qt 6 / native / ctest
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 60
     steps:
       - name: Check out master
