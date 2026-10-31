@@ -137,7 +137,7 @@ std::optional<QByteArray> iconvConvert(
     char* inputPointer = const_cast<char*>(input.constData());
     std::size_t inputRemaining = inputSize;
 
-    const auto grow = [&]() mutable {
+    auto grow = [&]() {
         if (capacity > static_cast<std::size_t>(
                            std::numeric_limits<qsizetype>::max()) / 2) {
             return false;
