@@ -13,11 +13,17 @@ QString programCommandLine(const QString& exePath, bool powerShellStyle)
         quoted.replace(QLatin1Char('\''), QStringLiteral("''"));
         return QStringLiteral("& '%1'").arg(quoted);
     }
+#ifdef Q_OS_WIN
     // cmd.exe: double quotes group the whole path into one word. A double
-    // quote cannot appear in a Windows file name, so there is nothing to
-    // escape — but note that cmd still expands %NAME% inside the quotes, the
-    // same way it did before this quoting was added.
+    // quote cannot appear in a Windows file name.
     return QStringLiteral("\"%1\"").arg(exePath);
+#else
+    // POSIX shells use single quotes; embedded apostrophes are represented
+    // by closing the quote, escaping the apostrophe, then reopening it.
+    QString quoted = exePath;
+    quoted.replace(QLatin1Char('\''), QStringLiteral("'\\''"));
+    return QStringLiteral("'") + quoted + QLatin1Char('\'');
+#endif
 }
 
 }  // namespace LightCpp::App::TerminalLaunch
