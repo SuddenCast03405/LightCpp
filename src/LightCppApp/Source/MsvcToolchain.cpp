@@ -416,6 +416,11 @@ QList<QPair<QString, QString>> installRootsIn(QSettings& settings)
 
 Toolchain detect()
 {
+#ifndef Q_OS_WIN
+    Toolchain toolchain;
+    toolchain.problem = msg("MSVC toolchain detection is available only on Windows.");
+    return toolchain;
+#else
     QList<Candidate> candidates = rootsFromVswhere();
     candidates += rootsFromRegistry();
     candidates += rootsFromVc6();
@@ -460,6 +465,7 @@ Toolchain detect()
 
     best.problem = bestProblem;
     return best;
+#endif
 }
 
 ToolchainDetector::ToolchainDetector(QObject* parent) : QObject(parent)
