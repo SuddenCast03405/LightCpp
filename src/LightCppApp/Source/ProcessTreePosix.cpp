@@ -32,7 +32,7 @@ std::vector<ProcessEntry> snapshotProcesses()
         // comm is parenthesized and can contain spaces or closing parens.
         const qsizetype close = line.lastIndexOf(QByteArray(")"));
         if (close < 0) continue;
-        const QList<QByteArray> fields = line.mid(close + 1).simplified().split(QByteArray(" "));
+        const QList<QByteArray> fields = line.mid(close + 1).simplified().split(' ');
         if (fields.size() < 2) continue;
         bool parentOk = false;
         const unsigned long parent = fields.at(1).toULong(&parentOk);
