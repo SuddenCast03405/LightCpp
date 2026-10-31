@@ -2,8 +2,13 @@
 
 #include "LightCpp/Text/Converter.hpp"
 
+#include <cerrno>
 #include <cstring>
 #include <limits>
+
+#ifndef _WIN32
+#include <iconv.h>
+#endif
 
 #include <QStringConverter>
 #include <QStringDecoder>
@@ -86,6 +91,103 @@ std::optional<QString> winDecode(QByteArrayView bytes, UINT codePage)
     return out;
 }
 #endif  // _WIN32
+
+#ifndef _WIN32
+/// iconv codec names for the legacy encodings supported by the editor.
+const char* iconvName(TextEncoding encoding) noexcept
+{
+    switch (encoding) {
+    case TextEncoding::Gb18030: return "GB18030";
+    case TextEncoding::Gbk: return "GBK";
+    case TextEncoding::Big5: return "BIG5";
+    case TextEncoding::ShiftJis: return "SHIFT_JIS";
+    case TextEncoding::EucKr: return "EUC-KR";
+    case TextEncoding::Windows1252: return "WINDOWS-1252";
+    default: return nullptr;
+    }
+}
+
+/// Strict conversion through iconv. No //TRANSLIT suffix is used: a
+/// character that cannot be represented must fail instead of being replaced
+/// with a best-fit character or '?'. The output buffer grows only when the
+/// converter asks for more space.
+std::optional<QByteArray> iconvConvert(
+    QByteArrayView input, const char* targetEncoding, const char* sourceEncoding)
+{
+    iconv_t converter = iconv_open(targetEncoding, sourceEncoding);
+    if (converter == reinterpret_cast<iconv_t>(-1)) {
+        return std::nullopt;
+    }
+    struct Closer {
+        iconv_t value;
+        ~Closer() { iconv_close(value); }
+    } closer{converter};
+
+    const std::size_t inputSize = static_cast<std::size_t>(input.size());
+    if (inputSize > (std::numeric_limits<std::size_t>::max() - 16) / 4) {
+        return std::nullopt;
+    }
+    std::size_t capacity = qMax<std::size_t>(64, inputSize * 4 + 16);
+    if (capacity > static_cast<std::size_t>(
+                       std::numeric_limits<qsizetype>::max())) {
+        return std::nullopt;
+    }
+    QByteArray output(static_cast<qsizetype>(capacity), Qt::Uninitialized);
+    std::size_t used = 0;
+    char* inputPointer = const_cast<char*>(input.constData());
+    std::size_t inputRemaining = inputSize;
+
+    const auto grow = [&]() mutable {
+        if (capacity > static_cast<std::size_t>(
+                           std::numeric_limits<qsizetype>::max()) / 2) {
+            return false;
+        }
+        capacity *= 2;
+        output.resize(static_cast<qsizetype>(capacity));
+        return true;
+    };
+
+    while (inputRemaining > 0) {
+        char* outputPointer = output.data() + used;
+        std::size_t outputRemaining = capacity - used;
+        const std::size_t converted = iconv(
+            converter, &inputPointer, &inputRemaining,
+            &outputPointer, &outputRemaining);
+        used = capacity - outputRemaining;
+        if (converted != static_cast<std::size_t>(-1)) {
+            if (converted != 0) {
+                return std::nullopt;  // non-reversible conversion
+            }
+            continue;
+        }
+        if (errno != E2BIG || !grow()) {
+            return std::nullopt;
+        }
+    }
+
+    // Flush any stateful encoding shift sequence. The selected legacy codecs
+    // are normally stateless, but this keeps the helper correct by contract.
+    for (;;) {
+        char* outputPointer = output.data() + used;
+        std::size_t outputRemaining = capacity - used;
+        const std::size_t converted = iconv(
+            converter, nullptr, nullptr, &outputPointer, &outputRemaining);
+        used = capacity - outputRemaining;
+        if (converted != static_cast<std::size_t>(-1)) {
+            if (converted != 0) {
+                return std::nullopt;
+            }
+            break;
+        }
+        if (errno != E2BIG || !grow()) {
+            return std::nullopt;
+        }
+    }
+
+    output.resize(static_cast<qsizetype>(used));
+    return output;
+}
+#endif  // !_WIN32
 
 }  // namespace
 
@@ -202,11 +304,14 @@ std::optional<QString> decodeToQString(
         }
         return winDecode(bytes, *codePage);
 #else
-        // Non-Windows builds rely on Qt+ICU; the MSYS2 build used in
-        // development has no ICU support, so this path is Windows-first for
-        // now (see README "Platform notes").
-        Q_UNUSED(bytes);
-        return std::nullopt;
+        const char* codec = iconvName(encoding);
+        if (codec == nullptr) {
+            return std::nullopt;
+        }
+        const auto utf8 = iconvConvert(bytes, "UTF-8", codec);
+        return utf8.has_value()
+            ? std::optional<QString>(QString::fromUtf8(*utf8))
+            : std::nullopt;
 #endif
     }
 
@@ -375,9 +480,16 @@ ConvertResult encodeFromQString(const QString& text, TextEncoding encoding, bool
             return ConvertResult::failure(ConvertError::InvalidInput);
         }
 #else
-        Q_UNUSED(text);
-        Q_UNUSED(addBom);
-        return ConvertResult::failure(ConvertError::PlatformUnsupported);
+        const char* codec = iconvName(encoding);
+        if (codec == nullptr) {
+            return ConvertResult::failure(ConvertError::UnsupportedEncoding);
+        }
+        const QByteArray utf8 = text.toUtf8();
+        const auto converted = iconvConvert(QByteArrayView(utf8), codec, "UTF-8");
+        if (!converted.has_value()) {
+            return ConvertResult::failure(ConvertError::InvalidInput);
+        }
+        out = *converted;
 #endif
         break;
     }
