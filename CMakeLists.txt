@@ -95,6 +95,20 @@ if(BUILD_TESTING)
     endif()
 endif()
 
+# Select the process-tree backend once at the top level so the app
+# and its logic tests compile the exact same platform implementation.
+if(WIN32)
+    set(LIGHTCPP_PROCESS_TREE_PLATFORM_SOURCE
+        "${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessTreeWindows.cpp")
+elseif(APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(LIGHTCPP_PROCESS_TREE_PLATFORM_SOURCE
+        "${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessTreePosix.cpp")
+else()
+    message(FATAL_ERROR
+        "LightCpp supports Windows, Linux and macOS process backends; "
+        "unsupported platform: ${CMAKE_SYSTEM_NAME}")
+endif()
+
 # ---------------------------------------------------------------------------
 # Modules
 # ---------------------------------------------------------------------------
