@@ -308,7 +308,7 @@ TEST(CMakeProject, PreferredExecutablePicksTheProjectNamesake)
     setModified(QDir(tree).filePath(executableName(QStringLiteral("test_runner"))), 0);
 
     EXPECT_EQ(preferredExecutable(tree),
-              QDir(tree).filePath("hello.exe"));
+              QDir(tree).filePath(executableName(QStringLiteral("hello"))));
 }
 
 TEST(CMakeProject, PreferredExecutableFallsBackToNewestWithoutAName)
@@ -317,11 +317,11 @@ TEST(CMakeProject, PreferredExecutableFallsBackToNewestWithoutAName)
     ASSERT_TRUE(dir.isValid());
     const QString tree = dir.filePath("build/Debug");
     makeBuildTree(tree, "CMAKE_GENERATOR:INTERNAL=Ninja");
-    setModified(QDir(tree).filePath("hello.exe"), -60);
-    setModified(QDir(tree).filePath("test_runner.exe"), 0);
+    setModified(QDir(tree).filePath(executableName(QStringLiteral("hello"))), -60);
+    setModified(QDir(tree).filePath(executableName(QStringLiteral("test_runner"))), 0);
 
     EXPECT_EQ(preferredExecutable(tree),
-              QDir(tree).filePath("test_runner.exe"));
+              QDir(tree).filePath(executableName(QStringLiteral("test_runner"))));
 }
 
 TEST(CMakeProject, PreferredExecutableIsNewestWhenItIsTheOnlyOne)
