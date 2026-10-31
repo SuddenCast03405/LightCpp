@@ -134,31 +134,23 @@ Coverage build: `cmake --build build/msys2-ucrt64-coverage --target LightCppCove
 
 ## CI
 
-`.github/workflows/ci.yml` builds and tests **master** on a Windows runner with
-the same toolchain as the section above: MSYS2 UCRT64 with Qt6 from pacman,
-`_fetch_deps.cmake` for Lua/LuaBridge3, then `cmake --preset ci` →
-`cmake --build --preset ci` → `ctest --preset ci`.
+`.github/workflows/ci.yml` builds and tests **master** on Windows, Linux and
+macOS. The Windows job uses MSYS2 UCRT64; the POSIX jobs use the native host
+compiler and Qt 6. Each job vendors Lua/LuaBridge3 with `_fetch_deps.cmake`,
+then configures, builds and runs the complete CTest preset.
 
-The `ci` preset differs from `msys2-ucrt64` in the two ways that make a CI job
-possible: nothing is hard-coded to `E:/msys64` (compiler, ninja and Qt come from
-`PATH`; `CMAKE_PREFIX_PATH` is passed by the caller), and
-`LIGHTCPP_DEPLOY_QT=OFF` skips the windeployqt step — no test needs the deployed
-copy, and it is the only part of the build that needs a writable Qt install.
-`ctest --preset ci` runs with `--no-tests=error`, so a preset or filter that
-matches nothing fails instead of reporting a green run over zero tests.
+The Windows `ci` preset keeps the MSYS2 install prefix caller-supplied and
+sets `LIGHTCPP_DEPLOY_QT=OFF` so CI does not depend on a writable Qt install.
+The `native` preset uses the system compiler and Qt installation on Linux and
+macOS. Both test presets use `--no-tests=error`, so an empty test selection
+cannot report a false green result.
 
-The same three commands work locally from an MSYS2 UCRT64 shell:
-
-```bash
-cmake -P _fetch_deps.cmake
-cmake --preset ci -DCMAKE_PREFIX_PATH="$MINGW_PREFIX"
-cmake --build --preset ci && ctest --preset ci
-```
-
-CI is Windows-only because the product is: `ProcessTree`, `DebuggerController`,
-`LibClangCompleter` and `MainWindow` include `windows.h` or call Win32 APIs
-unconditionally, and the project suites assert Windows path shapes (`E:/proj`).
-A Linux job would be red for reasons that say nothing about the shipped binary.
+The Dev-C++ makefile backend and MSVC integration remain Windows-only because
+their project formats and build tools use Windows command-shell and SDK
+conventions. CMake projects, the editor, text conversion, toolchain discovery,
+and the process-tree backend are intended to work natively on all three
+supported operating systems. Platform support is not considered complete
+until the corresponding CI build and tests pass.
 
 ## Layout
 
@@ -170,7 +162,7 @@ src/LightCppProject/         # project & build configs, diagnostics (static)
 src/LightCppSettings/        # settings store, toolchains/kits (static)
 src/LightCppPlugin/          # plugin interface (static)
 src/LightCppLua/             # Lua 5.4 plugin host (static)
-src/LightCppApp/             # Qt Widgets application (lightcpp.exe)
+src/LightCppApp/             # Qt Widgets application (native host executable)
 tests/LightCpp*Tests/        # GTest suites, run via CTest
-CMakePresets.json            # MSYS2 UCRT64 debug & coverage presets
+CMakePresets.json            # MSYS2 and native host build/test presets
 ```
