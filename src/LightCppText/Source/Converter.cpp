@@ -134,11 +134,10 @@ std::optional<QByteArray> iconvConvert(
     }
     QByteArray output(static_cast<qsizetype>(capacity), Qt::Uninitialized);
     std::size_t used = 0;
-#ifdef __APPLE__
-    const char* inputPointer = input.constData();
-#else
+// iconv advances the pointer but does not modify the input bytes. Its
+    // POSIX signature uses char** (including Apple's libc), so only the cursor
+    // is mutable; the QByteArray storage remains read-only to this function.
     char* inputPointer = const_cast<char*>(input.constData());
-#endif
     std::size_t inputRemaining = inputSize;
 
     auto grow = [&]() {

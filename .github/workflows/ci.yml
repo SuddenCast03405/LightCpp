@@ -103,7 +103,7 @@ jobs:
           version: 6.8.3
           host: linux
           target: desktop
-          arch: gcc_64
+          arch: linux_gcc_64
 
       - name: Install LLVM headers and build tools
         run: |
