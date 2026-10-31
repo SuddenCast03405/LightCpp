@@ -422,7 +422,7 @@ TEST(EncodingDetect, InvalidBytesOnUtf8LocaleUseLosslessFallback)
     if (LightCpp::Text::localAnsiEncoding() != TextEncoding::Utf8) {
         GTEST_SKIP() << "test requires a UTF-8 POSIX locale";
     }
-    const QByteArray bytes = QByteArray::fromHex("C4E3BAC3");
+    const QByteArray bytes = QByteArray::fromHex("81FF");
     const auto detection = LightCpp::Text::detectEncoding(bytes);
     EXPECT_EQ(detection.encoding, TextEncoding::Latin1);
     EXPECT_FALSE(detection.reliable);
