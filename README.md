@@ -24,9 +24,9 @@ Six static logic libraries plus the Qt application layer:
 | `src/LightCppApp/` | Qt Widgets application layer (MainWindow, editors, panels, dialogs) |
 
 Each logic library has a GTest suite under `tests/`, registered with CTest —
-`ctest --preset msys2-ucrt64` prints the current count (593 cases on
-2026-10-18). The number is deliberately not repeated here as a fact: it changes
-with every batch, and a stale count in a README is worse than no count.
+`ctest --preset msys2-ucrt64` prints the current count. The number is deliberately
+not hard-coded here: it changes with every batch, and a stale count in a README
+is worse than no count.
 
 ## Module: LightCpp::Core::Text (UTF-8)
 
@@ -70,8 +70,8 @@ Design notes (spec compliance):
 
 Toolchain packages: `mingw-w64-ucrt-x86_64-gcc`, `-cmake`, `-ninja`,
 `-qt6-base`, and `-clang` — the last one only for `clang-c/Index.h`, which
-`LibClangCompleter.cpp` includes at build time (the DLL itself is opened with
-`LoadLibraryExW` at run time). Without it the build stops at
+`LibClangCompleter.cpp` includes at build time (the shared library itself is
+loaded dynamically with Qt's platform loader at run time). Without it the build stops at
 `fatal error: clang-c/Index.h: No such file or directory`.
 
 Open an **MSYS2 UCRT64** shell (or make its `ucrt64/bin` directory
@@ -126,8 +126,8 @@ Notes:
   `ide`/`ide.editor`/`ide.ui`/`ide.commands`/`ide.snippets` namespaces, so
   scripts call it with dot syntax.
 - On MinGW the test binaries link the GCC runtime statically
-  (`-static-libgcc -static-libstdc++`) so `ctest` does not need
-  `E:\msys64\ucrt64\bin` on `PATH`.
+  (`-static-libgcc -static-libstdc++`) so test execution does not depend on
+  the compiler installation being added to the system-wide PATH.
 
 Coverage build: `cmake --build build/msys2-ucrt64-coverage --target LightCppCoverage`
 (requires lcov/genhtml; enable with the `msys2-ucrt64-coverage` preset).
