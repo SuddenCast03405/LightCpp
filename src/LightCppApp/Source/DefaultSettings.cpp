@@ -240,10 +240,12 @@ WriteResult ensureDefaultConfigFiles(const QString& dir)
         const QString relativeToApp =
             QDir(QCoreApplication::applicationDirPath())
                 .relativeFilePath(portableBin);
+        const QString normalizedRelative =
+            QDir::fromNativeSeparators(relativeToApp);
         const bool bundled =
             !QDir::isAbsolutePath(relativeToApp)
-            && relativeToApp != QLatin1String("..")
-            && !relativeToApp.startsWith(QStringLiteral("../"));
+            && normalizedRelative != QLatin1String("..")
+            && !normalizedRelative.startsWith(QStringLiteral("../"));
         const QString dirName = bundled
             ? QFileInfo(portableBin).dir().dirName()
             : QStringLiteral("System");
