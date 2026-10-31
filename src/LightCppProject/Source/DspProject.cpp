@@ -112,7 +112,7 @@ void readAddCppArguments(const QString& arguments, DspConfiguration& config)
             config.defines.append(value);
         } else if (switchName.compare(QLatin1String("I"), Qt::CaseInsensitive) == 0
                    && !value.isEmpty()) {
-            config.includeDirs.append(QDir::fromNativeSeparators(value));
+            config.includeDirs.append(Paths::normalizeSeparators(value));
         } else if (value.isEmpty()) {
             // Glued form: /DWIN32, /I"..\include" — no space before the
             // value. No other cl.exe switch starts with D or I, so a bare
@@ -124,7 +124,7 @@ void readAddCppArguments(const QString& arguments, DspConfiguration& config)
                     config.defines.append(stripQuotes(rest));
                 } else if (head == QLatin1Char('i')) {
                     config.includeDirs.append(
-                        QDir::fromNativeSeparators(stripQuotes(rest)));
+                        Paths::normalizeSeparators(stripQuotes(rest)));
                 }
             }
         }
@@ -385,9 +385,8 @@ std::optional<DswWorkspace> parseDswWorkspace(const QString& filePath,
         }
         DswProjectEntry entry;
         entry.name = match.captured(1);
-        entry.dspPath = QDir::cleanPath(
-            QDir(workspace.projectDir).absoluteFilePath(
-                QDir::fromNativeSeparators(stripQuotes(match.captured(2)))));
+        entry.dspPath =
+            Paths::resolveReference(workspace.projectDir, stripQuotes(match.captured(2)));
         workspace.projects.append(entry);
     }
 
@@ -459,11 +458,7 @@ QString DspProject::outputPathFor(const DspConfiguration& config) const
                                       : QStringLiteral(".exe");
         relative = outDir + QLatin1Char('/') + name + ext;
     }
-    const QString native = QDir::fromNativeSeparators(relative);
-    if (QDir::isAbsolutePath(native)) {
-        return QDir::cleanPath(native);
-    }
-    return QDir::cleanPath(QDir(projectDir).absoluteFilePath(native));
+    return Paths::resolveReference(projectDir, relative);
 }
 
 const DswProjectEntry* DswWorkspace::defaultProject() const
