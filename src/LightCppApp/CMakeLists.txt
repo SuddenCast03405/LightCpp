@@ -67,12 +67,46 @@ set(LIGHTCPP_APP_SOURCES
     Source/ToolchainPaths.cpp
 )
 
+# LibClangCompleter uses the stable C API declarations but resolves the
+# shared library at runtime. Headers may live under a versioned LLVM prefix
+# (e.g. /usr/lib/llvm-XX/include), so discover them instead of assuming the
+# compiler's default include path contains clang-c/Index.h.
+find_path(LIGHTCPP_CLANG_C_INCLUDE_DIR clang-c/Index.h
+    HINTS
+        "$ENV{LLVM_ROOT}/include"
+        "$ENV{CLANG_ROOT}/include"
+)
+if(NOT LIGHTCPP_CLANG_C_INCLUDE_DIR)
+    find_program(LIGHTCPP_LLVM_CONFIG
+        NAMES llvm-config llvm-config-22 llvm-config-21 llvm-config-20
+              llvm-config-19 llvm-config-18 llvm-config-17 llvm-config-16
+              llvm-config-15 llvm-config-14)
+    if(LIGHTCPP_LLVM_CONFIG)
+        execute_process(
+            COMMAND "${LIGHTCPP_LLVM_CONFIG}" --includedir
+            OUTPUT_VARIABLE LIGHTCPP_LLVM_INCLUDE_DIR
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE LIGHTCPP_LLVM_CONFIG_RESULT
+        )
+        if(LIGHTCPP_LLVM_CONFIG_RESULT EQUAL 0)
+            find_path(LIGHTCPP_CLANG_C_INCLUDE_DIR clang-c/Index.h
+                HINTS "${LIGHTCPP_LLVM_INCLUDE_DIR}")
+        endif()
+    endif()
+endif()
+if(NOT LIGHTCPP_CLANG_C_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "clang-c/Index.h was not found. Install the Clang development headers "
+        "or set LLVM_ROOT to the LLVM installation prefix.")
+endif()
+
 add_executable(lightcpp ${LIGHTCPP_APP_SOURCES})
 
 # Enable MOC for Q_OBJECT classes in headers.
 set_target_properties(lightcpp PROPERTIES AUTOMOC ON)
 
 target_include_directories(lightcpp PRIVATE
+    ${LIGHTCPP_CLANG_C_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppCore/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppLua/Include
