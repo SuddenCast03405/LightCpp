@@ -74,20 +74,42 @@ Toolchain packages: `mingw-w64-ucrt-x86_64-gcc`, `-cmake`, `-ninja`,
 `LoadLibraryExW` at run time). Without it the build stops at
 `fatal error: clang-c/Index.h: No such file or directory`.
 
+Open an **MSYS2 UCRT64** shell (or make its `ucrt64/bin` directory
+available on `PATH`), then run:
+
 ```bash
-E:/msys64/ucrt64/bin/cmake.exe --preset msys2-ucrt64
-E:/msys64/ucrt64/bin/cmake.exe --build --preset msys2-ucrt64
-E:/msys64/ucrt64/bin/ctest.exe  --preset msys2-ucrt64      # every suite; prints the count
+cmake -P _fetch_deps.cmake
+cmake --preset msys2-ucrt64
+cmake --build --preset msys2-ucrt64
+ctest --preset msys2-ucrt64
 ```
 
-Or use the helper script (it puts the toolchain on `PATH` first, and runs at
-`BelowNormal` priority so a full build does not take the desktop with it):
+Or from PowerShell use the helper script. It discovers the active MSYS2
+installation from `PATH` or `MSYS2_ROOT`; no drive letter or install
+directory is assumed:
 
 ```powershell
-powershell -File build_msys2.ps1 -Test                              # build + all suites
+powershell -File build_msys2.ps1 -Test
 powershell -File build_msys2.ps1 -Test -Target LightCppTextTests -Tests 'TextFileTest'
-powershell -File build_msys2.ps1 -FullSpeed                          # do not lower priority
+powershell -File build_msys2.ps1 -FullSpeed
 ```
+
+### Linux and macOS (native preset)
+
+Install CMake 3.24+, Ninja, Qt 6.5 development packages (Core, Widgets and
+Xml), a C++20 compiler, and Clang C API headers (`clang-c/Index.h`). Then:
+
+```bash
+cmake -P _fetch_deps.cmake
+cmake --preset native
+cmake --build --preset native
+ctest --preset native
+```
+
+The native preset uses the host compiler and Qt installation; it does not
+select a Windows toolchain or assume a particular package-manager prefix.
+Linux/macOS support is still being validated by CI and should be treated as
+in progress until those builds and tests pass.
 
 `-Jobs` (default 2) feeds both `cmake --build --parallel` and `ctest --parallel`;
 `-Tests` is a **ctest** regex, so alternatives are separated with `|`, not with
