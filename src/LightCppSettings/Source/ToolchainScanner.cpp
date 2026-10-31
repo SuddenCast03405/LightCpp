@@ -16,18 +16,18 @@ struct ScanSpec {
 };
 
 constexpr ScanSpec kScanSpecs[] = {
-    {"gcc", {"gcc.exe"}},
-    {"g++", {"g++.exe"}},
-    {"clang", {"clang.exe"}},
-    {"clang++", {"clang++.exe"}},
+    {"gcc", {"gcc", "gcc.exe"}},
+    {"g++", {"g++", "g++.exe"}},
+    {"clang", {"clang", "clang.exe"}},
+    {"clang++", {"clang++", "clang++.exe"}},
     {"cl", {"cl.exe"}},
-    {"gdb", {"gdb.exe"}},
-    {"lldb", {"lldb.exe"}},
-    {"clangd", {"clangd.exe"}},
-    {"clangFormat", {"clang-format.exe"}},
-    {"cmake", {"cmake.exe"}},
-    {"ninja", {"ninja.exe"}},
-    {"gnuMake", {"mingw32-make.exe", "make.exe"}},
+    {"gdb", {"gdb", "gdb.exe"}},
+    {"lldb", {"lldb", "lldb.exe"}},
+    {"clangd", {"clangd", "clangd.exe"}},
+    {"clangFormat", {"clang-format", "clang-format.exe"}},
+    {"cmake", {"cmake", "cmake.exe"}},
+    {"ninja", {"ninja", "ninja.exe"}},
+    {"gnuMake", {"mingw32-make.exe", "gmake", "make.exe", "make"}},
     {"msbuild", {"MSBuild.exe"}},
 };
 

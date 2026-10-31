@@ -5,6 +5,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QLibrary>
 
 namespace LightCpp::Plugin {
 
@@ -18,9 +19,16 @@ namespace {
     if (!directory.exists()) {
         return false;
     }
-    return !directory.entryList({QStringLiteral("*Plugin*.dll")},
-                                QDir::Files)
-                .isEmpty();
+    // Qt's library predicate understands the native suffix on each
+    // platform (.dll, .so, .dylib). Do not bake Windows' DLL suffix into
+    // discovery or Linux/macOS plugins silently disappear.
+    for (const QString& fileName : directory.entryList(QDir::Files)) {
+        if (fileName.contains(QStringLiteral("Plugin"), Qt::CaseInsensitive)
+            && QLibrary::isLibrary(directory.filePath(fileName))) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace
