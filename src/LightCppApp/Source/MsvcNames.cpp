@@ -1,6 +1,5 @@
 #include "LightCpp/App/MsvcNames.hpp"
 
-#include <QDir>
 
 namespace LightCpp::App::MsvcNames {
 namespace {
@@ -51,7 +50,9 @@ QString cleaned(const QString& raw)
     if (trimmed.isEmpty()) {
         return {};
     }
-    return QDir::fromNativeSeparators(trimmed);
+    QString normalized = trimmed;
+    normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    return normalized;
 }
 
 }  // namespace
