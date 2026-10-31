@@ -238,6 +238,12 @@ TEST(CMakeProject, BuiltExecutablesSkipsCompilerProbes)
     writeExecutable(temp.path(),
                     QStringLiteral("build/Debug/CMakeFiles/3.24/cmTC_1a2b"));
     writeFile(temp.path(), QStringLiteral("build/Debug/helper.dll"));
+#ifndef Q_OS_WIN
+    // Shared libraries commonly have executable permission bits on POSIX.
+    writeExecutable(temp.path(), QStringLiteral("build/Debug/libhelper.so"));
+    writeExecutable(temp.path(), QStringLiteral("build/Debug/libhelper.so.1"));
+    writeExecutable(temp.path(), QStringLiteral("build/Debug/libhelper.dylib"));
+#endif
     // A directory containing a file is not itself an executable artifact.
     writeFile(temp.path(), QStringLiteral("build/Debug/bundle/inside.txt"));
     setModified(app, -10);
