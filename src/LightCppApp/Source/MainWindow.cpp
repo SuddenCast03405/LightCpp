@@ -6094,7 +6094,6 @@ QString MainWindow::systemConsoleCharset()
         // default for the compiler's execution character set.
         return QStringLiteral("UTF-8");
 #endif
-        }
     }();
     return charset;
 }
@@ -6383,9 +6382,7 @@ void MainWindow::onCompileCurrentFile()
             // of the name that would have been used had one been found.
             const QString attempted =
                 lastCompilerPath_.isEmpty()
-                    ? QDir(ToolchainPaths::mingwBin())
-                          .filePath(
-                              tr("a compiler on PATH (gcc, g++, clang or clang++)"))
+                    ? tr("a compiler on PATH (gcc, g++, clang or clang++)")
                     : lastCompilerPath_;
             outputPanel_->appendBuildOutput(
                 tr("Compiler failed to start. Check that %1 exists.")
@@ -7223,8 +7220,9 @@ QString MainWindow::resolveDebuggerPath() const
     if (!kitsDir.isEmpty()) {
         const QString candidate =
             QDir(kitsDir).filePath(QStringLiteral("Debuggers/x64/cdb.exe"));
-        if (QFileInfo::exists(candidate)) {
-            return candidate;
+        const QFileInfo candidateInfo(candidate);
+        if (candidateInfo.isFile() && candidateInfo.isExecutable()) {
+            return candidateInfo.absoluteFilePath();
         }
     }
 #endif
