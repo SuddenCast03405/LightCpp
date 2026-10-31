@@ -49,7 +49,9 @@ QString portableToolchainBin()
             return bin;
         }
     }
-    return QString();
+    // A system installation is just as valid as a toolchain bundled beside
+    // the IDE. This is the normal path on Linux and macOS.
+    return LightCpp::App::ToolchainPaths::mingwBin();
 }
 
 /// First existing executable among `names` inside `bin`, or empty.
