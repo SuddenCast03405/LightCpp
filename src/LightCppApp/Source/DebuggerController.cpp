@@ -131,14 +131,16 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
     if (isRunning()) {
         return true;  // one session at a time
     }
+    const QFileInfo debuggerInfo(debuggerPath_);
     if (debuggerPath_.isEmpty()
-        || !QFileInfo::exists(debuggerPath_)
+        || !debuggerInfo.isFile() || !debuggerInfo.isExecutable()
         || backend_ == Backend::Unknown) {
         emit logLine(tr("debugger not usable: %1")
                          .arg(QDir::toNativeSeparators(debuggerPath_)));
         return false;
     }
-    if (!QFileInfo::exists(exePath)) {
+    const QFileInfo targetInfo(exePath);
+    if (!targetInfo.isFile() || !targetInfo.isExecutable()) {
         emit logLine(tr("debug target not found: %1")
                          .arg(QDir::toNativeSeparators(exePath)));
         return false;
@@ -227,6 +229,11 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
     }
 
     process_->start(debuggerPath_, arguments);
+    // FailedToStart is delivered asynchronously on POSIX but can be raised
+    // synchronously on Windows. Give QProcess a short bounded window to
+    // report an immediate launch failure so start() has consistent semantics
+    // on both families without waiting for the debugger to finish loading.
+    process_->waitForStarted(250);
     if (startFailed_ || process_->state() == QProcess::NotRunning) {
         // Nothing came up. Leaving process_ (and the pending command batch)
         // behind used to poison the next session: the dead QProcess stayed
@@ -377,7 +384,7 @@ QString breakpointLocation(const DebugBreakpoint& bp)
 {
     // Forward slashes for the Unix-ish backends, native separators for cdb;
     // all of them accept forward slashes, so keep one form.
-    return QDir::fromNativeSeparators(bp.filePath) + QLatin1Char(':')
+    return normalizePath(bp.filePath) + QLatin1Char(':')
            + QString::number(bp.line + 1);
 }
 
