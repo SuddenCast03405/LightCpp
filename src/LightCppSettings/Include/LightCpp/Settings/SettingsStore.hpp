@@ -15,9 +15,10 @@ namespace LightCpp::Settings {
 
 /// Loads, merges and resolves the IDE's configuration.
 ///
-/// Layout, in the spirit of VSCode but next to the executable:
+/// Layout, in the spirit of VSCode:
 ///
-///   <exe dir>/config/*.json        — the base layer (machine scope)
+///   <exe dir>/config/*.json        — the portable base layer when writable
+///   <user config dir>/*.json       — fallback when the installation is read-only
 ///   <workspace>/config/*.json      — overlay layers, merged in order on top
 ///
 /// Each file holds one JSON document with a "type" field, or an array of
@@ -35,10 +36,8 @@ class SettingsStore {
 public:
     SettingsStore() = default;
 
-    /// <directory of the running executable>/config — the base layer.
-    /// Deliberately the executable's directory, not the working directory:
-    /// the working directory is wherever the user happened to start from,
-    /// and settings must not depend on that.
+    /// The portable <executable directory>/config when writable, otherwise
+    /// QStandardPaths::AppConfigLocation. Never depends on the working directory.
     [[nodiscard]] static QString baseConfigDirectory();
 
     /// Write one JSON document (object or array) to `filePath`, indentéd.

@@ -13,6 +13,7 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QSaveFile>
+#include <QStandardPaths>
 
 #include <algorithm>
 
@@ -60,7 +61,48 @@ QString SettingsStore::baseConfigDirectory()
         // a path relative to the CWD is the best that can be done.
         return QStringLiteral("config");
     }
-    return QDir(exeDir).filePath(QStringLiteral("config"));
+
+    // Keep the portable layout when the installation is writable. A system
+    // install under Program Files, /usr/bin or /Applications is commonly
+    // read-only for the current user, however; putting config beside that
+    // executable makes an otherwise successful first launch impossible to
+    // persist. In that case use Qt's per-user application config location.
+    const QString portableDir =
+        QDir(exeDir).filePath(QStringLiteral("config"));
+    const QFileInfo portableInfo(portableDir);
+    const bool portableWritable = portableInfo.exists()
+        ? portableInfo.isWritable()
+        : QFileInfo(exeDir).isWritable();
+    if (portableWritable) {
+        return portableDir;
+    }
+
+    const QString userDir =
+        QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    if (userDir.isEmpty()
+        || (!QDir().mkpath(userDir) && !QFileInfo(userDir).isDir())
+        || !QFileInfo(userDir).isWritable()) {
+        // Preserve the old location as a last resort. The eventual write
+        // reports its own error instead of silently inventing another path.
+        return portableDir;
+    }
+
+    // Migrate existing portable settings once, without overwriting anything
+    // already present in the per-user directory. This keeps an installed
+    // copy's existing kits and preferences when the app moves to a protected
+    // system location.
+    if (QFileInfo(portableDir).isDir()) {
+        QDirIterator it(portableDir, {QStringLiteral("*.json")}, QDir::Files);
+        while (it.hasNext()) {
+            const QString source = it.next();
+            const QString destination =
+                QDir(userDir).filePath(QFileInfo(source).fileName());
+            if (!QFileInfo::exists(destination)) {
+                QFile::copy(source, destination);
+            }
+        }
+    }
+    return userDir;
 }
 
 bool SettingsStore::writeDocument(const QString& filePath,
