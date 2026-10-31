@@ -71,7 +71,7 @@ QString SettingsStore::baseConfigDirectory()
         QDir(exeDir).filePath(QStringLiteral("config"));
     const QFileInfo portableInfo(portableDir);
     const bool portableWritable = portableInfo.exists()
-        ? portableInfo.isWritable()
+        ? (portableInfo.isDir() && portableInfo.isWritable())
         : QFileInfo(exeDir).isWritable();
     if (portableWritable) {
         return portableDir;

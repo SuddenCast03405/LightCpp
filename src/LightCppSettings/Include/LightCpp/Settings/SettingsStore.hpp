@@ -28,10 +28,11 @@ namespace LightCpp::Settings {
 /// field with the later layer winning (objects merge recursively, arrays
 /// and scalars replace).
 ///
-/// The store never writes; it only reads what is there and resolves
-/// defaults. Missing directories and unreadable files are recorded in
-/// lastErrors() and otherwise ignored — a broken config must not take the
-/// IDE down.
+/// Reloading is read-only: it merges what is there and resolves
+/// defaults. The base-path helper may copy portable JSON files to the
+/// per-user config directory when the installation is read-only. Missing
+/// directories and unreadable files are recorded in lastErrors() and
+/// otherwise ignored — a broken config must not take the IDE down.
 class SettingsStore {
 public:
     SettingsStore() = default;

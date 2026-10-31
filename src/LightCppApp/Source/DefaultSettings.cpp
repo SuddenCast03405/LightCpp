@@ -23,6 +23,13 @@ using LightCpp::Settings::KitBuildConfiguration;
 using LightCpp::Settings::Preferences;
 using LightCpp::Settings::Toolchain;
 
+/// True only for a real executable file, not a same-named directory or data file.
+bool isExecutableFile(const QString& path)
+{
+    const QFileInfo info(path);
+    return info.isFile() && info.isExecutable();
+}
+
 /// The bin directory of a toolchain shipped next to the IDE:
 /// <exe>/MinGW64, <exe>/Clang64, <exe>/MinGW32, <exe>/Clang32 — the first
 /// one that exists AND carries a compiler in its bin. Nothing else is
@@ -38,14 +45,14 @@ QString portableToolchainBin()
         const QString bin = QDir(exeDir).filePath(
             name + QStringLiteral("/bin"));
         const bool hasCompiler =
-            isExecutableFile(QDir(bin).filePath(QStringLiteral("g++")) )
-            || isExecutableFile(QDir(bin).filePath(QStringLiteral("g++.exe")) )
-            || isExecutableFile(QDir(bin).filePath(QStringLiteral("gcc")) )
-            || isExecutableFile(QDir(bin).filePath(QStringLiteral("gcc.exe")) )
-            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang++")) )
-            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang++.exe")) )
-            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang")) )
-            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang.exe")) );
+            isExecutableFile(QDir(bin).filePath(QStringLiteral("g++")))
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("g++.exe")))
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("gcc")))
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("gcc.exe")))
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang++")))
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang++.exe")))
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang")))
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang.exe")));
         if (hasCompiler) {
             return bin;
         }
@@ -53,13 +60,6 @@ QString portableToolchainBin()
     // A system installation is just as valid as a toolchain bundled beside
     // the IDE. This is the normal path on Linux and macOS.
     return LightCpp::App::ToolchainPaths::mingwBin();
-}
-
-/// True only for a real executable file, not a same-named directory or data file.
-bool isExecutableFile(const QString& path)
-{
-    const QFileInfo info(path);
-    return info.isFile() && info.isExecutable();
 }
 
 /// First existing executable among `names` inside `bin`, or empty.

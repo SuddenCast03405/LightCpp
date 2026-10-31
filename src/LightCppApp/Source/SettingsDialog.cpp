@@ -493,7 +493,7 @@ QWidget* SettingsDialog::buildToolchainsPage()
         connect(browse, &QPushButton::clicked, this, [this, edit] {
             const QString path = QFileDialog::getOpenFileName(
                 this, tr("Select a tool"), edit->text(),
-                tr("Executables (*.exe);;All files (*)"));
+                tr("All files (*)"));
             if (!path.isEmpty()) {
                 edit->setText(path);
             }
