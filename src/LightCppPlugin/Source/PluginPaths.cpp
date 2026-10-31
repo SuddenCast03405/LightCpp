@@ -12,8 +12,8 @@ namespace LightCpp::Plugin {
 namespace {
 
 /// True when `directory` exists and holds at least one plugin library.
-/// The name filter is case-insensitive on Windows, which is what makes
-/// the real `libdevcppplugin.dll` match `*Plugin*.dll`.
+/// The filename match is case-insensitive so plugin module names are
+/// discovered consistently across platforms.
 [[nodiscard]] bool holdsPluginLibraries(const QDir& directory)
 {
     if (!directory.exists()) {
