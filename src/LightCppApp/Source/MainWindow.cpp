@@ -1260,12 +1260,15 @@ QList<MainWindow::PluginCandidate> MainWindow::pluginCandidates() const
     const LightCpp::Settings::Preferences prefs = pluginPrefsSnapshot();
 
     QDir dir(pluginDir);
-    for (const QString& file : dir.entryList({QStringLiteral("*.dll")},
-                                             QDir::Files,
-                                             QDir::Name | QDir::IgnoreCase)) {
+    for (const QFileInfo& info :
+         dir.entryInfoList(QDir::Files, QDir::Name | QDir::IgnoreCase)) {
+        if (!QLibrary::isLibrary(info.filePath())) {
+            continue;
+        }
+        const QString file = info.fileName();
         PluginCandidate c;
         c.relPath = file;
-        c.absolutePath = dir.filePath(file);
+        c.absolutePath = info.absoluteFilePath();
         c.fileName = file;
         c.lua = false;
         c.loaded = isLoaded(c.absolutePath, LoadedKind::Cpp);
@@ -6085,6 +6088,7 @@ QString MainWindow::systemConsoleCharset()
         case 932:   return QStringLiteral("SHIFT_JIS");
         case 949:   return QStringLiteral("UHC");
         default:    return QStringLiteral("CP%1").arg(codePage);
+        }
 #else
         // POSIX terminals use the user's locale; UTF-8 is the portable
         // default for the compiler's execution character set.
@@ -6381,7 +6385,7 @@ void MainWindow::onCompileCurrentFile()
                 lastCompilerPath_.isEmpty()
                     ? QDir(ToolchainPaths::mingwBin())
                           .filePath(
-                              QStringLiteral("<gcc|g++|clang|clang++>.exe"))
+                              tr("a compiler on PATH (gcc, g++, clang or clang++)"))
                     : lastCompilerPath_;
             outputPanel_->appendBuildOutput(
                 tr("Compiler failed to start. Check that %1 exists.")
@@ -7188,8 +7192,9 @@ QString MainWindow::resolveDebuggerPath() const
     // 1) The active kit's debugger field.
     if (const auto kit = activeKit(); kit.has_value()
         && !kit->debugger.isEmpty()) {
-        if (QFileInfo::exists(kit->debugger)) {
-            return kit->debugger;
+        const QFileInfo debuggerInfo(kit->debugger);
+        if (debuggerInfo.isFile() && debuggerInfo.isExecutable()) {
+            return debuggerInfo.absoluteFilePath();
         }
     }
     // 2) The active kit's compiler directory (MSYS2: gdb.exe lives next to
@@ -7202,8 +7207,9 @@ QString MainWindow::resolveDebuggerPath() const
                                     QStringLiteral("lldb"),
                                     QStringLiteral("lldb.exe")}) {
             const QString candidate = QDir(bin).filePath(name);
-            if (QFileInfo::exists(candidate)) {
-                return candidate;
+            const QFileInfo candidateInfo(candidate);
+            if (candidateInfo.isFile() && candidateInfo.isExecutable()) {
+                return candidateInfo.absoluteFilePath();
             }
         }
     }
@@ -7793,7 +7799,7 @@ void MainWindow::applyPreferences()
         }
         if (!libClang_->isLoaded()) {
             appendLanguageServerLog(
-                tr("no loadable libclang.dll was found in the toolchain, "
+                tr("no loadable libclang shared library was found in the toolchain, "
                    "next to clangd or next to the executable; completion "
                    "stays on clangd"));
             completionBackend_ = QStringLiteral("clangd");
