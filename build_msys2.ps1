@@ -22,15 +22,31 @@ param(
     [switch]$FullSpeed
 )
 
-$ucrt = "E:\msys64\ucrt64\bin"
-if (-not (Test-Path "$ucrt\g++.exe")) {
-    Write-Error "MSYS2 UCRT64 toolchain not found at $ucrt"
+# Find the active UCRT64 installation from PATH or an explicit MSYS2_ROOT.
+$compiler = Get-Command g++.exe -ErrorAction SilentlyContinue
+if ($compiler) {
+    $ucrt = Split-Path $compiler.Source -Parent
+} elseif ($env:MSYS2_ROOT) {
+    $ucrt = Join-Path $env:MSYS2_ROOT "ucrt64/bin"
+} else {
+    Write-Error "MSYS2 UCRT64 not found. Add ucrt64/bin to PATH or set MSYS2_ROOT."
     exit 1
 }
-
+if (-not (Test-Path (Join-Path $ucrt "g++.exe"))) {
+    Write-Error "No g++.exe found in the discovered directory: $ucrt"
+    exit 1
+}
+$prefix = Split-Path $ucrt -Parent
+$env:MINGW_PREFIX = $prefix
 $env:PATH = "$ucrt;" + $env:PATH
-$cmake = "$ucrt\cmake.exe"
-$ctest = "$ucrt\ctest.exe"
+$cmakeCommand = Get-Command cmake.exe -ErrorAction SilentlyContinue
+$ctestCommand = Get-Command ctest.exe -ErrorAction SilentlyContinue
+if (-not $cmakeCommand -or -not $ctestCommand) {
+    Write-Error "cmake.exe and ctest.exe must be available in the active MSYS2 UCRT64 environment."
+    exit 1
+}
+$cmake = $cmakeCommand.Source
+$ctest = $ctestCommand.Source
 $root = $PSScriptRoot
 
 if (-not $FullSpeed) {
