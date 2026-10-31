@@ -6943,8 +6943,15 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
         QProcess* runner = ensureTerminalRunner();
         // A PowerShell-style template ends in -Command/-c, which needs a
         // value; launch without it and use the call operator when typing.
+        const QString terminalExecutable =
+            QFileInfo(program).fileName().toLower();
+        const bool isPowerShell =
+            terminalExecutable == QLatin1String("pwsh")
+            || terminalExecutable == QLatin1String("pwsh.exe")
+            || terminalExecutable == QLatin1String("powershell")
+            || terminalExecutable == QLatin1String("powershell.exe");
         bool needsCallOperator = false;
-        if (!args.isEmpty()
+        if (isPowerShell && !args.isEmpty()
             && (args.last().compare(QLatin1String("-Command"),
                                     Qt::CaseInsensitive) == 0
                 || args.last().compare(QLatin1String("-c"),
@@ -6987,11 +6994,26 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
     // the IDE), with the call operator for PowerShell-style templates. The
     // `cmd /c start` route keeps the window off the IDE's own terminal.
     QStringList externalArgs = args;
-    const QString lastToken =
-        externalArgs.isEmpty() ? QString() : externalArgs.last();
-    if (lastToken.compare(QLatin1String("-Command"), Qt::CaseInsensitive) == 0
-        || lastToken.compare(QLatin1String("-c"), Qt::CaseInsensitive) == 0) {
-        externalArgs << QStringLiteral("& '%1'").arg(exePath);
+    const QString terminalExecutable = QFileInfo(program).fileName().toLower();
+    const bool isPowerShell =
+        terminalExecutable == QLatin1String("pwsh")
+        || terminalExecutable == QLatin1String("pwsh.exe")
+        || terminalExecutable == QLatin1String("powershell")
+        || terminalExecutable == QLatin1String("powershell.exe");
+    const bool isShellCommand =
+        !externalArgs.isEmpty()
+        && externalArgs.last().compare(QLatin1String("-c"),
+                                       Qt::CaseInsensitive) == 0;
+    const bool isPowerShellCommand =
+        !externalArgs.isEmpty()
+        && externalArgs.last().compare(QLatin1String("-Command"),
+                                       Qt::CaseInsensitive) == 0;
+    if (isPowerShell && (isPowerShellCommand || isShellCommand)) {
+        externalArgs << LightCpp::App::TerminalLaunch::programCommandLine(
+            exePath, true);
+    } else if (!isPowerShell && isShellCommand) {
+        externalArgs << LightCpp::App::TerminalLaunch::programCommandLine(
+            exePath, false);
     } else {
         externalArgs << exePath;
     }
