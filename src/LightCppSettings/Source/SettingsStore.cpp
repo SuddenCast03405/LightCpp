@@ -47,6 +47,78 @@ namespace {
     return files;
 }
 
+[[nodiscard]] QString resolveToolPath(const QString& configuredPath)
+{
+    if (configuredPath.isEmpty()) {
+        return {};
+    }
+
+    const QFileInfo configuredInfo(configuredPath);
+    if (configuredInfo.isFile() && configuredInfo.isExecutable()) {
+        return configuredInfo.absoluteFilePath();
+    }
+    if (configuredInfo.exists() && configuredInfo.isDir()) {
+        return configuredPath;
+    }
+
+    // Settings copied from another computer often contain an absolute path
+    // that is valid there but not here (different drive, package manager or
+    // install prefix). Try the executable's basename on this host's PATH.
+    // Treat both slash styles as separators so a Windows path can be read on
+    // POSIX and vice versa.
+    QString portablePath = configuredPath;
+    portablePath.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const QString fileName = QFileInfo(portablePath).fileName();
+    if (fileName.isEmpty() || fileName == QLatin1String("bin")) {
+        return configuredPath;
+    }
+
+    QStringList candidates{fileName};
+    if (fileName.endsWith(QLatin1String(".exe"), Qt::CaseInsensitive)) {
+        const QString withoutExe = fileName.left(fileName.size() - 4);
+        candidates.append(withoutExe);
+        if (withoutExe.compare(QLatin1String("mingw32-make"),
+                               Qt::CaseInsensitive) == 0) {
+            candidates.append(QStringLiteral("make"));
+        }
+    }
+
+    for (const QString& candidate : candidates) {
+        const QString resolved = QStandardPaths::findExecutable(candidate);
+        if (!resolved.isEmpty()) {
+            return resolved;
+        }
+    }
+    return configuredPath;
+}
+
+void resolveToolchainPaths(Toolchain& toolchain)
+{
+    for (auto it = toolchain.compilers.begin();
+         it != toolchain.compilers.end(); ++it) {
+        it.value() = resolveToolPath(it.value());
+    }
+    toolchain.clangd = resolveToolPath(toolchain.clangd);
+    toolchain.clangFormat = resolveToolPath(toolchain.clangFormat);
+    for (auto it = toolchain.buildTools.begin();
+         it != toolchain.buildTools.end(); ++it) {
+        it.value() = resolveToolPath(it.value());
+    }
+}
+
+void resolveKitPaths(Kit& kit)
+{
+    kit.cCompiler = resolveToolPath(kit.cCompiler);
+    kit.cppCompiler = resolveToolPath(kit.cppCompiler);
+    kit.debugger = resolveToolPath(kit.debugger);
+    kit.clangd = resolveToolPath(kit.clangd);
+    kit.clangFormat = resolveToolPath(kit.clangFormat);
+    kit.gitPath = resolveToolPath(kit.gitPath);
+    for (auto it = kit.buildTools.begin(); it != kit.buildTools.end(); ++it) {
+        it.value() = resolveToolPath(it.value());
+    }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -389,6 +461,9 @@ GlobalDefaults SettingsStore::defaults() const
 {
     GlobalDefaults out;
     fromJson(mergedDefaults_, out);
+    out.gitPath = resolveToolPath(out.gitPath);
+    out.clangdPath = resolveToolPath(out.clangdPath);
+    out.clangFormatPath = resolveToolPath(out.clangFormatPath);
     return out;
 }
 
@@ -398,6 +473,7 @@ QList<Toolchain> SettingsStore::toolchains() const
     for (const auto& entry : toolchainDocs_) {
         Toolchain toolchain;
         fromJson(entry.second, toolchain);
+        resolveToolchainPaths(toolchain);
         out.append(toolchain);
     }
     return out;
@@ -409,6 +485,7 @@ std::optional<Toolchain> SettingsStore::toolchain(const QString& id) const
         if (entry.first == id) {
             Toolchain toolchain;
             fromJson(entry.second, toolchain);
+            resolveToolchainPaths(toolchain);
             return toolchain;
         }
     }
@@ -489,6 +566,7 @@ QList<Kit> SettingsStore::kits() const
     for (const auto& entry : kitDocs_) {
         Kit kit;
         fromJson(entry.second, kit);
+        resolveKitPaths(kit);
         if (kit.inheritToolchain && !kit.toolchainId.isEmpty()) {
             for (const Toolchain& toolchain : allToolchains) {
                 if (toolchain.id == kit.toolchainId) {
