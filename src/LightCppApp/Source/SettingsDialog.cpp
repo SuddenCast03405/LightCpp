@@ -897,16 +897,24 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
     generalForm->addRow(tr("Auto-save period"), autoSaveSeconds_);
     runOutputMode_ = makeCombo(QStringLiteral("prefs.run.output"), false);
     runOutputMode_->addItem(tr("Program Output"), QStringLiteral("program"));
+#ifdef Q_OS_WIN
     runOutputMode_->addItem(tr("Console Pauser"), QStringLiteral("consolePauser"));
-    runOutputMode_->setToolTip(
+#endif
+    QString runModeTip =
         tr("How the built program runs.\n"
            "Program Output: its output is captured in the IDE's Program "
-           "Output channel, with an input field for stdin.\n"
-           "Console Pauser: it runs in its own console window via "
-           "ConsolePauser.exe (copied next to the program when missing).\n"
-           "The other entries come from the editable terminal list below; "
+           "Output channel, with an input field for stdin.\n");
+#ifdef Q_OS_WIN
+    runModeTip +=
+        tr("Console Pauser: it runs in its own console window via "
+           "ConsolePauser.exe (copied next to the program when missing).\n");
+#endif
+    runModeTip +=
+        tr("The other entries come from the editable terminal list below; "
            "an embedded terminal captures the output in the Program Output "
-           "channel, an external one opens its own console window."));
+           "channel, while an external terminal is launched as a separate "
+           "process.");
+    runOutputMode_->setToolTip(runModeTip);
     generalForm->addRow(tr("Program output"), runOutputMode_);
 
     // The editable terminal list: Program Output and Console Pauser are
@@ -924,11 +932,10 @@ QWidget* SettingsDialog::buildPreferencesSection(QWidget* parent)
     runTerminals_->setMinimumHeight(96);
     runTerminals_->setToolTip(
         tr("Terminals the program can run in. The command starts the shell "
-           "(e.g. \"cmd.exe /k\"). Embedded terminals run in the Program "
+           "or terminal emulator. Embedded terminals run in the Program "
            "Output channel: the program's path is typed in as the first "
            "line of input and the input field stays live for stdin. "
-           "Non-embedded terminals open their own console and get the "
-           "program path as a command-line argument."));
+           "Non-embedded terminals are launched as separate processes."));
     connect(runTerminals_, &QTableWidget::itemChanged,
             this, [this](QTableWidgetItem*) {
         if (runTerminalsLoaded_) {
