@@ -12,6 +12,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -23,6 +24,38 @@
 using namespace LightCpp::Settings;
 
 namespace {
+
+QString expectedToolPath(const QString& configuredPath)
+{
+    const QFileInfo info(configuredPath);
+    if (info.isFile() && info.isExecutable()) {
+        return info.absoluteFilePath();
+    }
+
+    QString portablePath = configuredPath;
+    portablePath.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const QString fileName = QFileInfo(portablePath).fileName();
+    if (fileName.isEmpty() || fileName == QLatin1String("bin")) {
+        return configuredPath;
+    }
+
+    QStringList candidates{fileName};
+    if (fileName.endsWith(QLatin1String(".exe"), Qt::CaseInsensitive)) {
+        const QString withoutExe = fileName.left(fileName.size() - 4);
+        candidates.append(withoutExe);
+        if (withoutExe.compare(QLatin1String("mingw32-make"),
+                               Qt::CaseInsensitive) == 0) {
+            candidates.append(QStringLiteral("make"));
+        }
+    }
+    for (const QString& candidate : candidates) {
+        const QString resolved = QStandardPaths::findExecutable(candidate);
+        if (!resolved.isEmpty()) {
+            return resolved;
+        }
+    }
+    return configuredPath;
+}
 
 /// The kit document from the settings spec (the MSYS2 GCC kit), verbatim
 /// apart from whitespace. If this ever fails to parse, the shipped default
@@ -714,7 +747,7 @@ TEST(SettingsStore, OverlayMergesSameKitFieldWise)
     EXPECT_EQ(kit->cppStandard, "c++23");                  // overlay wins
     EXPECT_EQ(kit->compileFlags, (QStringList{"-Wall", "-Wpedantic"}));
     EXPECT_EQ(kit->name, "MSYS2 UCRT64 GCC");              // base survives
-    EXPECT_EQ(kit->cppCompiler, "E:/msys64/ucrt64/bin/g++.exe");
+    EXPECT_EQ(kit->cppCompiler, expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/g++.exe")));
     ASSERT_EQ(kit->buildConfigurations.size(), 2);         // base survives
     EXPECT_EQ(kit->buildConfigurations[0].compileFlags,
               (QStringList{"-g", "-O0"}));
@@ -877,8 +910,8 @@ TEST(SettingsStore, ToolPathsPreferSettingsOverFallbacks)
     store.setFallbackToolPaths("fallback/clangd.exe", "fallback/cf.exe",
                                "fallback/git.exe");
     EXPECT_TRUE(store.reload());
-    EXPECT_EQ(store.clangdPath(), "E:/msys64/ucrt64/bin/clangd.exe");
-    EXPECT_EQ(store.gitPath(), "E:/msys64/ucrt64/bin/git.exe");
+    EXPECT_EQ(store.clangdPath(), expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/clangd.exe")));
+    EXPECT_EQ(store.gitPath(), expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/git.exe")));
 
     // Without the settings document, the compiled-in fallbacks apply.
     SettingsStore empty;
@@ -945,11 +978,11 @@ TEST(SettingsStore, KitInheritsToolchainFields)
     EXPECT_TRUE(store.reload());
     const std::optional<Kit> kit = store.kit("msys2-ucrt64-gcc");
     ASSERT_TRUE(kit.has_value());
-    EXPECT_EQ(kit->cCompiler, "E:/msys64/ucrt64/bin/gcc.exe");
-    EXPECT_EQ(kit->cppCompiler, "E:/msys64/ucrt64/bin/g++.exe");
-    EXPECT_EQ(kit->clangd, "E:/msys64/ucrt64/bin/clangd.exe");
+    EXPECT_EQ(kit->cCompiler, expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/gcc.exe")));
+    EXPECT_EQ(kit->cppCompiler, expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/g++.exe")));
+    EXPECT_EQ(kit->clangd, expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/clangd.exe")));
     EXPECT_EQ(kit->buildTools.value("cmake"),
-              "E:/msys64/ucrt64/bin/cmake.exe");
+              expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/cmake.exe")));
     EXPECT_TRUE(kit->isValid());
 
     // The kit's own values win over the toolchain's: name one explicitly.
@@ -959,8 +992,8 @@ TEST(SettingsStore, KitInheritsToolchainFields)
     ASSERT_TRUE(store.reload());
     const std::optional<Kit> overridden = store.kit("msys2-ucrt64-gcc");
     ASSERT_TRUE(overridden.has_value());
-    EXPECT_EQ(overridden->cppCompiler, "D:/custom/g++.exe");
-    EXPECT_EQ(overridden->cCompiler, "E:/msys64/ucrt64/bin/gcc.exe");
+    EXPECT_EQ(overridden->cppCompiler, expectedToolPath(QStringLiteral("D:/custom/g++.exe")));
+    EXPECT_EQ(overridden->cCompiler, expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/gcc.exe")));
 }
 
 TEST(SettingsStore, LlvmFamilyInheritsClangFromTheSameToolchain)
@@ -996,8 +1029,8 @@ TEST(SettingsStore, LlvmFamilyInheritsClangFromTheSameToolchain)
     ASSERT_TRUE(kit.has_value());
     // A "… Clang" kit compiles with clang — the family says so, even
     // though the toolchain also carries gcc.
-    EXPECT_EQ(kit->cCompiler, "E:/msys64/ucrt64/bin/clang.exe");
-    EXPECT_EQ(kit->cppCompiler, "E:/msys64/ucrt64/bin/clang++.exe");
+    EXPECT_EQ(kit->cCompiler, expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/clang.exe")));
+    EXPECT_EQ(kit->cppCompiler, expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/clang++.exe")));
 }
 
 TEST(SettingsStore, ElseFamilyInheritsNoCompiler)
@@ -1135,7 +1168,7 @@ TEST(SettingsStore, ToolchainOverlayMergesFieldWise)
     ASSERT_EQ(store.toolchains().size(), 1);
     EXPECT_EQ(store.toolchains()[0].name, "MSYS2 UCRT64 (patched)");
     EXPECT_EQ(store.toolchains()[0].compilers.value("gcc"),
-              "E:/msys64/ucrt64/bin/gcc.exe");
+              expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/gcc.exe")));
 }
 
 TEST(SettingsStore, BrokenFileIsReportedAndSkipped)
@@ -1447,10 +1480,10 @@ TEST(SettingsLayer, ProjectLayerSaveLeavesTheGlobalSettingsAlone)
     ASSERT_TRUE(store.reload());
     EXPECT_EQ(store.defaults().defaultKitId, QStringLiteral("msys2-ucrt64-gcc"));
     EXPECT_EQ(store.defaults().defaultBuildConfiguration, QStringLiteral("Debug"));
-    EXPECT_EQ(store.gitPath(), QStringLiteral("E:/msys64/ucrt64/bin/git.exe"));
-    EXPECT_EQ(store.clangdPath(), QStringLiteral("E:/msys64/ucrt64/bin/clangd.exe"));
+    EXPECT_EQ(store.gitPath(), expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/git.exe")));
+    EXPECT_EQ(store.clangdPath(), expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/clangd.exe")));
     EXPECT_EQ(store.clangFormatPath(),
-              QStringLiteral("E:/msys64/ucrt64/bin/clang-format.exe"));
+              expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/clang-format.exe")));
     EXPECT_EQ(store.preferences().defaultEncoding, QStringLiteral("GBK"));
     EXPECT_EQ(store.lineEndingForSaving(), QStringLiteral("CRLF"));
     EXPECT_EQ(store.preferences().recentFiles,
