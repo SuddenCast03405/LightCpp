@@ -7,14 +7,6 @@
 namespace LightCpp::App::ToolchainPaths {
 namespace {
 
-/// Locate a toolchain directory from the executable search path. This
-/// intentionally avoids machine-specific drive letters and install roots.
-QString dirOnPath(const QString& tool)
-{
-    const QString found = QStandardPaths::findExecutable(tool);
-    return found.isEmpty() ? QString() : QFileInfo(found).absolutePath();
-}
-
 /// A tool: the copy in the compiler bin directory first, then PATH.
 /// Check both Unix names and Windows .exe names without assuming the host.
 QString toolPath(const QStringList& names)
