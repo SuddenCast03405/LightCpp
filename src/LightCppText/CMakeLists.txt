@@ -22,3 +22,8 @@ target_link_libraries(LightCppText
     PRIVATE
         LightCppWarnings
 )
+
+if(NOT WIN32)
+    find_package(Iconv REQUIRED)
+    target_link_libraries(LightCppText PRIVATE Iconv::Iconv)
+endif()
