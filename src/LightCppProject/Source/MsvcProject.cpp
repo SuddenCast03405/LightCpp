@@ -1,4 +1,5 @@
 #include "LightCpp/Project/MsvcProject.hpp"
+#include "LightCpp/Project/ProjectPathUtils.hpp"
 
 #include <QDir>
 #include <QDomDocument>
@@ -18,8 +19,7 @@ namespace {
 /// project directory.
 QString resolveFilePath(const QString& projectDir, const QString& reference)
 {
-    const QString native = QDir::fromNativeSeparators(reference);
-    return QDir::cleanPath(QDir(projectDir).absoluteFilePath(native));
+    return Paths::resolveReference(projectDir, reference);
 }
 
 /// The key a resolved path is de-duplicated by.
@@ -31,9 +31,10 @@ QString resolveFilePath(const QString& projectDir, const QString& reference)
 QString dedupKey(const QString& path)
 {
 #ifdef Q_OS_WIN
-    return path.toLower();
+    return path.toCaseFolded();
 #else
-    return path;
+    return Paths::isWindowsDriveAbsolutePath(path) ? path.toCaseFolded()
+                                                   : path;
 #endif
 }
 
@@ -307,8 +308,8 @@ std::optional<MsvcProject> parseVcxproj(const QString& filePath,
                                         const QDomDocument& document)
 {
     MsvcProject project;
-    project.filePath = QFileInfo(filePath).absoluteFilePath();
-    project.projectDir = QFileInfo(project.filePath).absolutePath();
+    project.filePath = Paths::absoluteFilePath(filePath);
+    project.projectDir = Paths::directoryForFile(project.filePath);
     project.isLegacyVcproj = false;
 
     // Project name: ProjectName in a configuration-less group, else the file
