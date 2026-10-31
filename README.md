@@ -6,7 +6,8 @@
 
 A working Qt6 Widgets IDE per the engineering standards in `要求.md`:
 editing (syntax highlighting, code folding, bracket matching), project
-management (MSVC/Dev-C++/CMake/.dsp/.dsw), building and running, a
+management (native CMake builds; Windows-only MSVC/Dev-C++ build backends;
+parsing of .dsp/.dsw projects), building and running, a
 pluggable completion/syntax-check backend (clangd / libclang / ccls over
 LSP), debugging (GDB-MI / LLDB / cdb), Git status, Lua 5.4 plugins, and a
 settings system with per-project overlays.
@@ -55,6 +56,12 @@ Decoding behaviour (matches the code, not older promises):
 Note: `readUtf8File()` is a standalone utility of this module; the
 product's file-loading pipeline lives in `LightCppText` (encoding
 detection incl. GBK/Big5) and does not call it.
+
+Legacy code-page conversion is supported on Windows through the native code
+page APIs and on Linux/macOS through `iconv`. On a UTF-8 POSIX locale, an
+otherwise-invalid byte stream is opened with a lossless Latin-1 guess rather
+than being mislabeled UTF-8 and silently rewritten with replacement characters;
+the user can select its actual encoding from the editor.
 
 Design notes (spec compliance):
 - `Utf8.hpp` is header-only and `constexpr`, so decoding/validation can run at
