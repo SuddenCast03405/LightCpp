@@ -214,9 +214,20 @@ QList<Candidate> rootsFromVc6()
             out.append({root, 6000});
         }
     }
-    // A default install whose registry entry has been lost still has this.
-    for (const QString& guess : {QStringLiteral("C:/Program Files (x86)/Microsoft Visual Studio/VC98"),
-                                 QStringLiteral("C:/Program Files/Microsoft Visual Studio/VC98")}) {
+    // Some old VC6 installations have lost their registry entry. Probe
+    // only the installer-provided Program Files roots; never assume Windows
+    // lives on C: or that 32-bit applications use a particular directory.
+    const QStringList programFilesRoots = {
+        qEnvironmentVariable("ProgramFiles(x86)"),
+        qEnvironmentVariable("ProgramFiles"),
+        qEnvironmentVariable("ProgramW6432")
+    };
+    for (const QString& base : programFilesRoots) {
+        if (base.isEmpty()) {
+            continue;
+        }
+        const QString guess =
+            QDir(base).filePath(QStringLiteral("Microsoft Visual Studio/VC98"));
         if (QFileInfo(guess).isDir()) {
             out.append({guess, 6000});
         }
