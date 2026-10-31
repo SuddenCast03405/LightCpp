@@ -182,8 +182,8 @@ bool LibClangCompleter::load(const QString& libraryPath)
         "clang_parseTranslationUnit2",  "clang_disposeTranslationUnit",
         "clang_codeCompleteAt",         "clang_disposeCodeCompleteResults",
         "clang_getNumCompletionChunks", "clang_getCompletionChunkKind",
-        "clang_getCompletionChunkText", "clang_getCString",
-        "clang_disposeString",
+        "clang_getCompletionChunkText", "clang_getCompletionAvailability",
+        "clang_getCString", "clang_disposeString",
     };
     for (const char* name : kRequired) {
         if (resolve(name) == nullptr) {
