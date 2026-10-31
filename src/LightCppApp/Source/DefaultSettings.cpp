@@ -37,9 +37,13 @@ QString portableToolchainBin()
         const QString bin = QDir(exeDir).filePath(
             name + QStringLiteral("/bin"));
         const bool hasCompiler =
-            QFileInfo::exists(QDir(bin).filePath(QStringLiteral("g++.exe")))
+            QFileInfo::exists(QDir(bin).filePath(QStringLiteral("g++")))
+            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("g++.exe")))
+            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("gcc")))
             || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("gcc.exe")))
+            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("clang++")))
             || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("clang++.exe")))
+            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("clang")))
             || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("clang.exe")));
         if (hasCompiler) {
             return bin;
