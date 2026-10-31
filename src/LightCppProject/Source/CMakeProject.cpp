@@ -25,9 +25,18 @@ bool isExecutableArtifact(const QString& path)
         QStringLiteral(".exe"), Qt::CaseInsensitive);
 #else
     // Unix executables are identified by their executable permission bits,
-    // not by a filename suffix. This also handles CMake's extensionless
-    // compiler probes and app binaries inside macOS bundles.
-    return QFileInfo(path).isFile() && QFileInfo(path).isExecutable();
+    // not by a filename suffix. Shared libraries often have the executable
+    // bit too, so exclude their platform suffixes before accepting a file.
+    const QFileInfo info(path);
+    const QString name = info.fileName().toLower();
+    if (name.endsWith(QStringLiteral(".dylib"))
+        || name.endsWith(QStringLiteral(".so"))
+        || name.contains(QStringLiteral(".so."))
+        || name.endsWith(QStringLiteral(".a"))
+        || name.endsWith(QStringLiteral(".o"))) {
+        return false;
+    }
+    return info.isFile() && info.isExecutable();
 #endif
 }
 
