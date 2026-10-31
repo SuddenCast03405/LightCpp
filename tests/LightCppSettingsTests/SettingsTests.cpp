@@ -1506,7 +1506,7 @@ TEST(SettingsLayer, ProjectLayerSaveLeavesTheGlobalSettingsAlone)
     EXPECT_EQ(store.preferences().recentFiles,
               (QStringList{QStringLiteral("E:/demo/main.cpp")}));
     EXPECT_EQ(store.defaults().defaultKitId, QStringLiteral("msys2-ucrt64-gcc"));
-    EXPECT_EQ(store.gitPath(), QStringLiteral("E:/msys64/ucrt64/bin/git.exe"));
+    EXPECT_EQ(store.gitPath(), expectedToolPath(QStringLiteral("E:/msys64/ucrt64/bin/git.exe")));
 }
 
 TEST(SettingsLayer, FullDefaultsDocumentWouldWipeTheBase)
