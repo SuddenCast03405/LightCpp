@@ -160,6 +160,12 @@ private:
 // ask the debugger. The sessions behind each line are recorded in
 // DebuggerControllerTests.cpp and in the batch report.
 
+/// Parse an LLDB frame line into a normalized source path and 0-based line.
+/// Handles POSIX paths, Windows drive-letter paths and LLDB's optional column.
+[[nodiscard]] bool parseLldbFrameLocation(const QString& outputLine,
+                                          QString& filePath,
+                                          int& zeroBasedLine);
+
 /// "file:line" with a 1-based line and forward slashes — the form GDB and cdb
 /// accept. DebugBreakpoint::line is 0-based like every editor coordinate here.
 [[nodiscard]] QString breakpointLocation(const DebugBreakpoint& bp);

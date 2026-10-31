@@ -318,3 +318,36 @@ TEST(DebuggerController, ABackendThatIsNotSupportedGetsNoRemovalCommands)
                     Backend::Unknown, kMiddle, {kFirst})
                     .isEmpty());
 }
+
+
+TEST(DebuggerController, LLDBFrameParsesWindowsDriveLetterAndColumn)
+{
+    QString file;
+    int line = -1;
+    EXPECT_TRUE(parseLldbFrameLocation(
+        QStringLiteral("frame #0: 0x1234 app\x60main at C:\\Work Space\\src\\main.cpp:12:4"),
+        file, line));
+    EXPECT_EQ(file, QStringLiteral("C:/Work Space/src/main.cpp"));
+    EXPECT_EQ(line, 11);
+}
+
+TEST(DebuggerController, LLDBFrameParsesPosixColonPathWithoutColumn)
+{
+    QString file;
+    int line = -1;
+    EXPECT_TRUE(parseLldbFrameLocation(
+        QStringLiteral("frame #0: 0x1234 app\x60main at /tmp/work:folder/main.cpp:7"),
+        file, line));
+    EXPECT_EQ(file, QStringLiteral("/tmp/work:folder/main.cpp"));
+    EXPECT_EQ(line, 6);
+}
+
+TEST(DebuggerController, LLDBFrameRejectsMissingOrInvalidLine)
+{
+    QString file;
+    int line = -1;
+    EXPECT_FALSE(parseLldbFrameLocation(
+        QStringLiteral("frame #0: 0x1234 app\x60main at main.cpp"), file, line));
+    EXPECT_FALSE(parseLldbFrameLocation(
+        QStringLiteral("frame #0: 0x1234 app\x60main at main.cpp:0"), file, line));
+}

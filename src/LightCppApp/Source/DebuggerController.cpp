@@ -631,22 +631,48 @@ void DebuggerController::handleGdbLine(const QString& line)
     }
 }
 
+bool parseLldbFrameLocation(const QString& outputLine,
+                             QString& filePath, int& zeroBasedLine)
+{
+    // LLDB commonly prints file.cpp:line:column, but some versions omit the
+    // column. Match the two numeric suffixes separately: a greedy path group
+    // then preserves drive letters (C:\\...) and colons in POSIX filenames.
+    static const QRegularExpression withColumn(
+        QStringLiteral("at (.+):(\\d+):(\\d+)\\s*$"));
+    static const QRegularExpression withoutColumn(
+        QStringLiteral("at (.+):(\\d+)\\s*$"));
+
+    QRegularExpressionMatch match = withColumn.match(outputLine);
+    if (!match.hasMatch()) {
+        match = withoutColumn.match(outputLine);
+    }
+    if (!match.hasMatch()) {
+        return false;
+    }
+
+    bool ok = false;
+    const int oneBasedLine = match.captured(2).toInt(&ok);
+    if (!ok || oneBasedLine <= 0) {
+        return false;
+    }
+    filePath = normalizePath(match.captured(1));
+    zeroBasedLine = oneBasedLine - 1;
+    return true;
+}
+
 void DebuggerController::handleLldbLine(const QString& line)
 {
     // "Process 1234 stopped" + "stop reason = breakpoint 1.1", followed by
-    // "frame #0: 0x... app`main at main.cpp:8".
+    // "frame #0: 0x... app`main at main.cpp:8[:column]".
     if (line.contains(QLatin1String("stop reason ="))) {
         paused_ = true;
         return;
     }
-    if (line.contains(QLatin1String("frame #"))
-        && line.contains(QLatin1String(" at "))) {
-        static const QRegularExpression framePattern(
-            QStringLiteral("at ([^:]+):(\\d+)"));
-        const auto match = framePattern.match(line);
-        if (match.hasMatch()) {
-            emit paused(normalizePath(match.captured(1)),
-                        match.captured(2).toInt() - 1);
+    if (line.contains(QLatin1String("frame #"))) {
+        QString file;
+        int lineNumber = -1;
+        if (parseLldbFrameLocation(line, file, lineNumber)) {
+            emit paused(file, lineNumber);
             return;
         }
     }
