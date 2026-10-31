@@ -7126,8 +7126,8 @@ void MainWindow::onStartDebugging()
     const QString debugger = resolveDebuggerPath();
     if (debugger.isEmpty()) {
         outputPanel_->appendDebugOutput(
-            tr("No debugger found. Set one in the kit (debugger field) or "
-               "install the Windows SDK debuggers (cdb.exe) for MSVC kits."));
+            tr("No debugger found. Set one in the active kit or install "
+               "GDB/LLDB (or the Windows SDK cdb debugger for MSVC kits)."));
         outputPanel_->showChannel(OutputPanel::ChannelDebug);
         return;
     }
@@ -7187,7 +7187,9 @@ QString MainWindow::resolveDebuggerPath() const
         && !kit->cppCompiler.isEmpty()) {
         const QString bin = QFileInfo(kit->cppCompiler).absolutePath();
         for (const QString& name : {QStringLiteral("gdb"),
-                                    QStringLiteral("gdb.exe")}) {
+                                    QStringLiteral("gdb.exe"),
+                                    QStringLiteral("lldb"),
+                                    QStringLiteral("lldb.exe")}) {
             const QString candidate = QDir(bin).filePath(name);
             if (QFileInfo::exists(candidate)) {
                 return candidate;
@@ -7209,6 +7211,17 @@ QString MainWindow::resolveDebuggerPath() const
         }
     }
 #endif
+    // GDB and LLDB may be installed independently of the compiler directory
+    // (especially on macOS, where LLDB ships with the developer tools).
+    for (const QString& name : {QStringLiteral("gdb"),
+                                QStringLiteral("gdb.exe"),
+                                QStringLiteral("lldb"),
+                                QStringLiteral("lldb.exe")}) {
+        const QString found = QStandardPaths::findExecutable(name);
+        if (!found.isEmpty()) {
+            return found;
+        }
+    }
     return QString();
 }
 
