@@ -38,6 +38,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSet>
+#include <QStandardPaths>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QTableWidget>
@@ -1421,8 +1422,19 @@ void SettingsDialog::commitToolchainForm()
     toolchain.name = toolchainName_->text().trimmed();
     for (auto it = toolchainToolEdits_.constBegin();
          it != toolchainToolEdits_.constEnd(); ++it) {
-        setToolchainPath(&toolchain, it.key(),
-                         it.value()->text().trimmed());
+        QString path = it.value()->text().trimmed();
+        if (!path.isEmpty() && !QDir::isAbsolutePath(path)) {
+            const QFileInfo relativeInfo(path);
+            if (relativeInfo.isFile() && relativeInfo.isExecutable()) {
+                path = relativeInfo.absoluteFilePath();
+            } else {
+                const QString onPath = QStandardPaths::findExecutable(path);
+                if (!onPath.isEmpty()) {
+                    path = onPath;
+                }
+            }
+        }
+        setToolchainPath(&toolchain, it.key(), path);
     }
     if (currentToolchainIndex_ < toolchainList_->count()) {
         toolchainList_->item(currentToolchainIndex_)
@@ -1507,7 +1519,10 @@ void SettingsDialog::checkCurrentToolchain()
     for (const ToolchainToolSpec& spec : kToolchainToolSpecs) {
         const QString path =
             toolchainPath(toolchain, QLatin1String(spec.key));
-        if (!path.isEmpty() && !QFileInfo::exists(path)) {
+        const QFileInfo info(path);
+        if (!path.isEmpty()
+            && (!QDir::isAbsolutePath(path) || !info.isFile()
+                || !info.isExecutable())) {
             missing.append(tr("%1: %2")
                                .arg(tr(spec.label),
                                     QDir::toNativeSeparators(path)));
@@ -2506,6 +2521,20 @@ bool SettingsDialog::validateScope(Scope scope, QString* errorMessage) const
             return false;
         }
         toolchainIds.insert(toolchain.id);
+        for (const ToolchainToolSpec& spec : kToolchainToolSpecs) {
+            const QString path = toolchainPath(
+                toolchain, QLatin1String(spec.key));
+            if (!path.isEmpty() && !QDir::isAbsolutePath(path)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = tr("Toolchain \\"%1\\" has a relative path "
+                                       "for %2. Use an absolute path or a "
+                                       "command found on PATH.")
+                                        .arg(toolchainDisplayName(toolchain),
+                                             tr(spec.label));
+                }
+                return false;
+            }
+        }
     }
     // A kit must name a toolchain the user's configuration will have. That is
     // not the same as "a toolchain this layer defines": when the project layer
