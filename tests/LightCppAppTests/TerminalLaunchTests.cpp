@@ -94,7 +94,11 @@ TEST(TerminalLaunch, APathWithoutSpacesIsStillQuoted)
 {
     const QString line = programCommandLine(QStringLiteral("C:/msys64/ucrt64/bin/hello.exe"),
                                             /*powerShellStyle=*/false);
+#ifdef Q_OS_WIN
     EXPECT_EQ(line, QStringLiteral("\"C:/msys64/ucrt64/bin/hello.exe\""));
+#else
+    EXPECT_EQ(line, QStringLiteral("'C:/msys64/ucrt64/bin/hello.exe'"));
+#endif
     EXPECT_EQ(shellWordCount(line), 1);
 }
 
