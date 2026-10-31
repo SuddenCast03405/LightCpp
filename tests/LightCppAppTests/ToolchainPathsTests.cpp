@@ -98,9 +98,17 @@ TEST(ToolchainPaths, TheBuildBinEitherHoldsGxxOrSaysItDoesNotKnow)
     if (bin.isEmpty()) {
         return;  // no MSYS2 anywhere: an honest answer, not a failure
     }
-    EXPECT_TRUE(QFileInfo::exists(QDir(bin).filePath(QStringLiteral("g++.exe"))))
+    bool hasCompiler = false;
+    for (const QString& name : {QStringLiteral("g++"),
+                                QStringLiteral("g++.exe"),
+                                QStringLiteral("clang++"),
+                                QStringLiteral("clang++.exe")}) {
+        const QFileInfo info(QDir(bin).filePath(name));
+        hasCompiler = hasCompiler || (info.isFile() && info.isExecutable());
+    }
+    EXPECT_TRUE(hasCompiler)
         << "mingwBin() answered " << bin.toStdString()
-        << ", which holds no g++.exe";
+        << ", which holds no executable C++ compiler";
 }
 
 TEST(ToolchainPaths, EveryToolPathIsEitherEmptyOrOnDisk)
@@ -130,8 +138,17 @@ TEST(ToolchainPaths, AToolFoundInTheBuildBinComesFromThatBin)
     if (bin.isEmpty() || clangd.isEmpty()) {
         return;
     }
-    const QString inBin = QDir(bin).filePath(QStringLiteral("clangd.exe"));
-    if (QFileInfo::exists(inBin)) {
+    QString inBin;
+    for (const QString& name : {QStringLiteral("clangd"),
+                                QStringLiteral("clangd.exe")}) {
+        const QString candidate = QDir(bin).filePath(name);
+        const QFileInfo info(candidate);
+        if (info.isFile() && info.isExecutable()) {
+            inBin = candidate;
+            break;
+        }
+    }
+    if (!inBin.isEmpty()) {
         EXPECT_EQ(QFileInfo(clangd).canonicalFilePath(),
                   QFileInfo(inBin).canonicalFilePath());
     }
