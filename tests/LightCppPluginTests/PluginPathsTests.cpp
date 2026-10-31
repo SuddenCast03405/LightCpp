@@ -18,7 +18,7 @@ namespace {
 QString testPluginLibraryName()
 {
 #ifdef Q_OS_WIN
-    return testPluginLibraryName();
+    return QStringLiteral("libdevcppplugin.dll");
 #else
     return QStringLiteral("libdevcppplugin.so");
 #endif
