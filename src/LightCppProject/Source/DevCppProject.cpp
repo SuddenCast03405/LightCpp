@@ -1,4 +1,5 @@
 #include "LightCpp/Project/DevCppProject.hpp"
+#include "LightCpp/Project/ProjectPathUtils.hpp"
 
 #include <QDir>
 #include <QFile>
@@ -98,14 +99,7 @@ QString lookup(const QList<IniEntry>& entries, const QString& section, const cha
 
 QString absoluteFrom(const QString& base, const QString& path)
 {
-    const QString native = QDir::fromNativeSeparators(path);
-    if (native.isEmpty()) {
-        return {};
-    }
-    if (QFileInfo(native).isAbsolute()) {
-        return QDir::cleanPath(native);
-    }
-    return QDir::cleanPath(QDir(base).filePath(native));
+    return Paths::resolveReference(base, path);
 }
 
 /// Dev-C++ writes Windows paths with backslashes. The compilers here take
@@ -383,7 +377,7 @@ QString makeEscapedPath(QString path)
 
 QString pathRelativeTo(const QString& base, const QString& path)
 {
-    return QDir(base).relativeFilePath(QDir::cleanPath(path));
+    return Paths::relativePath(base, path);
 }
 
 /// The object file a unit compiles to, relative to the project directory —
@@ -953,8 +947,8 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
     const QList<IniEntry> entries = parseIni(text);
 
     DevCppProject project;
-    project.filePath = QFileInfo(filePath).absoluteFilePath();
-    project.projectDir = QFileInfo(project.filePath).absolutePath();
+    project.filePath = Paths::absoluteFilePath(filePath);
+    project.projectDir = Paths::directoryForFile(project.filePath);
     project.name = lookup(entries, QStringLiteral("Project"), "Name");
     if (project.name.isEmpty()) {
         project.name = QFileInfo(project.filePath).completeBaseName();
