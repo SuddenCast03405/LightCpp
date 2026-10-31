@@ -93,12 +93,15 @@ ctest --preset msys2-ucrt64
 
 Or from PowerShell use the helper script. It discovers the active MSYS2
 installation from `PATH` or `MSYS2_ROOT`; no drive letter or install
-directory is assumed:
+directory is assumed. Qt deployment is disabled by default so a failed
+`windeployqt` post-build step cannot be mistaken for a successful test build.
+Pass `-DeployQt` when you want to stage Qt DLLs beside the executable:
 
 ```powershell
 powershell -File build_msys2.ps1 -Test
 powershell -File build_msys2.ps1 -Test -Target LightCppTextTests -Tests 'TextFileTest'
 powershell -File build_msys2.ps1 -FullSpeed
+powershell -File build_msys2.ps1 -DeployQt
 ```
 
 ### Linux and macOS (native preset)
