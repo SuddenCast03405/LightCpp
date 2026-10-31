@@ -9,14 +9,14 @@
     {
       "name": "msys2-ucrt64",
       "displayName": "MSYS2 UCRT64 (GCC)",
-      "description": "Configure with the MSYS2 UCRT64 toolchain (E:\\msys64\\ucrt64) using Ninja.",
+      "description": "Configure with MSYS2 UCRT64 discovered from PATH and MINGW_PREFIX; no machine-specific drive.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/msys2-ucrt64",
       "cacheVariables": {
-        "CMAKE_C_COMPILER": "E:/msys64/ucrt64/bin/gcc.exe",
-        "CMAKE_CXX_COMPILER": "E:/msys64/ucrt64/bin/g++.exe",
-        "CMAKE_MAKE_PROGRAM": "E:/msys64/ucrt64/bin/ninja.exe",
-        "CMAKE_PREFIX_PATH": "E:/msys64/ucrt64",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_MAKE_PROGRAM": "ninja",
+        "CMAKE_PREFIX_PATH": "$env{MINGW_PREFIX}",
         "CMAKE_BUILD_TYPE": "Debug"
       }
     },
@@ -40,6 +40,18 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "LIGHTCPP_DEPLOY_QT": "OFF"
       }
+    },
+    {
+      "name": "native",
+      "displayName": "Native host toolchain",
+      "description": "Use the host C/C++ compiler and Qt 6 installation on Linux or macOS.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/native",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "LIGHTCPP_DEPLOY_QT": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -54,23 +66,45 @@
     {
       "name": "ci",
       "configurePreset": "ci"
+    },
+    {
+      "name": "native",
+      "configurePreset": "native"
     }
   ],
   "testPresets": [
     {
       "name": "msys2-ucrt64",
       "configurePreset": "msys2-ucrt64",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "msys2-ucrt64-coverage",
       "configurePreset": "msys2-ucrt64-coverage",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "ci",
       "configurePreset": "ci",
-      "output": { "outputOnFailure": true },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error",
+        "timeout": 180
+      }
+    },
+    {
+      "name": "native",
+      "configurePreset": "native",
+      "output": {
+        "outputOnFailure": true
+      },
       "execution": {
         "jobs": 4,
         "noTestsAction": "error",
