@@ -38,14 +38,14 @@ QString portableToolchainBin()
         const QString bin = QDir(exeDir).filePath(
             name + QStringLiteral("/bin"));
         const bool hasCompiler =
-            QFileInfo::exists(QDir(bin).filePath(QStringLiteral("g++")))
-            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("g++.exe")))
-            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("gcc")))
-            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("gcc.exe")))
-            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("clang++")))
-            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("clang++.exe")))
-            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("clang")))
-            || QFileInfo::exists(QDir(bin).filePath(QStringLiteral("clang.exe")));
+            isExecutableFile(QDir(bin).filePath(QStringLiteral("g++")) )
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("g++.exe")) )
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("gcc")) )
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("gcc.exe")) )
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang++")) )
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang++.exe")) )
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang")) )
+            || isExecutableFile(QDir(bin).filePath(QStringLiteral("clang.exe")) );
         if (hasCompiler) {
             return bin;
         }
@@ -55,13 +55,20 @@ QString portableToolchainBin()
     return LightCpp::App::ToolchainPaths::mingwBin();
 }
 
+/// True only for a real executable file, not a same-named directory or data file.
+bool isExecutableFile(const QString& path)
+{
+    const QFileInfo info(path);
+    return info.isFile() && info.isExecutable();
+}
+
 /// First existing executable among `names` inside `bin`, or empty.
 QString binTool(const QString& bin,
                 const std::initializer_list<const char*>& names)
 {
     for (const char* name : names) {
         const QString path = QDir(bin).filePath(QString::fromLatin1(name));
-        if (QFileInfo::exists(path)) {
+        if (isExecutableFile(path)) {
             return path;
         }
     }

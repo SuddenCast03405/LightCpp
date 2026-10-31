@@ -18,7 +18,8 @@ QString compilerBinIfPresent(const QString& bin)
                                 QStringLiteral("g++.exe"),
                                 QStringLiteral("clang++"),
                                 QStringLiteral("clang++.exe")}) {
-        if (QFileInfo(QDir(bin).filePath(name)).isFile()) {
+        const QFileInfo info(QDir(bin).filePath(name));
+        if (info.isFile() && info.isExecutable()) {
             return QDir(bin).absolutePath();
         }
     }
@@ -54,7 +55,8 @@ QString toolPath(const QStringList& names)
     for (const QString& name : names) {
         if (!bin.isEmpty()) {
             const QString local = QDir(bin).filePath(name);
-            if (QFileInfo::exists(local)) {
+            const QFileInfo localInfo(local);
+            if (localInfo.isFile() && localInfo.isExecutable()) {
                 return local;
             }
         }

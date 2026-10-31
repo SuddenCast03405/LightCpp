@@ -1948,7 +1948,9 @@ LightCpp::Plugin::BuildRequest MainWindow::makeBuildRequest() const
         for (const QString& name : names) {
             const QString local = buildBin.isEmpty()
                 ? QString() : QDir(buildBin).filePath(name);
-            if (!local.isEmpty() && QFileInfo::exists(local)) {
+            const QFileInfo localInfo(local);
+            if (!local.isEmpty() && localInfo.isFile()
+                && localInfo.isExecutable()) {
                 return local;
             }
             const QString onPath = QStandardPaths::findExecutable(name);
@@ -1966,8 +1968,16 @@ LightCpp::Plugin::BuildRequest MainWindow::makeBuildRequest() const
                             QStringLiteral("g++"));
     if (const auto kit = activeKit(); kit.has_value()) {
         const QString kitMake = kit->buildTools.value(QStringLiteral("gnuMake"));
-        if (!kitMake.isEmpty() && QFileInfo::exists(kitMake)) {
-            make = kitMake;
+        if (!kitMake.isEmpty()) {
+            const QFileInfo kitMakeInfo(kitMake);
+            if (kitMakeInfo.isFile() && kitMakeInfo.isExecutable()) {
+                make = kitMake;
+            } else {
+                const QString onPath = QStandardPaths::findExecutable(kitMake);
+                if (!onPath.isEmpty()) {
+                    make = onPath;
+                }
+            }
         }
         if (!kit->cppCompiler.isEmpty() && !isMsvcKit(*kit)) {
             gxx = kit->cppCompiler;
@@ -6872,7 +6882,8 @@ QString MainWindow::resolveConsolePauser(const QString& exePath) const
     };
     QString found;
     for (const QString& candidate : candidates) {
-        if (QFileInfo::exists(candidate)) {
+        const QFileInfo info(candidate);
+        if (info.isFile() && info.isExecutable()) {
             found = candidate;
             break;
         }
