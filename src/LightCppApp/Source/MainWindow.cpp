@@ -51,6 +51,7 @@
 #include <QDirIterator>
 #include <QDateTime>
 #include <QFileInfo>
+#include <QLibrary>
 #include <QFileSystemWatcher>
 #include <QGuiApplication>
 #include <QHash>
@@ -7425,27 +7426,51 @@ QString MainWindow::resolveCompletionServerPath(const QString& backend) const
 
 QStringList MainWindow::resolveLibClangPaths() const
 {
-    QStringList dirs;
-    // The engine parses in-process, so it has to be built against the same
-    // C++ runtime the IDE already loaded. A libclang from another GCC build
-    // (for example a bundled MinGW 14 toolchain under a GCC 16 IDE) fails to
-    // bind its libstdc++ imports and the whole DLL refuses to load, so the
-    // toolchain the IDE runs on is tried before any bundled one.
-    dirs << ToolchainPaths::mingwBin();
+    QStringList searchDirs;
+    const auto addDir = [&searchDirs](const QString& path) {
+        if (!path.isEmpty() && QFileInfo(path).isDir()) {
+            const QString absolute = QDir(path).absolutePath();
+            if (!searchDirs.contains(absolute)) searchDirs.append(absolute);
+        }
+    };
+    addDir(ToolchainPaths::mingwBin());
     const QString clangdPath = settings_->clangdPath();
-    if (!clangdPath.isEmpty()) {
-        dirs << QFileInfo(clangdPath).absolutePath();
+    if (!clangdPath.isEmpty()) addDir(QFileInfo(clangdPath).absolutePath());
+    addDir(QCoreApplication::applicationDirPath());
+
+    // LLVM distributions commonly keep executables in bin/ and libclang in
+    // a sibling lib/ or lib64/. Search both layouts without assuming a
+    // Windows DLL suffix or a fixed package-manager prefix.
+    const QStringList roots = searchDirs;
+    for (const QString& root : roots) {
+        const QDir dir(root);
+        addDir(dir.filePath(QStringLiteral("../lib")));
+        addDir(dir.filePath(QStringLiteral("../lib64")));
     }
-    dirs << QCoreApplication::applicationDirPath();
+    const QString llvmRoot = qEnvironmentVariable("LLVM_ROOT");
+    if (!llvmRoot.isEmpty()) {
+        addDir(QDir(llvmRoot).filePath(QStringLiteral("lib")));
+        addDir(QDir(llvmRoot).filePath(QStringLiteral("lib64")));
+    }
 
     QStringList paths;
-    for (const QString& dir : dirs) {
-        if (dir.isEmpty()) {
-            continue;
-        }
-        const QString candidate = QDir(dir).filePath(QStringLiteral("libclang.dll"));
-        if (QFileInfo::exists(candidate) && !paths.contains(candidate)) {
-            paths << candidate;
+    const QString explicitLibrary = qEnvironmentVariable("LIBCLANG_PATH");
+    if (QFileInfo(explicitLibrary).isFile() && QLibrary::isLibrary(explicitLibrary)) {
+        paths.append(QFileInfo(explicitLibrary).absoluteFilePath());
+    }
+
+    const QStringList filters = {
+        QStringLiteral("libclang.dll"),
+        QStringLiteral("libclang.so"),
+        QStringLiteral("libclang.so.*"),
+        QStringLiteral("libclang.dylib")
+    };
+    for (const QString& dir : std::as_const(searchDirs)) {
+        for (const QString& name : QDir(dir).entryList(filters, QDir::Files)) {
+            const QString candidate = QDir(dir).filePath(name);
+            if (QLibrary::isLibrary(candidate) && !paths.contains(candidate)) {
+                paths.append(candidate);
+            }
         }
     }
     return paths;
