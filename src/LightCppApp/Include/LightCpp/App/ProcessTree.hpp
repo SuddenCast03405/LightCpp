@@ -7,7 +7,7 @@
 
 namespace LightCpp::App {
 
-/// One process as a Toolhelp32 snapshot lists it.
+/// One process as returned by the host operating system's process snapshot.
 ///
 /// The name is carried along because two questions are asked of the same
 /// snapshot and neither can be answered by a pid alone: "which of these did

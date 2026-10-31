@@ -58,6 +58,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/MainWindow.cpp
     Source/ProcessShutdown.cpp
     Source/ProcessTree.cpp
+    ${LIGHTCPP_PROCESS_TREE_PLATFORM_SOURCE}
     Source/ProjectSearchDialog.cpp
     Source/SettingsDialog.cpp
     Source/StartupPage.cpp

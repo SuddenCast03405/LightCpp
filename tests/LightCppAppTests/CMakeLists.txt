@@ -64,6 +64,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/MsvcToolchain.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessShutdown.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessTree.cpp
+    ${LIGHTCPP_PROCESS_TREE_PLATFORM_SOURCE}
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TerminalLaunch.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/TextColumns.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ToolchainPaths.cpp

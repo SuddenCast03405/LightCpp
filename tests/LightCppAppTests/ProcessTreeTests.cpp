@@ -89,17 +89,31 @@ std::vector<ProcessEntry> shellWithProgram()
 /// table yet when startDetached returns, so the child is looked for by
 /// waitForImage(). 0 means this machine would not start one, and the tests
 /// skip instead of failing.
+QString testChildImage()
+{
+#ifdef Q_OS_WIN
+    return QStringLiteral("ping.exe");
+#else
+    return QStringLiteral("sleep");
+#endif
+}
+
 unsigned long startShellWithProgram()
 {
     qint64 pid = 0;
+#ifdef Q_OS_WIN
     const bool started = QProcess::startDetached(
         QStringLiteral("cmd.exe"),
-        {QStringLiteral("/c"),
-         QStringLiteral("%SystemRoot%\\System32\\ping.exe -n 30 127.0.0.1 >nul")},
+        {QStringLiteral("/c"), QStringLiteral("%SystemRoot%\\System32\\ping.exe -n 30 127.0.0.1 >nul")},
         QDir::tempPath(), &pid);
+#else
+    const bool started = QProcess::startDetached(
+        QStringLiteral("/bin/sh"),
+        {QStringLiteral("-c"), QStringLiteral("sleep 30 & wait")},
+        QDir::tempPath(), &pid);
+#endif
     return started && pid > 0 ? static_cast<unsigned long>(pid) : 0;
 }
-
 /// The pid of `imageLower` among `rootPid`'s descendants, waiting up to
 /// `timeoutMs` for it to appear; 0 when it never does.
 unsigned long waitForImage(unsigned long rootPid, const QString& imageLower,
@@ -299,7 +313,7 @@ TEST(ProcessTreeOnRealProcesses, TerminatingTheShellLeavesItsProgramRunning)
                         "has " << snapshotProcesses().size() << " entries)";
     }
     const unsigned long program =
-        waitForImage(shell, QStringLiteral("ping.exe"), 5000);
+        waitForImage(shell, testChildImage(), 5000);
     if (program == 0) {
         (void)terminateProcess(shell);  // nothing observed, still ours to stop
         GTEST_SKIP() << "the shell (" << shell << ") started no program to "
@@ -329,7 +343,7 @@ TEST(ProcessTreeOnRealProcesses, StoppingTheTreeEndsTheProgramWithTheShell)
                         "has " << snapshotProcesses().size() << " entries)";
     }
     const unsigned long program =
-        waitForImage(shell, QStringLiteral("ping.exe"), 5000);
+        waitForImage(shell, testChildImage(), 5000);
     if (program == 0) {
         (void)terminateProcess(shell);  // nothing observed, still ours to stop
         GTEST_SKIP() << "the shell (" << shell << ") started no program to "
