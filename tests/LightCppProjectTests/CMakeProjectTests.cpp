@@ -42,6 +42,31 @@ QString writeFile(const QString& root, const QString& relative,
     return path;
 }
 
+QString executableName(const QString& stem)
+{
+#ifdef Q_OS_WIN
+    return stem + QStringLiteral(".exe");
+#else
+    return stem;
+#endif
+}
+
+QString writeExecutable(const QString& root, const QString& stem,
+                        const QByteArray& content = QByteArray("executable"))
+{
+    const QString path = writeFile(root, executableName(stem), content);
+#ifndef Q_OS_WIN
+    QFile file(path);
+    if (file.open(QIODevice::ReadWrite)) {
+        file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                            | QFileDevice::ExeOwner | QFileDevice::ReadGroup
+                            | QFileDevice::ExeGroup | QFileDevice::ReadOther
+                            | QFileDevice::ExeOther);
+    }
+#endif
+    return path;
+}
+
 /// Makes a file look older/newer than its neighbours, so "newest" is decided
 /// by an explicit timestamp instead of by how fast the test ran.
 void setModified(const QString& path, int secondsFromNow)
@@ -130,25 +155,33 @@ TEST(CMakeProject, RespectsTheDepthLimit)
 TEST(CMakeProject, MissingOrEmptyStartDirectoryYieldsNothing)
 {
     EXPECT_FALSE(findCMakeProject(QString()).has_value());
-    EXPECT_FALSE(findCMakeProject(QStringLiteral("Z:/definitely/not/here")).has_value());
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    EXPECT_FALSE(findCMakeProject(
+        QDir(temp.path()).filePath(QStringLiteral("missing/directory"))).has_value());
 }
 
 TEST(CMakeProject, BuildTreeIsSeparatePerConfiguration)
 {
-    const QString root = QStringLiteral("E:/proj");
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    const QString root = temp.path();
     const CMakeProject project = projectAt(root);
     EXPECT_EQ(buildDirectory(project, BuildConfiguration::Debug),
-              QStringLiteral("E:/proj/build/Debug"));
+              QDir(root).filePath(QStringLiteral("build/Debug")));
     EXPECT_EQ(buildDirectory(project, BuildConfiguration::Release),
-              QStringLiteral("E:/proj/build/Release"));
+              QDir(root).filePath(QStringLiteral("build/Release")));
 }
 
 TEST(CMakeProject, ConfigureArgumentsSelectTheBuildType)
 {
-    const CMakeProject project = projectAt(QStringLiteral("E:/proj"));
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    const QString root = temp.path();
+    const CMakeProject project = projectAt(root);
     EXPECT_EQ(configureArguments(project, BuildConfiguration::Release),
-              QStringList({QStringLiteral("-S"), QStringLiteral("E:/proj"),
-                           QStringLiteral("-B"), QStringLiteral("E:/proj/build/Release"),
+              QStringList({QStringLiteral("-S"), root,
+                           QStringLiteral("-B"), QDir(root).filePath("build/Release"),
                            QStringLiteral("-G"), QStringLiteral("Ninja"),
                            QStringLiteral("-DCMAKE_BUILD_TYPE=Release"),
                            QStringLiteral("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")}));
@@ -156,9 +189,11 @@ TEST(CMakeProject, ConfigureArgumentsSelectTheBuildType)
 
 TEST(CMakeProject, ConfigureArgumentsCanOmitTheGenerator)
 {
-    const CMakeProject project = projectAt(QStringLiteral("E:/proj"));
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    const CMakeProject project = projectAt(temp.path());
     const QStringList args = configureArguments(project, BuildConfiguration::Debug,
-                                               QString(), false);
+                                                QString(), false);
     EXPECT_FALSE(args.contains(QStringLiteral("-G")));
     EXPECT_FALSE(args.contains(QStringLiteral("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")));
     EXPECT_TRUE(args.contains(QStringLiteral("-DCMAKE_BUILD_TYPE=Debug")));
@@ -169,9 +204,13 @@ TEST(CMakeProject, BuildArgumentsCarryTheConfiguration)
     // Single-config generators take the build type from the cache and ignore
     // --config; multi-config generators use --config and ignore the cache.
     // Sending both is what makes one command line right for either.
-    const CMakeProject project = projectAt(QStringLiteral("E:/proj"));
+    QTemporaryDir temp;
+    ASSERT_TRUE(temp.isValid());
+    const QString root = temp.path();
+    const CMakeProject project = projectAt(root);
     EXPECT_EQ(buildArguments(project, BuildConfiguration::Debug),
-              QStringList({QStringLiteral("--build"), QStringLiteral("E:/proj/build/Debug"),
+              QStringList({QStringLiteral("--build"),
+                           QDir(root).filePath("build/Debug"),
                            QStringLiteral("--config"), QStringLiteral("Debug")}));
 }
 
@@ -194,11 +233,13 @@ TEST(CMakeProject, BuiltExecutablesSkipsCompilerProbes)
     QTemporaryDir temp;
     ASSERT_TRUE(temp.isValid());
     const QString tree = QDir(temp.path()).filePath(QStringLiteral("build/Debug"));
-    const QString app = writeFile(temp.path(), QStringLiteral("build/Debug/app.exe"));
-    writeFile(temp.path(), QStringLiteral("build/Debug/CMakeFiles/3.24/cmTC_1a2b.exe"));
+    const QString app = writeExecutable(temp.path(),
+                                        QStringLiteral("build/Debug/app"));
+    writeExecutable(temp.path(),
+                    QStringLiteral("build/Debug/CMakeFiles/3.24/cmTC_1a2b"));
     writeFile(temp.path(), QStringLiteral("build/Debug/helper.dll"));
-    // A *directory* whose name ends in .exe is not an executable.
-    writeFile(temp.path(), QStringLiteral("build/Debug/bundle.exe/inside.txt"));
+    // A directory containing a file is not itself an executable artifact.
+    writeFile(temp.path(), QStringLiteral("build/Debug/bundle/inside.txt"));
     setModified(app, -10);
 
     const QStringList found = builtExecutables(tree);
@@ -211,8 +252,10 @@ TEST(CMakeProject, NewestExecutableWins)
     QTemporaryDir temp;
     ASSERT_TRUE(temp.isValid());
     const QString tree = QDir(temp.path()).filePath(QStringLiteral("build/Debug"));
-    const QString older = writeFile(temp.path(), QStringLiteral("build/Debug/older.exe"));
-    const QString newer = writeFile(temp.path(), QStringLiteral("build/Debug/newer.exe"));
+    const QString older = writeExecutable(temp.path(),
+                                          QStringLiteral("build/Debug/older"));
+    const QString newer = writeExecutable(temp.path(),
+                                          QStringLiteral("build/Debug/newer"));
     setModified(older, -3600);
     setModified(newer, -10);
 
@@ -223,11 +266,12 @@ TEST(CMakeProject, NewestExecutableWins)
 TEST(CMakeProject, EmptyOrMissingBuildTreeHasNoExecutables)
 {
     EXPECT_TRUE(builtExecutables(QString()).isEmpty());
-    EXPECT_TRUE(builtExecutables(QStringLiteral("Z:/definitely/not/here")).isEmpty());
     EXPECT_TRUE(newestExecutable(QString()).isEmpty());
 
     QTemporaryDir temp;
     ASSERT_TRUE(temp.isValid());
+    EXPECT_TRUE(builtExecutables(
+        QDir(temp.path()).filePath(QStringLiteral("missing/build"))).isEmpty());
     EXPECT_TRUE(builtExecutables(temp.path()).isEmpty());
     EXPECT_TRUE(newestExecutable(temp.path()).isEmpty());
 }
@@ -241,8 +285,8 @@ void makeBuildTree(const QString& root, const char* cacheProjectLine)
 {
     writeFile(root, "CMakeCache.txt",
               QByteArray(cacheProjectLine) + QByteArray("\nother:flag=x\n"));
-    writeFile(root, "hello.exe", QByteArray("main"));
-    writeFile(root, "test_runner.exe", QByteArray("test"));
+    writeExecutable(root, "hello", QByteArray("main"));
+    writeExecutable(root, "test_runner", QByteArray("test"));
 }
 
 TEST(CMakeProject, PreferredExecutablePicksTheProjectNamesake)
@@ -254,8 +298,8 @@ TEST(CMakeProject, PreferredExecutablePicksTheProjectNamesake)
                   "CMAKE_PROJECT_NAME:STATIC=hello");
     // Make the test runner the NEWEST executable: "newest of everything"
     // would pick it, the project-name match must beat that.
-    setModified(QDir(tree).filePath("hello.exe"), -60);
-    setModified(QDir(tree).filePath("test_runner.exe"), 0);
+    setModified(QDir(tree).filePath(executableName(QStringLiteral("hello"))), -60);
+    setModified(QDir(tree).filePath(executableName(QStringLiteral("test_runner"))), 0);
 
     EXPECT_EQ(preferredExecutable(tree),
               QDir(tree).filePath("hello.exe"));
@@ -280,9 +324,8 @@ TEST(CMakeProject, PreferredExecutableIsNewestWhenItIsTheOnlyOne)
     ASSERT_TRUE(dir.isValid());
     const QString tree = dir.filePath("build/Debug");
     writeFile(tree, "CMakeCache.txt", "CMAKE_PROJECT_NAME:STATIC=hello\n");
-    writeFile(tree, "tool.exe", QByteArray("tool"));
+    const QString tool = writeExecutable(tree, "tool");
 
-    EXPECT_EQ(preferredExecutable(tree),
-              QDir(tree).filePath("tool.exe"));
+    EXPECT_EQ(preferredExecutable(tree), tool);
 }
 
