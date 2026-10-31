@@ -197,9 +197,9 @@ struct ClangFormatService {
 /// path is appended as one final (quoted as needed) argument, e.g.
 /// `cmd.exe /k` + `D:\demo.exe` -> `cmd.exe /k D:\demo.exe`.
 struct RunTerminal {
-    /// Stable key referenced by Preferences::programOutput. The two built-in
-    /// entries use the fixed ids "cmd" and "powershell"; user-added entries
-    /// get a generated id.
+    /// Stable key referenced by Preferences::programOutput. Built-in ids are
+    /// host-specific ("cmd"/"powershell" on Windows, "sh"/"bash" on POSIX);
+    /// user-added entries get a generated id.
     QString id;
     QString name;         ///< display name, e.g. "Windows Command Prompt"
     QString command;      ///< launcher; the program path is appended
@@ -295,7 +295,7 @@ struct Preferences {
     QString programOutput = QStringLiteral("program");
     /// The editable run.output list. Program Output and Console Pauser are
     /// fixed options outside it; every entry here can be edited, added or
-    /// removed. Seeded with the two Windows terminals on first run.
+    /// removed. Seeded with the host's two native shells on first run.
     QList<RunTerminal> terminals = defaultRunTerminals();
 
     /// Plugins the user disabled, as paths relative to the plugins
