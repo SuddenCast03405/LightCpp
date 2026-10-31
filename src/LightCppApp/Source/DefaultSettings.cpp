@@ -219,10 +219,10 @@ WriteResult ensureDefaultConfigFiles(const QString& dir)
         return result;
     }
 
-    // A toolchain shipped next to the IDE (MinGW64 / Clang64 / MinGW32 /
-    // Clang32 beside the executable) is the only thing the starter
-    // identifies — no other location is scanned. clangd and clang-format
-    // come from that bin when it carries them.
+    // Prefer a toolchain shipped next to the IDE (MinGW64 / Clang64 /
+    // MinGW32 / Clang32). If none is bundled, use the host compiler directory
+    // discovered from MSYS2_ROOT/MINGW_PREFIX or PATH. clangd and clang-format
+    // are taken from that same directory when present, then from PATH.
     const QString portableBin = portableToolchainBin();
     const QString effectiveClangd = portableBin.isEmpty()
         ? QString() : binTool(portableBin, {"clangd", "clangd.exe"});
@@ -237,9 +237,18 @@ WriteResult ensureDefaultConfigFiles(const QString& dir)
     QList<Toolchain> toolchains;
     QList<Kit> kits;
     if (!portableBin.isEmpty()) {
-        const QString dirName =
-            QFileInfo(portableBin).dir().dirName();  // "MinGW64" etc.
-        const QString lower = dirName.toLower();
+        const QString relativeToApp =
+            QDir(QCoreApplication::applicationDirPath())
+                .relativeFilePath(portableBin);
+        const bool bundled =
+            !QDir::isAbsolutePath(relativeToApp)
+            && relativeToApp != QLatin1String("..")
+            && !relativeToApp.startsWith(QStringLiteral("../"));
+        const QString dirName = bundled
+            ? QFileInfo(portableBin).dir().dirName()
+            : QStringLiteral("System");
+        const QString lower = bundled ? dirName.toLower()
+                                      : QStringLiteral("system");
         Toolchain primary = toolchainFromBin(portableBin, lower, dirName);
         if (primary.isValid()) {
             toolchains.append(primary);
