@@ -6238,21 +6238,27 @@ void MainWindow::onCompileCurrentFile()
         // GNU-style: the kit's compilers, or the built-in MSYS2 GCC when no
         // kit is selected. The binary dir travels with the compiler: the
         // runtime DLLs it (and its output) need live next to it.
-        const QString fallbackBin = ToolchainPaths::mingwBin();
-        QString cppCompiler =
+        const QString cppOnPath =
+            QStandardPaths::findExecutable(QStringLiteral("g++"));
+        const QString cOnPath =
+            QStandardPaths::findExecutable(QStringLiteral("gcc"));
+        const QString cppCompiler =
             kit.has_value() && !kit->cppCompiler.isEmpty()
                 ? kit->cppCompiler
-                : (QStandardPaths::findExecutable(QStringLiteral("g++")).isEmpty()
-                       ? QStringLiteral("g++")
-                       : QStandardPaths::findExecutable(QStringLiteral("g++")));
-        QString cCompiler =
+                : (cppOnPath.isEmpty() ? QStringLiteral("g++") : cppOnPath);
+        const QString cCompiler =
             kit.has_value() && !kit->cCompiler.isEmpty()
                 ? kit->cCompiler
-                : (QStandardPaths::findExecutable(QStringLiteral("gcc")).isEmpty()
-                       ? QStringLiteral("gcc")
-                       : QStandardPaths::findExecutable(QStringLiteral("gcc")));
+                : (cOnPath.isEmpty() ? QStringLiteral("gcc") : cOnPath);
         compilerExe = isC ? cCompiler : cppCompiler;
-        toolDirs << QFileInfo(compilerExe).absolutePath();
+        // Only add a directory when the compiler was resolved to a path.
+        // QFileInfo("g++").absolutePath() is the current directory; adding
+        // that for an unresolved bare command silently changes PATH semantics.
+        if (QFileInfo(compilerExe).isAbsolute()
+            || compilerExe.contains(QLatin1Char('/'))
+            || compilerExe.contains(QLatin1Char('\\'))) {
+            toolDirs << QFileInfo(compilerExe).absolutePath();
+        }
 
         if (kit.has_value()) {
             // Compile flags and the C++ standard from the kit: the named
@@ -6385,9 +6391,11 @@ void MainWindow::onCompileCurrentFile()
     // Each toolchain needs its own bin directory on the child's PATH: the
     // MinGW compilers and the binaries they produce both need the UCRT64
     // runtime DLLs, and cl.exe needs its own alongside it.
-    env.insert(QStringLiteral("PATH"),
-               toolDirs.join(QDir::listSeparator()) + QDir::listSeparator()
-                   + env.value(QStringLiteral("PATH")));
+    if (!toolDirs.isEmpty()) {
+        env.insert(QStringLiteral("PATH"),
+                   toolDirs.join(QDir::listSeparator()) + QDir::listSeparator()
+                       + env.value(QStringLiteral("PATH")));
+    }
     compiler_->setProcessEnvironment(env);
     compiler_->setWorkingDirectory(QFileInfo(srcPath).absolutePath());
     // Compiler log lines may carry paths relative to this directory.
