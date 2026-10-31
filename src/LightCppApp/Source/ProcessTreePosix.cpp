@@ -62,7 +62,7 @@ std::vector<ProcessEntry> snapshotProcesses()
         const pid_t pid = pids[i];
         if (pid <= 0) continue;
         struct proc_bsdinfo info {};
-        if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info)) continue;
+        if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != static_cast<int>(sizeof(info))) continue;
         processes.push_back({static_cast<unsigned long>(info.pbi_pid), static_cast<unsigned long>(info.pbi_ppid), QString::fromLocal8Bit(info.pbi_name).toLower()});
     }
     return processes;

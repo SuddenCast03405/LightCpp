@@ -30,7 +30,7 @@ public:
     /// Load `libraryPath` (e.g. ...\libclang.dll) and resolve the C API entry
     /// points this completer uses. Returns false and logs the reason when the
     /// library cannot be loaded or is missing a required export. Once loaded,
-    /// the DLL stays resident for the process lifetime (see module_).
+    /// the DLL stays resident for the process lifetime (see library_).
     bool load(const QString& libraryPath);
     [[nodiscard]] bool isLoaded() const { return usable_; }
     [[nodiscard]] const QString& libraryPath() const { return libPath_; }
