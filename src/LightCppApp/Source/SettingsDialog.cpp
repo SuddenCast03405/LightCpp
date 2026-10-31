@@ -2526,7 +2526,7 @@ bool SettingsDialog::validateScope(Scope scope, QString* errorMessage) const
                 toolchain, QLatin1String(spec.key));
             if (!path.isEmpty() && !QDir::isAbsolutePath(path)) {
                 if (errorMessage != nullptr) {
-                    *errorMessage = tr("Toolchain \\"%1\\" has a relative path "
+                    *errorMessage = tr("Toolchain \"%1\" has a relative path "
                                        "for %2. Use an absolute path or a "
                                        "command found on PATH.")
                                         .arg(toolchainDisplayName(toolchain),
