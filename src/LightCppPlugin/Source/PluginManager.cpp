@@ -5,6 +5,8 @@
 
 #include <QDir>
 #include <QJsonObject>
+#include <QLibrary>
+#include <QFileInfo>
 #include <QPluginLoader>
 
 namespace LightCpp::Plugin {
@@ -28,9 +30,14 @@ QStringList PluginManager::loadSharedPlugins(
     services_ = services;
 
     const QDir dir(directory);
-    const QStringList files =
-        dir.entryList({QStringLiteral("*.dll")}, QDir::Files,
-                      QDir::Name | QDir::IgnoreCase);
+    QStringList files;
+    const QFileInfoList entries =
+        dir.entryInfoList(QDir::Files, QDir::Name | QDir::IgnoreCase);
+    for (const QFileInfo& entry : entries) {
+        if (QLibrary::isLibrary(entry.filePath())) {
+            files.append(entry.fileName());
+        }
+    }
     if (files.isEmpty()) {
         return errors_;
     }
