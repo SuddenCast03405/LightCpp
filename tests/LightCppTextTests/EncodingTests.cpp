@@ -136,7 +136,9 @@ TEST(LocalAnsi, ReturnsValidEncoding)
     // (GBK on zh-CN, Shift-JIS on ja-JP, EUC-KR on ko-KR, Windows-1252
     // on en-US). Sanity check that it is never Unknown or Binary.
     const TextEncoding e = LightCpp::Text::localAnsiEncoding();
-    EXPECT_TRUE(e == TextEncoding::Gbk
+    EXPECT_TRUE(e == TextEncoding::Utf8
+                || e == TextEncoding::Latin1
+                || e == TextEncoding::Gbk
                 || e == TextEncoding::Big5
                 || e == TextEncoding::ShiftJis
                 || e == TextEncoding::EucKr
@@ -413,6 +415,52 @@ TEST(EncodingConvert, InvalidGbkRejected)
 }
 
 #endif  // _WIN32
+
+#ifndef _WIN32
+TEST(EncodingConvert, PosixLegacyCodecsRoundTrip)
+{
+    struct Case {
+        TextEncoding encoding;
+        QByteArray bytes;
+        QString text;
+    };
+    const Case cases[] = {
+        {TextEncoding::Gbk, QByteArray::fromHex("C4E3BAC3A3ACCAC0BDE7A3A1"),
+         QString::fromUtf8("你好，世界！")},
+        {TextEncoding::Gb18030, QByteArray::fromHex("C4E3BAC3"),
+         QString::fromUtf8("你好")},
+        {TextEncoding::Big5, QByteArray::fromHex("B36FAC4FC163C5E9A4A4A4E5A143"),
+         QString::fromUtf8("這是繁體中文。")},
+        {TextEncoding::ShiftJis, QByteArray::fromHex("82B182F182C982BF82CD90A28A458142"),
+         QString::fromUtf8("こんにちは世界。")},
+        {TextEncoding::EucKr, QByteArray::fromHex("BEC8B3E7C7CFBCBCBFE420BCBCB0E82E"),
+         QString::fromUtf8("안녕하세요 세계.")},
+        {TextEncoding::Windows1252, QByteArray::fromHex("636166E9"),
+         QString::fromUtf8("café")},
+    };
+
+    for (const Case& item : cases) {
+        const auto decoded = LightCpp::Text::convertToUtf8(item.bytes,
+                                                            item.encoding);
+        ASSERT_TRUE(decoded.hasValue()) << LightCpp::Text::toName(item.encoding);
+        EXPECT_EQ(utf8(decoded.value()), item.text);
+        const auto encoded = LightCpp::Text::encodeFromQString(item.text,
+                                                                item.encoding);
+        ASSERT_TRUE(encoded.hasValue()) << LightCpp::Text::toName(item.encoding);
+        EXPECT_EQ(encoded.value(), item.bytes);
+    }
+}
+
+TEST(EncodingConvert, PosixLegacyCodecRejectsInvalidOrUnmappableText)
+{
+    EXPECT_FALSE(LightCpp::Text::convertToUtf8(
+        QByteArray::fromHex("81FF"), TextEncoding::Gbk).hasValue());
+    EXPECT_FALSE(LightCpp::Text::encodeFromQString(
+        QString::fromUtf8("😀"), TextEncoding::Gbk).hasValue());
+    EXPECT_FALSE(LightCpp::Text::encodeFromQString(
+        QString::fromUtf8("😀"), TextEncoding::Windows1252).hasValue());
+}
+#endif  // !_WIN32
 
 // --- conversion: Unicode families (cross-platform, Qt built-ins) ---------------
 
