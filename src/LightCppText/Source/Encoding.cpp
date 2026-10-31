@@ -224,7 +224,7 @@ TextEncoding localAnsiEncoding() noexcept
     codeset.remove('-');
     codeset.remove('_');
     codeset.remove('.');
-    if (codeset == "UTF8" || codeset == "ANSI X3.41968"
+    if (codeset == "UTF8" || codeset == "ANSIX341968"
         || codeset == "USASCII" || codeset == "ASCII") {
         return TextEncoding::Utf8;
     }
