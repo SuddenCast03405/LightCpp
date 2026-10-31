@@ -139,11 +139,6 @@ QString missingFormatterMessage()
         .arg(bin);
 }
 
-/// Where ConsolePauser.exe lives today on this machine — the last resort
-/// when neither the program's directory nor the IDE's own has a copy. When
-/// found here it is copied next to the program being run.
-constexpr char kConsolePauserFallback[] = "E:/Cpp/ConsolePauser.exe";
-
 /// How long the editor stays idle before the new text is pushed to the
 /// language server (ms). 300ms keeps up with fast typing without spamming
 /// clangd on every keystroke.
@@ -6032,9 +6027,14 @@ MainWindow::BuildTarget MainWindow::resolveBuildTarget(CodeEditor* editor) const
     }
     // The binary always sits next to its source, so Run looks exactly where
     // the last build wrote without having to remember anything.
+#ifdef Q_OS_WIN
+    const QString executableSuffix = QStringLiteral(".exe");
+#else
+    const QString executableSuffix;
+#endif
     target.exePath = QDir(QFileInfo(target.srcPath).absolutePath())
                          .filePath(QFileInfo(target.srcPath).completeBaseName()
-                                   + QStringLiteral(".exe"));
+                                   + executableSuffix);
     return target;
 }
 
@@ -6760,14 +6760,21 @@ bool MainWindow::startDetachedInNewConsole(const QString& program,
                                            const QString& workDir,
                                            const QProcessEnvironment& env)
 {
+    QProcess launcher;
+#ifdef Q_OS_WIN
     // `start ""` — the empty quoted token is the window title placeholder;
     // without it start would mistake a quoted program path for the title.
-    QProcess launcher;
     launcher.setProgram(QStringLiteral("cmd.exe"));
     QStringList cmdArgs{QStringLiteral("/c"), QStringLiteral("start"),
                         QString(), QDir::toNativeSeparators(program)};
     cmdArgs.append(args);
     launcher.setArguments(cmdArgs);
+#else
+    // POSIX has no cmd.exe or equivalent "new console" wrapper. Launch the
+    // selected terminal directly; terminal emulators create their own window.
+    launcher.setProgram(program);
+    launcher.setArguments(args);
+#endif
     launcher.setWorkingDirectory(workDir);
     launcher.setProcessEnvironment(env);
     return launcher.startDetached();
@@ -6777,6 +6784,13 @@ void MainWindow::startWithConsolePauser(const QString& exePath,
                                         const QString& workDir)
 {
     outputPanel_->showChannel(OutputPanel::ChannelProgram);
+#ifndef Q_OS_WIN
+    Q_UNUSED(exePath);
+    Q_UNUSED(workDir);
+    outputPanel_->appendProgramOutput(
+        tr("Console Pauser is only available on Windows. Select Program Output or a terminal instead."));
+    return;
+#else
     const QString pauser = resolveConsolePauser(exePath);
     if (pauser.isEmpty()) {
         outputPanel_->appendProgramOutput(
@@ -6814,6 +6828,7 @@ void MainWindow::startWithConsolePauser(const QString& exePath,
             .arg(QFileInfo(exePath).absoluteFilePath()));
     // Nothing is captured, so there is nothing to stop from the IDE.
     updateRunActionStates();
+#endif
 }
 
 QString MainWindow::resolveConsolePauser(const QString& exePath) const
@@ -6823,7 +6838,6 @@ QString MainWindow::resolveConsolePauser(const QString& exePath) const
     const QStringList candidates = {
         QDir(targetDir).filePath(name),
         QDir(QCoreApplication::applicationDirPath()).filePath(name),
-        QString::fromLatin1(kConsolePauserFallback),
     };
     QString found;
     for (const QString& candidate : candidates) {
@@ -7118,16 +7132,18 @@ QString MainWindow::resolveDebuggerPath() const
     // g++.exe).
     if (const auto kit = activeKit(); kit.has_value()
         && !kit->cppCompiler.isEmpty()) {
-        const QString candidate =
-            QFileInfo(kit->cppCompiler).absolutePath()
-            + QLatin1Char('/') + QStringLiteral("gdb.exe");
-        if (QFileInfo::exists(candidate)) {
-            return candidate;
+        const QString bin = QFileInfo(kit->cppCompiler).absolutePath();
+        for (const QString& name : {QStringLiteral("gdb"),
+                                    QStringLiteral("gdb.exe")}) {
+            const QString candidate = QDir(bin).filePath(name);
+            if (QFileInfo::exists(candidate)) {
+                return candidate;
+            }
         }
     }
+#ifdef Q_OS_WIN
     // 3) MSVC kits: the Windows SDK debuggers (cdb.exe), read from the same
-    // KitsRoot10 registry value the MSVC toolchain detection uses. cdb
-    // debugs anything VS2012 (toolset v11.0) or newer produces.
+    // KitsRoot10 registry value the MSVC toolchain detection uses.
     QSettings kitsRoot(
         QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Kits\\Installed Roots"),
         QSettings::NativeFormat);
@@ -7139,6 +7155,7 @@ QString MainWindow::resolveDebuggerPath() const
             return candidate;
         }
     }
+#endif
     return QString();
 }
 
