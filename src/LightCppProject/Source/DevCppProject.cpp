@@ -109,7 +109,7 @@ QStringList normalisedPaths(const QStringList& paths)
     QStringList out;
     out.reserve(paths.size());
     for (const QString& path : paths) {
-        out.append(QDir::fromNativeSeparators(path));
+        out.append(Paths::normalizeSeparators(path));
     }
     return out;
 }
@@ -125,7 +125,7 @@ QStringList linkerArguments(const QStringList& raw)
             out.append(item);
             continue;
         }
-        const QString native = QDir::fromNativeSeparators(item);
+        const QString native = Paths::normalizeSeparators(item);
         const QString suffix = QFileInfo(native).suffix().toLower();
         const bool looksLikeAFile = native.contains(u'/') || suffix == "a"
                                     || suffix == "lib" || suffix == "o"
@@ -227,7 +227,7 @@ QByteArray DevCppProject::iconResourceScript() const
     // windres wants a resource script, and Dev-C++ stores only the .ico path.
     // The numeric id is what the default Dev-C++ projects use.
     const QString script = QStringLiteral("1 ICON \"%1\"\n")
-                               .arg(QDir::fromNativeSeparators(iconPath));
+                               .arg(Paths::normalizeSeparators(iconPath));
     return script.toUtf8();
 }
 
@@ -361,7 +361,7 @@ QString withExtension(const QString& fileName, const QString& extension)
 /// GenMakePath1: forward slashes, quoted when it contains a space.
 QString makeQuotedPath(QString path)
 {
-    path = QDir::fromNativeSeparators(path);
+    path = Paths::normalizeSeparators(path);
     if (path.contains(u' ')) {
         return QChar(u'"') + path + QChar(u'"');
     }
@@ -371,7 +371,7 @@ QString makeQuotedPath(QString path)
 /// GenMakePath2: forward slashes, spaces escaped for use as a make target.
 QString makeEscapedPath(QString path)
 {
-    return QDir::fromNativeSeparators(path).replace(QChar(u' '),
+    return Paths::normalizeSeparators(path).replace(QChar(u' '),
                                                     QStringLiteral("\\ "));
 }
 
@@ -458,7 +458,7 @@ QString objectFileFor(const DevCppProject& project, const DevCppUnit& unit)
         const QString dir = info.path();
         return dir == QStringLiteral(".") ? name : dir + u'/' + name;
     }
-    return QDir::fromNativeSeparators(
+    return Paths::normalizeSeparators(
                pathRelativeTo(project.projectDir,
                               absoluteFrom(project.projectDir, project.objectOutput)))
         + u'/' + name;
@@ -532,19 +532,19 @@ DevCppMakefilePlan devCppMakefilePlan(const DevCppProject& project,
     // hand-edited makefile still runs wherever PATH provides the tools.
     const QString gxx = tools.gxx.isEmpty()
                             ? QStringLiteral("g++")
-                            : QDir::fromNativeSeparators(tools.gxx);
+                            : Paths::normalizeSeparators(tools.gxx);
     const QString gcc = tools.gcc.isEmpty()
                             ? (tools.gxx.isEmpty()
                                    ? QStringLiteral("gcc")
                                    : QFileInfo(gxx).dir().filePath(
                                          QStringLiteral("gcc.exe")))
-                            : QDir::fromNativeSeparators(tools.gcc);
+                            : Paths::normalizeSeparators(tools.gcc);
     const QString windres = tools.windres.isEmpty()
                                 ? (tools.gxx.isEmpty()
                                        ? QStringLiteral("windres.exe")
                                        : QFileInfo(gxx).dir().filePath(
                                              QStringLiteral("windres.exe")))
-                                : QDir::fromNativeSeparators(tools.windres);
+                                : Paths::normalizeSeparators(tools.windres);
 
     // --- objects ---------------------------------------------------------
     // The same list is needed in two forms, because make and the recipe shell
@@ -599,7 +599,7 @@ DevCppMakefilePlan devCppMakefilePlan(const DevCppProject& project,
             absoluteFrom(project.projectDir, project.privateResource));
         resObject = project.objectOutput.trimmed().isEmpty()
                         ? withExtension(resSource, QStringLiteral(".res"))
-                        : QDir::fromNativeSeparators(pathRelativeTo(
+                        : Paths::normalizeSeparators(pathRelativeTo(
                               project.projectDir,
                               absoluteFrom(project.projectDir,
                                            withExtension(
@@ -650,7 +650,7 @@ DevCppMakefilePlan devCppMakefilePlan(const DevCppProject& project,
     // A switch goes through as a switch, a file path by itself, and anything
     // else reads as a library name — the same rules gnuBuildArguments uses.
     for (QString entry : linkerArguments(project.linkerFlags)) {
-        entry = QDir::fromNativeSeparators(entry);
+        entry = Paths::normalizeSeparators(entry);
         if (entry.startsWith(u'-')) {
             libs << entry;
         } else {
@@ -688,7 +688,7 @@ DevCppMakefilePlan devCppMakefilePlan(const DevCppProject& project,
     if (project.type == kDevCppDynamicLibrary) {
         // A DLL also produces its import library and .def next to the output.
         const QString binDir = QFileInfo(project.outputPath()).absolutePath();
-        const QString libStem = QDir::fromNativeSeparators(pathRelativeTo(
+        const QString libStem = Paths::normalizeSeparators(pathRelativeTo(
             project.projectDir,
             QDir(binDir).filePath(QStringLiteral("lib")
                                   + QFileInfo(project.outputPath()).fileName())));
@@ -711,7 +711,7 @@ DevCppMakefilePlan devCppMakefilePlan(const DevCppProject& project,
         // is a file name with quote characters in it, and make would look for
         // `"my` and `file.mk"` (same reason as $(BIN_MK)).
         lines << QStringLiteral("include ")
-              + makeEscapedPath(QDir::fromNativeSeparators(include));
+              + makeEscapedPath(Paths::normalizeSeparators(include));
     }
     if (!project.makeIncludes.isEmpty()) {
         lines << QString();
