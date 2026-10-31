@@ -58,7 +58,16 @@ QString unescapeMi(const QString& value)
 /// forward slashes, lowercased drive letter matches whatever QFileInfo does.
 QString normalizePath(const QString& path)
 {
-    return QDir::fromNativeSeparators(path);
+    QString normalized = QDir::fromNativeSeparators(path);
+    // LLDB can report a Windows drive path even when a parser is exercised
+    // off-host (for example by a cross-platform test fixture). Normalize that
+    // spelling too, without changing legal backslashes in ordinary POSIX paths.
+    if (normalized.size() >= 3
+        && normalized.at(1) == QLatin1Char(':')
+        && normalized.at(2) == QLatin1Char('\\')) {
+        normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    }
+    return normalized;
 }
 
 /// Drops repeated file:line entries, keeping first-seen order. The plant batch
