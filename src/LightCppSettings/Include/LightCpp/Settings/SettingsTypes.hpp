@@ -206,10 +206,11 @@ struct RunTerminal {
     bool embedded = true; ///< true: captured in the Program Output channel
 };
 
-/// The two terminals every configuration starts with (deletable copies in
-/// the user's list; the function returns fresh values each call).
+/// Two host-native shells every configuration starts with (deletable
+/// copies in the user's list; the function returns fresh values each call).
 inline QList<RunTerminal> defaultRunTerminals()
 {
+#ifdef Q_OS_WIN
     return {
         {QStringLiteral("cmd"),
          QStringLiteral("Windows Command Prompt"),
@@ -220,6 +221,18 @@ inline QList<RunTerminal> defaultRunTerminals()
          QStringLiteral("powershell.exe -NoExit -Command"),
          true},
     };
+#else
+    return {
+        {QStringLiteral("sh"),
+         QStringLiteral("POSIX Shell"),
+         QStringLiteral("sh -i"),
+         true},
+        {QStringLiteral("bash"),
+         QStringLiteral("Bash"),
+         QStringLiteral("bash -i"),
+         true},
+    };
+#endif
 }
 
 struct Preferences {
