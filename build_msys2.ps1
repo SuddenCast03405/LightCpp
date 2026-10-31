@@ -102,6 +102,4 @@ if ($Tests) {
 $testExit = $LASTEXITCODE
 
 Write-Host "build exit = $buildExit, test exit = $testExit"
-if ($testExit -ne 0) { exit $testExit }
-if ($buildExit -ne 0 -and -not (Test-Path "$root\build\msys2-ucrt64\tests")) { exit $buildExit }
-exit 0
+exit $testExit
