@@ -324,7 +324,7 @@ TEST(DebuggerController, LLDBFrameParsesWindowsDriveLetterAndColumn)
 {
     QString file;
     int line = -1;
-    EXPECT_TRUE(parseLldbFrameLocation(
+    EXPECT_TRUE(LightCpp::App::parseLldbFrameLocation(
         QStringLiteral("frame #0: 0x1234 app\x60main at C:\\Work Space\\src\\main.cpp:12:4"),
         file, line));
     EXPECT_EQ(file, QStringLiteral("C:/Work Space/src/main.cpp"));
@@ -335,7 +335,7 @@ TEST(DebuggerController, LLDBFrameParsesPosixColonPathWithoutColumn)
 {
     QString file;
     int line = -1;
-    EXPECT_TRUE(parseLldbFrameLocation(
+    EXPECT_TRUE(LightCpp::App::parseLldbFrameLocation(
         QStringLiteral("frame #0: 0x1234 app\x60main at /tmp/work:folder/main.cpp:7"),
         file, line));
     EXPECT_EQ(file, QStringLiteral("/tmp/work:folder/main.cpp"));
@@ -346,8 +346,8 @@ TEST(DebuggerController, LLDBFrameRejectsMissingOrInvalidLine)
 {
     QString file;
     int line = -1;
-    EXPECT_FALSE(parseLldbFrameLocation(
+    EXPECT_FALSE(LightCpp::App::parseLldbFrameLocation(
         QStringLiteral("frame #0: 0x1234 app\x60main at main.cpp"), file, line));
-    EXPECT_FALSE(parseLldbFrameLocation(
+    EXPECT_FALSE(LightCpp::App::parseLldbFrameLocation(
         QStringLiteral("frame #0: 0x1234 app\x60main at main.cpp:0"), file, line));
 }
