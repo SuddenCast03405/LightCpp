@@ -416,7 +416,13 @@ EncodingDetection detectEncoding(QByteArrayView bytes)
     // to the local ANSI code page is both simpler and more reliable.
     // Users who need to override the choice can do so via the GUI's
     // encoding drop-down (which re-opens the file with the chosen codec).
-    result.encoding = localAnsiEncoding();
+    const TextEncoding localEncoding = localAnsiEncoding();
+    // On a UTF-8 POSIX locale there is no legacy "ANSI" code page to fall
+    // back to. Use lossless Latin-1 for otherwise-invalid byte streams so
+    // they remain openable and the user can explicitly select GBK/Big5/etc.;
+    // never label invalid bytes as UTF-8 and silently replace them with U+FFFD.
+    result.encoding = localEncoding == TextEncoding::Utf8
+        ? TextEncoding::Latin1 : localEncoding;
     result.score = 100;
     result.reliable = false;  // guessed, not verified
     result.invalidUtf8Sequences = utf8Errors;
