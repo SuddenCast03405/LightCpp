@@ -6,11 +6,14 @@
 #include <string_view>
 
 #include <QStringView>
+#include <QByteArray>
 
 #include "LightCpp/Core/Utf8.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <langinfo.h>
 #endif
 
 namespace LightCpp::Text {
@@ -217,7 +220,38 @@ TextEncoding localAnsiEncoding() noexcept
     default:    return TextEncoding::Windows1252;
     }
 #else
-    return TextEncoding::Windows1252;
+    QByteArray codeset = QByteArray(nl_langinfo(CODESET)).toUpper();
+    codeset.remove('-');
+    codeset.remove('_');
+    codeset.remove('.');
+    if (codeset == "UTF8" || codeset == "ANSI X3.41968"
+        || codeset == "USASCII" || codeset == "ASCII") {
+        return TextEncoding::Utf8;
+    }
+    if (codeset == "GBK" || codeset == "CP936" || codeset == "GB2312") {
+        return TextEncoding::Gbk;
+    }
+    if (codeset == "GB18030") {
+        return TextEncoding::Gb18030;
+    }
+    if (codeset == "BIG5" || codeset == "CP950") {
+        return TextEncoding::Big5;
+    }
+    if (codeset == "SHIFTJIS" || codeset == "SJIS" || codeset == "CP932") {
+        return TextEncoding::ShiftJis;
+    }
+    if (codeset == "EUCKR" || codeset == "CP949") {
+        return TextEncoding::EucKr;
+    }
+    if (codeset == "WINDOWS1252" || codeset == "CP1252") {
+        return TextEncoding::Windows1252;
+    }
+    if (codeset == "ISO88591" || codeset == "LATIN1") {
+        return TextEncoding::Latin1;
+    }
+    // UTF-8 is the normal POSIX locale and the safest default when the
+    // locale name is unknown; do not pretend every Unix host uses CP1252.
+    return TextEncoding::Utf8;
 #endif
 }
 
