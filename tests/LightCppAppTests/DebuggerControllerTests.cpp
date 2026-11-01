@@ -120,16 +120,21 @@ struct FakeGdb {
     QTemporaryDir dir;
     QString debuggerPath;
     QString targetPath;
+    QString commandLogPath;
     bool ready = false;
 
     FakeGdb()
     {
         debuggerPath = dir.filePath(QStringLiteral("gdb"));
         targetPath = dir.filePath(QStringLiteral("program"));
+        commandLogPath = dir.filePath(QStringLiteral("commands.log"));
         const QByteArray script =
             "#!/bin/sh\n"
             "while IFS= read -r command; do\n"
+            "  printf '%s\\n' \"$command\" >> '" + commandLogPath.toUtf8() + "'\n"
             "  case \"$command\" in\n"
+            "    *-break-insert*) token=${command%%-*}; case \"$command\" in *reject*) printf '%s^error,msg=\"rejected\"\\n' \"$token\" ;; *) printf '%s^done\\n' \"$token\" ;; esac ;;\n"
+            "    *-interpreter-exec*) token=${command%%-*}; printf '%s^error,msg=\"rejected\"\\n' \"$token\" ;;\n"
             "    -exec-run) printf '%s\\n' '*stopped,reason=\"breakpoint-hit\",frame={file=\"main.cpp\",line=\"3\"}' ;;\n"
             "    -exec-continue) printf '%s\\n' 'continue-command' '*running,thread-id=\"all\"' '*running,thread-id=\"all\"' ;;\n"
             "    -exec-next) printf '%s\\n' '*stopped,reason=\"exited-signalled\",signal-name=\"SIGTERM\"' ;;\n"
@@ -307,6 +312,75 @@ TEST(DebuggerController, GdbRunningRecordsEmitOneResumedNotification)
     EXPECT_EQ(continueCommandCount, 1);
     controller.stop();
 }
+TEST(DebuggerController, GdbRejectedBreakpointInsertCanBeRetried)
+{
+    FakeGdb fake;
+    ASSERT_TRUE(fake.ready);
+
+    DebuggerController controller;
+    controller.setDebuggerPath(fake.debuggerPath);
+    QStringList logs;
+    QObject::connect(&controller, &DebuggerController::logLine,
+                     [&](const QString& line) { logs.append(line); });
+    ASSERT_TRUE(controller.start(fake.targetPath, fake.dir.path(), {}));
+
+    const DebugBreakpoint rejected{
+        fake.dir.filePath(QStringLiteral("reject.cpp")), 4};
+    controller.addBreakpoint(rejected);
+    QElapsedTimer timer;
+    timer.start();
+    while (logs.count(QStringLiteral("debugger breakpoint command failed: 1^error,msg=\"rejected\"")) == 0
+           && timer.elapsed() < 2000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    ASSERT_EQ(logs.count(QStringLiteral("debugger breakpoint command failed: 1^error,msg=\"rejected\"")), 1);
+
+    // A failed insertion must not be remembered as armed; the same request
+    // can be retried and reaches GDB with a fresh MI token.
+    controller.addBreakpoint(rejected);
+    timer.restart();
+    while (logs.count(QStringLiteral("debugger breakpoint command failed: 2^error,msg=\"rejected\"")) == 0
+           && timer.elapsed() < 2000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    EXPECT_EQ(logs.count(QStringLiteral("debugger breakpoint command failed: 2^error,msg=\"rejected\"")), 1);
+    controller.stop();
+}
+
+TEST(DebuggerController, GdbRejectedBreakpointRemovalKeepsItArmedForRetry)
+{
+    FakeGdb fake;
+    ASSERT_TRUE(fake.ready);
+
+    DebuggerController controller;
+    controller.setDebuggerPath(fake.debuggerPath);
+    QStringList logs;
+    QObject::connect(&controller, &DebuggerController::logLine,
+                     [&](const QString& line) { logs.append(line); });
+    const DebugBreakpoint existing{QStringLiteral("/proj/src/main.cpp"), 2};
+    ASSERT_TRUE(controller.start(fake.targetPath, fake.dir.path(), {existing}));
+
+    controller.removeBreakpoint(existing);
+    QElapsedTimer timer;
+    timer.start();
+    while (logs.count(QStringLiteral("debugger breakpoint command failed: 1^error,msg=\"rejected\"")) == 0
+           && timer.elapsed() < 2000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    ASSERT_EQ(logs.count(QStringLiteral("debugger breakpoint command failed: 1^error,msg=\"rejected\"")), 1);
+
+    // The first clear failed. Keeping the breakpoint in armed_ means a
+    // second removal is sent instead of silently becoming a no-op.
+    controller.removeBreakpoint(existing);
+    timer.restart();
+    while (logs.count(QStringLiteral("debugger breakpoint command failed: 2^error,msg=\"rejected\"")) == 0
+           && timer.elapsed() < 2000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    EXPECT_EQ(logs.count(QStringLiteral("debugger breakpoint command failed: 2^error,msg=\"rejected\"")), 1);
+    controller.stop();
+}
+
 TEST(DebuggerController, GdbSignalExitIsNotReportedAsASourcePause)
 {
     FakeGdb fake;

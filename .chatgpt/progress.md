@@ -172,4 +172,4 @@
 - Dynamic GDB breakpoint insert/remove commands now carry MI tokens and are tracked until their matching `^done` or `^error` response arrives.
 - The controller commits additions/removals to `armed_` only on `^done`. A rejected command logs a breakpoint-specific failure and preserves the prior state, allowing a retry. Duplicate pending insertions are suppressed.
 - LLDB and cdb retain their existing console-command behavior; this acknowledgement change is specific to the MI protocol.
-- CI validation is pending. The daily workflow remains MSYS2 UCRT64 only; the full compiler/platform matrix remains manual.
+- Added fake-GDB regressions for rejected insert and remove commands, verifying the same operation can be retried with a new token. CI validation is pending. The daily workflow remains MSYS2 UCRT64 only; the full compiler/platform matrix remains manual.
