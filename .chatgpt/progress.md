@@ -90,3 +90,11 @@
 - Found and corrected a stale contradictory comment in `BuildConfiguration.hpp`: the implementation and tests intentionally retain MSVC `/Zi` debug information for cdb; the header previously claimed that Debug emits no debug database.
 - Added a reusable `msvc2022` configure/build/test preset and documented the Visual Studio 2022, matching Qt MSVC kit, LLVM headers and command sequence in README. Updated CI to exercise those presets rather than duplicating generator commands.
 - Linux passed all 608/608 CTest cases on commit `059dbfd6`, including the fake-GDB command-count regression fix. MSVC still requires a new build after the `_wfopen_s` correction; macOS GB18030 and the current run's MinGW/macOS results remain pending.
+
+
+## MSVC macro compatibility pass (2026-11-01)
+
+- CI run `41279103484` confirmed the prior `_wfopen_s` change compiles past `LightCppCore`. The next MSVC failure is `Converter.cpp` at lines 72 and 440: Windows SDK's default `max` macro expands inside `std::numeric_limits<T>::max()` (and also threatens Qt `qMax`), causing C4003/C2589 and then C2220 under /WX.
+- Fixed this at the shared first-party CMake warning target: all Windows first-party targets now receive `NOMINMAX`, independent of MSVC vs MinGW. This is preferable to local #undef workarounds because the Windows SDK macro pollution is a project-wide compile-environment issue.
+- Existing `ProcessTreeWindows.cpp` already guarded its own `windows.h` include with `NOMINMAX`; the compile definition makes this consistent for every other Windows SDK include as well.
+- Linux and MSYS2 jobs passed on `ec65d0a8`; macOS CTest still failed (known GB18030 portability issue). The new common Windows definition is pending native MSVC/MinGW CI verification.

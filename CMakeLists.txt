@@ -17,6 +17,15 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(LightCppWarnings INTERFACE)
 add_library(LightCpp::Warnings ALIAS LightCppWarnings)
 
+if(WIN32)
+    # windows.h defines min/max macros unless explicitly disabled. Those
+    # macros break std::numeric_limits<T>::max(), Qt's qMin/qMax and other
+    # standard-library calls throughout the project. Make the Windows SDK
+    # contract consistent for every first-party target, regardless of whether
+    # the compiler is MSVC or MinGW.
+    target_compile_definitions(LightCppWarnings INTERFACE NOMINMAX)
+endif()
+
 if(MSVC)
     target_compile_options(LightCppWarnings INTERFACE /W4 /WX /permissive- /utf-8)
 else()
