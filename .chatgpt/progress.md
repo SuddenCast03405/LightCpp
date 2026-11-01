@@ -105,3 +105,10 @@
 - Reproduced the reported failure in the native MSVC 19.44.35207 CI job: compilation reaches `DevCppProject.cpp` and the compiler raises C1001 at the closing namespace line (1156), confirming this is not a source diagnostic at that line. The local report uses the same MSVC toolset patch version.
 - Reduced the compiler stress in `parseDevProject`: extracted numbered-unit collection into small named helper functions, removed the nested `consider`/warning lambdas and the local aggregate-heavy map logic from the already large parser function. The helper keeps the existing INI unit ordering, duplicate detection, unit settings, and warning behavior.
 - Pending native MSVC 19.44 CI verification. Linux/MSYS2/macOS regression suites will also run on the same commit; no claim of resolution until MSVC completes the build.
+
+
+## MSVC test and macOS codec follow-up (2026-11-01)
+
+- CI on commit `49411a27` confirmed `DevCppProject.cpp` now compiles under MSVC 19.44; the reported C1001 no longer reproduces. The remaining MSVC build errors are separate test-source C7744 diagnostics: `\\x9879\\x76EE` was incorrectly used for Unicode code points, so the literals now use the correct universal-character escapes `\\u9879\\u76EE`.
+- MSVC also reported C4702 in the vendored LuaBridge3 header under the project's `/W4 /WX` policy. Marked the third-party LuaBridge include directory as SYSTEM so upstream-header warnings do not fail project builds; project-owned warnings remain errors.
+- macOS native compilation succeeds and 608/609 tests pass. Apple's iconv GB18030 euro-sign mapping cannot round-trip exactly, and the converter correctly rejects it to prevent silent data loss. The euro sample is now conditionally checked when the platform can encode and decode it exactly; the portable Chinese sample remains mandatory.

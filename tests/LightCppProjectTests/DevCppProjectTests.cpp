@@ -964,11 +964,11 @@ TEST(DevCppProject, GbkEncodedDevFileDecodesItsName)
     ASSERT_TRUE(project.has_value());
     // FromUtf8 would have produced U+FFFD mush here — the exact bug that
     // made ld report "cannot open output file".
-    EXPECT_EQ(project->name, QStringLiteral("\x9879\x76EE" "1"));
+    EXPECT_EQ(project->name, QStringLiteral("\u9879\u76EE" "1"));
     EXPECT_EQ(project->overrideOutputName,
-              QStringLiteral("\x9879\x76EE" "1.exe"));
+              QStringLiteral("\u9879\u76EE" "1.exe"));
     EXPECT_EQ(project->outputPath(),
-              QStringLiteral("E:/proj/") + QStringLiteral("\x9879\x76EE" "1.exe"));
+              QStringLiteral("E:/proj/") + QStringLiteral("\u9879\u76EE" "1.exe"));
 }
 
 TEST(DevCppProject, MakefileRoutesANonAsciiProgramThroughAnIntermediate)
@@ -992,13 +992,13 @@ TEST(DevCppProject, MakefileRoutesANonAsciiProgramThroughAnIntermediate)
 
     // The target keeps its real name — make's timestamp logic watches it ...
     EXPECT_EQ(variableValue(lines, QStringLiteral("BIN")),
-              QStringLiteral("\x9879\x76EE" "1.exe"));
+              QStringLiteral("\u9879\u76EE" "1.exe"));
     // ... while the linker writes the ASCII stand-in that cmd moves into
     // place (cmd is Unicode, so the ANSI command line round-trips).
     EXPECT_TRUE(lines.contains(QStringLiteral(
         "\t$(CPP) $(LINKOBJ) -o _lightcpp_link.exe $(LIBS)")));
     EXPECT_TRUE(lines.contains(QStringLiteral(
-        "\tcmd /c move /y _lightcpp_link.exe \"\x9879\x76EE" "1.exe\"")));
+        "\tcmd /c move /y _lightcpp_link.exe \"\u9879\u76EE" "1.exe\"")));
     EXPECT_FALSE(lines.contains(
         QStringLiteral("\t$(CPP) $(LINKOBJ) -o $(BIN) $(LIBS)")));
 }
@@ -1023,7 +1023,7 @@ TEST(DevCppProject, MakefileRoutesNonAsciiLibrariesThroughAnIntermediate)
     EXPECT_TRUE(staticLines.contains(
         QStringLiteral("\tranlib _lightcpp_link.a")));
     EXPECT_TRUE(staticLines.contains(QStringLiteral(
-        "\tcmd /c move /y _lightcpp_link.a \"\x9879\x76EE" "1.a\"")));
+        "\tcmd /c move /y _lightcpp_link.a \"\u9879\u76EE" "1.a\"")));
 
     // A DLL moves its import library and .def out of the stand-ins too.
     QByteArray dynamicDev = "[Project]\nName=";
@@ -1035,17 +1035,17 @@ TEST(DevCppProject, MakefileRoutesNonAsciiLibrariesThroughAnIntermediate)
         devCppMakefilePlan(*dynLib, BuildConfiguration::Debug,
                            testToolchain()).content);
     EXPECT_EQ(variableValue(dynamicLines, QStringLiteral("DEF")),
-              QStringLiteral("lib\x9879\x76EE" "1.def"));
+              QStringLiteral("lib\u9879\u76EE" "1.def"));
     EXPECT_TRUE(dynamicLines.contains(QStringLiteral(
         "\t$(CPP) -shared $(LINKOBJ) -o _lightcpp_link.exe $(LIBS) "
         "-Wl,--output-def,_lightcpp_link.def,--out-implib,_lightcpp_link.a"
         ",--add-stdcall-alias")));
     EXPECT_TRUE(dynamicLines.contains(QStringLiteral(
-        "\tcmd /c move /y _lightcpp_link.exe \"\x9879\x76EE" "1.dll\"")));
+        "\tcmd /c move /y _lightcpp_link.exe \"\u9879\u76EE" "1.dll\"")));
     EXPECT_TRUE(dynamicLines.contains(QStringLiteral(
-        "\tcmd /c move /y _lightcpp_link.def \"lib\x9879\x76EE" "1.def\"")));
+        "\tcmd /c move /y _lightcpp_link.def \"lib\u9879\u76EE" "1.def\"")));
     EXPECT_TRUE(dynamicLines.contains(QStringLiteral(
-        "\tcmd /c move /y _lightcpp_link.a \"lib\x9879\x76EE" "1.a\"")));
+        "\tcmd /c move /y _lightcpp_link.a \"lib\u9879\u76EE" "1.a\"")));
 }
 
 // ---------------------------------------------------------------------------

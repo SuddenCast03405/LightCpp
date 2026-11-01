@@ -436,7 +436,7 @@ TEST(MsvcProject, GbkEncodedVcprojDecodesItsName)
     const auto project = parseMsvcProject(kVcprojPath, content);
     ASSERT_TRUE(project.has_value()) << lastError.toStdString();
     // FromUtf8 would have produced U+FFFD mush here.
-    EXPECT_EQ(project->name, QStringLiteral("\x9879\x76EE" "1"));
+    EXPECT_EQ(project->name, QStringLiteral("\u9879\u76EE" "1"));
 }
 
 // --- ExcludedFromBuild / conditioned groups / duplicates ----------------
