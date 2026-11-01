@@ -396,11 +396,11 @@ void DebuggerController::cont()
 void DebuggerController::stepOver()
 {
     if (isRunning() && paused_ && !executionCommandPending_) {
-        if (backend_ == Backend::Gdb) {
+        if (sessionBackend_ == Backend::Gdb) {
             executionCommandPending_ = true;
         }
         writeCommand(stepOverCommand());
-        if (backend_ != Backend::Gdb) {
+        if (sessionBackend_ != Backend::Gdb) {
             paused_ = false;
             emit resumed();
         }
@@ -410,11 +410,11 @@ void DebuggerController::stepOver()
 void DebuggerController::stepInto()
 {
     if (isRunning() && paused_ && !executionCommandPending_) {
-        if (backend_ == Backend::Gdb) {
+        if (sessionBackend_ == Backend::Gdb) {
             executionCommandPending_ = true;
         }
         writeCommand(stepIntoCommand());
-        if (backend_ != Backend::Gdb) {
+        if (sessionBackend_ != Backend::Gdb) {
             paused_ = false;
             emit resumed();
         }
@@ -424,11 +424,11 @@ void DebuggerController::stepInto()
 void DebuggerController::stepOut()
 {
     if (isRunning() && paused_ && !executionCommandPending_) {
-        if (backend_ == Backend::Gdb) {
+        if (sessionBackend_ == Backend::Gdb) {
             executionCommandPending_ = true;
         }
         writeCommand(stepOutCommand());
-        if (backend_ != Backend::Gdb) {
+        if (sessionBackend_ != Backend::Gdb) {
             paused_ = false;
             emit resumed();
         }
