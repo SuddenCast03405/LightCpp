@@ -32,3 +32,19 @@
 ## Work log
 
 - 2026-11-01: Located repository and branch; inventoried tracked files; reviewed README, root CMake/presets, CI, historical audit, and selected path/toolchain/project/debugger sources.
+
+## Findings and changes (2026-11-01)
+
+- CI baseline `2a77ac7`: Linux/macOS could not compile `PluginManagerTests.cpp` because `TrackedPlugin` was under `Q_OS_WIN` but used by cross-platform tests; Windows CTest failed because the process-tree fixture did not model the persistent `cmd /k` terminal shell.
+- Fixed test portability: moved `TrackedPlugin` outside the Windows-only guard, kept only the actual Dev-C++ fixture helpers under `Q_OS_WIN`; changed the Windows process-tree fixture from `cmd /c` to `cmd /k`. On CI commit `f6b8cbf`, Windows build and CTest completed successfully; Linux exposed the additional unused-fixture warning, fixed in `bb432b6`.
+- GitClient logic fix: each queued job captures its working directory; stale status results and stale status timeout/failure reports are discarded after a project switch. A failed `git status` launch now emits a dedicated `statusFailed` signal (not `commandFinished`, preventing the MainWindow's ordinary-command refresh callback from retrying the failed status forever). `FailedToStart` advances the queue on the next event-loop turn because Windows may emit it synchronously inside `QProcess::start()`.
+- Added GitClient tests for one-shot status launch failure and queue recovery after `FailedToStart`.
+- Absolute-path scan covered 36 selected first-party source/build files (including root CMake, presets, CI, scripts, project parsers, settings/toolchain, debugger, Git and process-tree modules). No machine-specific absolute path literals were found in runtime/build logic; matches were explanatory comments/examples only. This remains a selected-file scan, not yet a complete audit of all tracked first-party files.
+- Latest validation state: GitHub Actions run for `bb432b6` is queued/in progress; no final Linux/macOS result is available yet. No local build was run.
+
+## Remaining review targets
+
+- Complete the absolute-path scan across remaining first-party source, tests, and configuration files.
+- Review Windows/UNC/POSIX path semantics and add direct regression tests for the shared project-path helpers.
+- Revisit remaining historical architecture risks against current HEAD: debugger MI command/response state, LSP compilation-database discovery, synchronous file opening, and the Git CLI integration boundary. Verify each before changing it.
+- Confirm all three CI platforms pass after the latest fixes, then record final counts and any platform-specific skips.
