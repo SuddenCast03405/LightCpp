@@ -60,3 +60,8 @@
 
 - Review commit `80e1b2a`: Linux build + CTest passed; Windows MSYS2 build + CTest passed; macOS build passed but 2 GB18030 CTest cases failed as detailed above.
 - The bounded-read, non-regular-file and UNC changes in this commit are not yet validated by CI.
+## GB18030 portability correction
+
+- macOS exposed a platform iconv mapping ambiguity: a byte sequence could decode to Unicode text and then re-encode to different bytes. POSIX legacy codec conversions now verify the exact reverse conversion: decode rejects non-canonical byte spellings; encode rejects output that does not decode back to the exact input text. This prevents silent byte/text loss while allowing platform converters to report a non-reversible count when the actual round trip is exact.
+- Updated the GB18030 regression to accept explicit refusal of a byte sequence that the platform cannot round-trip exactly, rather than requiring the platform codec to invent a reversible mapping. Added UTF-8 input bytes to encoding failure diagnostics.
+- CI for the current branch is running after these changes; macOS GB18030 parity is not yet confirmed.

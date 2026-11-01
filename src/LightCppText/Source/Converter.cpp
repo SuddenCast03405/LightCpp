@@ -158,9 +158,9 @@ std::optional<QByteArray> iconvConvert(
             &outputPointer, &outputRemaining);
         used = capacity - outputRemaining;
         if (converted != static_cast<std::size_t>(-1)) {
-            if (converted != 0) {
-                return std::nullopt;  // non-reversible conversion
-            }
+            // iconv's non-reversible count is not enough to decide whether a
+            // particular conversion is lossy. Callers verify the exact reverse
+            // conversion (bytes for decode, UTF-8 text for encode).
             continue;
         }
         if (errno != E2BIG || !grow()) {
@@ -177,9 +177,6 @@ std::optional<QByteArray> iconvConvert(
             converter, nullptr, nullptr, &outputPointer, &outputRemaining);
         used = capacity - outputRemaining;
         if (converted != static_cast<std::size_t>(-1)) {
-            if (converted != 0) {
-                return std::nullopt;
-            }
             break;
         }
         if (errno != E2BIG || !grow()) {
@@ -312,9 +309,18 @@ std::optional<QString> decodeToQString(
             return std::nullopt;
         }
         const auto utf8 = iconvConvert(bytes, "UTF-8", codec);
-        return utf8.has_value()
-            ? std::optional<QString>(QString::fromUtf8(*utf8))
-            : std::nullopt;
+        if (!utf8.has_value()) {
+            return std::nullopt;
+        }
+        // Some platform iconv implementations accept multiple byte spellings
+        // for the same Unicode text. Reject a non-canonical spelling rather
+        // than let a load/save cycle silently rewrite the source bytes.
+        const auto canonicalBytes =
+            iconvConvert(QByteArrayView(*utf8), codec, "UTF-8");
+        if (!canonicalBytes.has_value() || *canonicalBytes != bytes) {
+            return std::nullopt;
+        }
+        return QString::fromUtf8(*utf8);
 #endif
     }
 
@@ -490,6 +496,11 @@ ConvertResult encodeFromQString(const QString& text, TextEncoding encoding, bool
         const QByteArray utf8 = text.toUtf8();
         const auto converted = iconvConvert(QByteArrayView(utf8), codec, "UTF-8");
         if (!converted.has_value()) {
+            return ConvertResult::failure(ConvertError::InvalidInput);
+        }
+        const auto roundTrip =
+            iconvConvert(QByteArrayView(*converted), "UTF-8", codec);
+        if (!roundTrip.has_value() || *roundTrip != utf8) {
             return ConvertResult::failure(ConvertError::InvalidInput);
         }
         out = *converted;
