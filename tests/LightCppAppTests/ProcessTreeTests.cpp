@@ -102,9 +102,12 @@ unsigned long startShellWithProgram()
 {
     qint64 pid = 0;
 #ifdef Q_OS_WIN
+    // Launch the workload independently instead of as cmd's foreground
+    // command. This test needs a child that survives shell termination.
     const bool started = QProcess::startDetached(
         QStringLiteral("cmd.exe"),
-        {QStringLiteral("/k"), QStringLiteral("%SystemRoot%\\System32\\ping.exe -n 30 127.0.0.1 >nul")},
+        {QStringLiteral("/k"),
+         QStringLiteral("start "" /b "%SystemRoot%\System32\ping.exe" -n 30 127.0.0.1 >nul")},
         QDir::tempPath(), &pid);
 #else
     const bool started = QProcess::startDetached(

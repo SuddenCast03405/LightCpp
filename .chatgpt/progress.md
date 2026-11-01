@@ -188,3 +188,10 @@
 - The post-fix MSYS2 UCRT64 build completed successfully, but CTest reported 652/653 passing. The sole failure, `ProjectPlugins.QtProUsesPerConfigurationShadowBuilds`, came from an incorrect test assumption: it required all qmake and make executables to be absent when build steps were unavailable. The CI image has a make tool but no qmake, which is a valid reason for the backend to decline the build.
 - Corrected the assertion to check the actual contract: unavailable build steps are expected when either qmake or make is missing. This keeps the test meaningful on partially provisioned toolchains instead of requiring both tool families to be wholly absent.
 - A new MSYS2 UCRT64 build/CTest run is required to verify this correction. Full platform validation remains manual by workflow policy.
+
+
+## Windows process-tree integration test launcher (2026-11-01)
+
+- The latest MSYS2 UCRT64 build succeeded, but CTest reported 652/653 passing. The remaining failure was ProcessTreeOnRealProcesses.TerminatingTheShellLeavesItsProgramRunning: the test launched ping.exe as the shell's foreground command, then killed the shell. That setup did not reliably model a child process independently surviving its shell/console, so the test could observe the child disappearing with the foreground command.
+- Changed the Windows fixture to have the persistent cmd.exe launch ping.exe via the start command, making the intended independent child-process scenario explicit. The assertions still require the child to remain observable after shell termination and still verify cleanup; no test was removed or skipped.
+- This is a test-fixture correction, not proof of the production process-tree behavior. A fresh Windows build/CTest run must validate it before claiming the regression is resolved.
