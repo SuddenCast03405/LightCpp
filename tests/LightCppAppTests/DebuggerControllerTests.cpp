@@ -384,7 +384,8 @@ TEST(DebuggerController, AGdbRemovalTakesTheOneLocationAndNothingElse)
     // clear-everything command.
     const QStringList commands = LightCpp::App::removeBreakpointCommands(
         Backend::Gdb, kMiddle, {kFirst, kLast});
-    EXPECT_EQ(text(commands), std::string("clear /proj/src/main.cpp:8"));
+    EXPECT_EQ(text(commands),
+              std::string("-interpreter-exec console \"clear /proj/src/main.cpp:8\""));
     EXPECT_FALSE(commands.join(QLatin1Char('|')).contains(QLatin1String("bc")));
     EXPECT_FALSE(commands.join(QLatin1Char('|')).contains(QLatin1String("delete")));
 }
