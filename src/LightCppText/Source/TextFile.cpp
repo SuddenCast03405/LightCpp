@@ -2,6 +2,8 @@
 
 #include "LightCpp/Text/TextFile.hpp"
 
+#include <limits>
+
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
