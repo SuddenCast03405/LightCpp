@@ -143,3 +143,9 @@
 - Session start/finish/abort/stop now clear partial output, pending command and cdb breakpoint-frame state so an incomplete line or stack-frame request cannot leak into a later session.
 - Extended the fake-GDB signal-exit regression to change the selected debugger to cdb while GDB is paused, then verify the live GDB session still handles the step and exit correctly.
 - CI validation pending.
+
+## GDB breakpoint-removal protocol correction (2026-11-01)
+
+- Logic review found a protocol mismatch: the GDB backend runs with `--interpreter=mi2` and inserts breakpoints with MI commands, but removal sent the bare CLI command `clear file:line`. In MI mode that command is not a valid MI operation; the controller nevertheless removed the entry from `armed_`, leaving the UI/controller state inconsistent with the debugger.
+- GDB removal now routes the CLI operation through `-interpreter-exec console`, with MI-string escaping for backslashes and quotes. The backend command test now asserts the exact MI-wrapped command.
+- The change is committed, but no local build/test or fresh CI result is available yet. This corrects the protocol mismatch; command-result correlation and rollback of `armed_` after an asynchronous debugger rejection remain broader follow-up work.
