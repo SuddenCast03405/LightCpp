@@ -104,7 +104,7 @@ unsigned long startShellWithProgram()
 #ifdef Q_OS_WIN
     const bool started = QProcess::startDetached(
         QStringLiteral("cmd.exe"),
-        {QStringLiteral("/c"), QStringLiteral("%SystemRoot%\\System32\\ping.exe -n 30 127.0.0.1 >nul")},
+        {QStringLiteral("/k"), QStringLiteral("%SystemRoot%\\System32\\ping.exe -n 30 127.0.0.1 >nul")},
         QDir::tempPath(), &pid);
 #else
     const bool started = QProcess::startDetached(
