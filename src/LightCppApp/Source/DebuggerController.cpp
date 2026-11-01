@@ -662,8 +662,11 @@ void DebuggerController::handleGdbLine(const QString& line)
     if (line.startsWith(QLatin1String("*stopped"))) {
         // The program ending normally also arrives as *stopped — but there
         // is no frame to jump to and "paused" would be the wrong state.
-        if (line.contains(QLatin1String("reason=\"exited-normally\""))
-            || line.contains(QLatin1String("reason=\"exited\""))) {
+        // MI distinguishes normal exit, signal termination and other
+        // terminal reasons (for example exited-signalled). None of these is
+        // a source pause, and a pending continue/step must be released too.
+        if (line.contains(QLatin1String("reason=\"exited"))) {
+            executionCommandPending_ = false;
             paused_ = false;
             emit logLine(tr("target exited"));
             return;
