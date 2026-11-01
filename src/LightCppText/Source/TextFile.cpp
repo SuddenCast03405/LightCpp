@@ -245,7 +245,7 @@ TextFileResult readTextFileWithEncoding(
     if (!info.exists()) {
         return TextFileResult::failure(TextFileError::NotFound);
     }
-    if (info.isDir()) {
+    if (!info.isFile()) {
         return TextFileResult::failure(TextFileError::NotARegularFile);
     }
     if (options.maxBytes > 0 && info.size() > options.maxBytes) {

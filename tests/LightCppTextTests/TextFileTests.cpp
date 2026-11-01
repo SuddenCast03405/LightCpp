@@ -570,10 +570,12 @@ void expectRoundTrip(const QString& text, TextEncoding encoding)
     const ConvertResult encoded = encodeFromQString(text, encoding);
     ASSERT_TRUE(encoded.hasValue())
         << "encode failed for " << LightCpp::Text::toName(encoding)
+        << " (UTF-8 input " << text.toUtf8().toHex().toStdString() << ")"
         << ": " << LightCpp::Text::toString(encoded.error());
     const ConvertResult decoded = convertToUtf8(encoded.value(), encoding);
     ASSERT_TRUE(decoded.hasValue())
         << "decode failed for " << LightCpp::Text::toName(encoding)
+        << " (encoded bytes " << encoded.value().toHex().toStdString() << ")"
         << ": " << LightCpp::Text::toString(decoded.error());
     EXPECT_EQ(QString::fromUtf8(decoded.value()), text)
         << "round trip changed the text for "

@@ -107,10 +107,10 @@ const char* iconvName(TextEncoding encoding) noexcept
     }
 }
 
-/// Strict conversion through iconv. No //TRANSLIT suffix is used: a
-/// character that cannot be represented must fail instead of being replaced
-/// with a best-fit character or '?'. The output buffer grows only when the
-/// converter asks for more space.
+/// Conversion helper through iconv. No //TRANSLIT suffix is used. The
+/// callers validate the exact reverse conversion so non-reversible counts
+/// cannot hide substitutions or non-canonical byte spellings. The output
+/// buffer grows only when the converter asks for more space.
 std::optional<QByteArray> iconvConvert(
     QByteArrayView input, const char* targetEncoding, const char* sourceEncoding)
 {
@@ -134,7 +134,7 @@ std::optional<QByteArray> iconvConvert(
     }
     QByteArray output(static_cast<qsizetype>(capacity), Qt::Uninitialized);
     std::size_t used = 0;
-// iconv advances the pointer but does not modify the input bytes. Its
+    // iconv advances the pointer but does not modify the input bytes. Its
     // POSIX signature uses char** (including Apple's libc), so only the cursor
     // is mutable; the QByteArray storage remains read-only to this function.
     char* inputPointer = const_cast<char*>(input.constData());

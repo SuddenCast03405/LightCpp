@@ -68,9 +68,10 @@ Design notes:
   compile time and be unit-tested without touching the filesystem.
 - The core logic library is Qt-free; the text, project and settings layers
   use Qt Core where file, path and JSON APIs are needed, without depending on
-  Qt Widgets. Their file-read APIs are safe to call from background threads.
-  The current MainWindow open/reload paths still perform synchronous reads;
-  moving large-file opens off the UI thread remains follow-up work.
+  Qt Widgets. TextFile read APIs use per-call file and decoder objects and
+  can run on worker threads. MainWindow open/reload currently performs
+  synchronous reads; moving large-file opens off the UI thread remains
+  follow-up work.
 - `ReadResult` is a small C++20 sum type; `std::expected` was deliberately
   avoided because it is C++23 and the project baseline is C++20.
 
