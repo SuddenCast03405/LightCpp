@@ -69,6 +69,10 @@ signals:
     /// for the rest of the session. The status answer itself has already been
     /// emitted (the empty summary) — this is the explanation for the log.
     void statusTimedOut(const QString& text);
+    /// A status refresh could not be started (for example, git is missing).
+    /// Kept separate from commandFinished so the window does not enqueue an
+    /// endless status-refresh loop in response to its own failed refresh.
+    void statusFailed(const QString& text);
 
 private:
     struct Job {
@@ -76,6 +80,9 @@ private:
         QString title;
         bool feedsStatus = false;  // stdout is porcelain status output
         GitCommandPolicy::Kind kind = GitCommandPolicy::Kind::ReadOnly;
+        /// Working directory captured when the job was queued. A status
+        /// result from an old project must never update the current project.
+        QString workingDirectory;
     };
 
     /// Queue a command. `feedsStatus` marks the one job whose stdout is
