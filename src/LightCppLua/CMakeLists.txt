@@ -52,8 +52,10 @@ else()
     target_compile_options(LightCppLuaCore PRIVATE -w)
 endif()
 
+# LuaBridge is vendored third-party code. Mark its headers as system headers so
+# diagnostics originating inside the dependency do not fail our /W4 /WX build.
 add_library(LightCppLuaBridge INTERFACE)
-target_include_directories(LightCppLuaBridge
+target_include_directories(LightCppLuaBridge SYSTEM
     INTERFACE "${CMAKE_SOURCE_DIR}/third_party/LuaBridge3-3.0-rc12/Source")
 
 add_library(LightCppLua STATIC

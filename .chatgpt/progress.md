@@ -119,3 +119,10 @@
 - Added a separate `windows-2025-vs2026` GitHub-hosted runner job using the Visual Studio 18 2026 CMake generator and a new `msvc2026` configure/build/test preset. The existing Visual Studio 2022 job remains as a compatibility baseline.
 - The runner uses the available Qt 6.8.3 MSVC x64 package (`win64_msvc2022_64`); the newer MSVC toolset is used for the project build. This exercises the modern compiler while retaining a published Qt kit with the MSVC 14.x ABI-compatible runtime.
 - The current VS 2026 lane is pending. Compiler identity and version will be visible in the MSBuild output.
+
+
+## LuaBridge warning isolation (2026-11-01)
+
+- The latest MSVC 19.44 build exposed C4702 (unreachable code) in the vendored LuaBridge3 header. The prior CMake interface target still declared that path as a normal include directory, so MSVC applied the project's /W4 /WX policy to dependency internals.
+- Changed `LightCppLuaBridge` to publish LuaBridge3 as a SYSTEM include directory. This isolates upstream header diagnostics without weakening warnings for LightCpp-owned code.
+- A new CI run is required to verify the fix; the active run on commit `3bb7a6e7` was started before this adjustment.
