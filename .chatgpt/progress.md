@@ -134,3 +134,12 @@
 - The terminal branch now accepts the `reason="exited…"` family, clears any pending continue/step command, and logs target exit without emitting `paused`.
 - Added a fake-GDB regression that produces `*stopped,reason="exited-signalled"` after a step and verifies it is not surfaced as a source pause.
 - Validation pending CI on the resulting commit.
+
+
+## Debugger session isolation (2026-11-01)
+
+- Review found that changing the configured debugger path during a live session changed `backend_` immediately. The active process could then receive commands in the wrong debugger dialect (for example, a GDB process receiving cdb `p`/`q`).
+- Added a separate `sessionBackend_` snapshot captured at start; all process arguments, commands, output decoding and parsers now use the immutable session backend, while `backend_` remains the selection for the next launch.
+- Session start/finish/abort/stop now clear partial output, pending command and cdb breakpoint-frame state so an incomplete line or stack-frame request cannot leak into a later session.
+- Extended the fake-GDB signal-exit regression to change the selected debugger to cdb while GDB is paused, then verify the live GDB session still handles the step and exit correctly.
+- CI validation pending.
