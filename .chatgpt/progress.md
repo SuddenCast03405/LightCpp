@@ -126,3 +126,11 @@
 - The latest MSVC 19.44 build exposed C4702 (unreachable code) in the vendored LuaBridge3 header. The prior CMake interface target still declared that path as a normal include directory, so MSVC applied the project's /W4 /WX policy to dependency internals.
 - Changed `LightCppLuaBridge` to publish LuaBridge3 as a SYSTEM include directory. This isolates upstream header diagnostics without weakening warnings for LightCpp-owned code.
 - A new CI run is required to verify the fix; the active run on commit `3bb7a6e7` was started before this adjustment.
+
+
+## GDB terminal-state parsing correction (2026-11-01)
+
+- Logic review found that GDB/MI only treated `exited` and `exited-normally` as terminal. A common `exited-signalled` record (for example SIGTERM) fell through to the generic stop path and was reported as a source pause with no valid frame.
+- The terminal branch now accepts the `reason="exited…"` family, clears any pending continue/step command, and logs target exit without emitting `paused`.
+- Added a fake-GDB regression that produces `*stopped,reason="exited-signalled"` after a step and verifies it is not surfaced as a source pause.
+- Validation pending CI on the resulting commit.
