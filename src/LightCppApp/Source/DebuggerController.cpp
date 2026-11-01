@@ -30,8 +30,7 @@ DebuggerController::Backend backendForPath(const QString& exePath)
     return DebuggerController::Backend::Unknown;
 }
 
-/// MI string values escape backslashes and quotes; this undoes the common
-/// subset GDB actually emits for file paths.
+/// Escapes a value for inclusion in a quoted GDB/MI string.
 QString escapeMiString(const QString& value)
 {
     QString escaped = value;
