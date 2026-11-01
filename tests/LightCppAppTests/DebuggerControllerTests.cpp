@@ -43,6 +43,9 @@
 
 #include <gtest/gtest.h>
 
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QObject>
 #include <QStringList>
@@ -109,6 +112,39 @@ void connectRecorder(DebuggerController& controller, SignalRecorder& recorder)
 }
 
 }  // namespace
+
+#if defined(Q_OS_UNIX)
+/// Minimal MI-speaking shell used to test GDB async running records without
+/// depending on a debugger installation or a real executable.
+struct FakeGdb {
+    QTemporaryDir dir;
+    QString debuggerPath;
+    QString targetPath;
+    bool ready = false;
+
+    FakeGdb()
+    {
+        debuggerPath = dir.filePath(QStringLiteral("gdb"));
+        targetPath = dir.filePath(QStringLiteral("program"));
+        const QByteArray script =
+            "#!/bin/sh\n"
+            "while IFS= read -r command; do\n"
+            "  case \"$command\" in\n"
+            "    -exec-run) printf '%s\\n' '*stopped,reason=\"breakpoint-hit\",frame={file=\"main.cpp\",line=\"3\"}' ;;\n"
+            "    -exec-continue) printf '%s\\n' '*running,thread-id=\"all\"' '*running,thread-id=\"all\"' ;;\n"
+            "    -gdb-exit) exit 0 ;;\n"
+            "  esac\n"
+            "done\n";
+        ready = writeFile(debuggerPath, script)
+                && writeFile(targetPath, QByteArray("target"));
+        const QFile::Permissions executable =
+            QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner;
+        ready = ready && QFile::setPermissions(debuggerPath, executable)
+                && QFile::setPermissions(targetPath, executable);
+    }
+};
+#endif
+
 
 TEST(DebuggerController, AFailedStartReportsFailureAndLeavesNoSession)
 {
@@ -221,6 +257,48 @@ std::string text(const QStringList& commands)
 {
     return commands.join(QStringLiteral("\n")).toStdString();
 }
+
+
+#if defined(Q_OS_UNIX)
+TEST(DebuggerController, GdbRunningRecordsEmitOneResumedNotification)
+{
+    FakeGdb fake;
+    ASSERT_TRUE(fake.ready);
+
+    DebuggerController controller;
+    controller.setDebuggerPath(fake.debuggerPath);
+    int pausedCount = 0;
+    int resumedCount = 0;
+    QObject::connect(&controller, &DebuggerController::paused,
+                     [&] { ++pausedCount; });
+    QObject::connect(&controller, &DebuggerController::resumed,
+                     [&] { ++resumedCount; });
+
+    ASSERT_TRUE(controller.start(fake.targetPath, fake.dir.path(), {}));
+
+    QElapsedTimer timer;
+    timer.start();
+    while (pausedCount == 0 && timer.elapsed() < 2000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    ASSERT_EQ(pausedCount, 1);
+
+    controller.cont();
+    timer.restart();
+    while (resumedCount == 0 && timer.elapsed() < 2000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    // The fake debugger emits two *running records. Only the paused ->
+    // running transition should be announced.
+    timer.restart();
+    while (timer.elapsed() < 100) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    EXPECT_EQ(resumedCount, 1);
+    controller.stop();
+}
+#endif
+
 
 }  // namespace
 

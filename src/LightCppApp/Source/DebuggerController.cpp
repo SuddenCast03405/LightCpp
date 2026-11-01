@@ -359,14 +359,48 @@ void DebuggerController::cont()
 {
     if (isRunning() && paused_) {
         writeCommand(contCommand());
-        paused_ = false;
-        emit resumed();
+        if (backend_ != Backend::Gdb) {
+            // LLDB and cdb do not currently expose a parsed async MI-style
+            // running record, so retain their optimistic state transition.
+            // GDB changes state only when its *running record arrives.
+            paused_ = false;
+            emit resumed();
+        }
     }
 }
 
-void DebuggerController::stepOver() { if (isRunning() && paused_) { writeCommand(stepOverCommand()); paused_ = false; emit resumed(); } }
-void DebuggerController::stepInto() { if (isRunning() && paused_) { writeCommand(stepIntoCommand()); paused_ = false; emit resumed(); } }
-void DebuggerController::stepOut()  { if (isRunning() && paused_) { writeCommand(stepOutCommand());  paused_ = false; emit resumed(); } }
+void DebuggerController::stepOver()
+{
+    if (isRunning() && paused_) {
+        writeCommand(stepOverCommand());
+        if (backend_ != Backend::Gdb) {
+            paused_ = false;
+            emit resumed();
+        }
+    }
+}
+
+void DebuggerController::stepInto()
+{
+    if (isRunning() && paused_) {
+        writeCommand(stepIntoCommand());
+        if (backend_ != Backend::Gdb) {
+            paused_ = false;
+            emit resumed();
+        }
+    }
+}
+
+void DebuggerController::stepOut()
+{
+    if (isRunning() && paused_) {
+        writeCommand(stepOutCommand());
+        if (backend_ != Backend::Gdb) {
+            paused_ = false;
+            emit resumed();
+        }
+    }
+}
 
 void DebuggerController::writeCommand(const QString& command)
 {
@@ -642,8 +676,11 @@ void DebuggerController::handleGdbLine(const QString& line)
         return;
     }
     if (line.startsWith(QLatin1String("*running"))) {
+        const bool wasPaused = paused_;
         paused_ = false;
-        emit resumed();
+        if (wasPaused) {
+            emit resumed();
+        }
     }
 }
 

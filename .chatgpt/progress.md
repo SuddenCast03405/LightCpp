@@ -67,3 +67,8 @@
 - CI for the current branch is running after these changes; macOS GB18030 parity is not yet confirmed.
 - Follow-up correctness check: the forced-encoding reader had a second `isDir()` guard that was missed by the first replacement; it is now changed to `!isFile()` as well, and the `/dev/zero` regression covers all three read entry points.
 - Updated `iconvConvert` documentation to match the new reverse-conversion validation and added UTF-8/encoded-byte diagnostics to GB18030 round-trip failures.
+## Debugger state correction
+
+- Confirmed GDB `cont`/step operations optimistically set `paused_ = false` and emit `resumed()`, then the GDB/MI `*running` record emits `resumed()` again. If GDB rejects the command, the optimistic state also leaves the UI believing execution resumed while GDB remains paused.
+- GDB now changes to running only on the actual `*running` record; duplicate running records emit one paused-to-running transition. LLDB/cdb retain their current optimistic transition because their output parsers do not yet expose an equivalent asynchronous running event.
+- Added a POSIX fake-GDB regression that emits two `*running` records and verifies one `resumed()` notification. Remaining debugger work: correlate MI command tokens/results, and replace the synchronous 2s graceful + 2s forced stop waits with an asynchronous UI shutdown path.
