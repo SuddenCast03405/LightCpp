@@ -433,6 +433,13 @@ TEST(DebuggerController, ThePlantCommandSpeaksEachBackendDialect)
     EXPECT_EQ(text(addBreakpointCommand(Backend::Lldb, kMiddle)),
               std::string("breakpoint set --file \"main.cpp\" --line 8"));
     EXPECT_TRUE(addBreakpointCommand(Backend::Unknown, kMiddle).isEmpty());
+
+    // GDB/MI uses C-style quoted strings. A quote in a valid POSIX file name
+    // must be escaped or it terminates the MI argument early.
+    const DebugBreakpoint quotedPath{
+        QStringLiteral("/proj/src/with\\\"quote.cpp"), 2};
+    EXPECT_EQ(text(addBreakpointCommand(Backend::Gdb, quotedPath)),
+              std::string("-break-insert \"/proj/src/with\\\\\\\"quote.cpp:3\""));
 }
 
 TEST(DebuggerController, ALocationIsOneBasedAndUsesForwardSlashes)

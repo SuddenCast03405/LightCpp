@@ -469,7 +469,8 @@ QString addBreakpointCommand(DebuggerController::Backend backend,
 {
     switch (backend) {
     case DebuggerController::Backend::Gdb:
-        return QStringLiteral("-break-insert \"%1\"").arg(breakpointLocation(bp));
+        return QStringLiteral("-break-insert \"%1\"")
+            .arg(escapeMiString(breakpointLocation(bp)));
     case DebuggerController::Backend::Cdb:
         return QStringLiteral("bp `%1`").arg(breakpointLocation(bp));
     case DebuggerController::Backend::Lldb:

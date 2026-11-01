@@ -149,3 +149,10 @@
 - Logic review found a protocol mismatch: the GDB backend runs with `--interpreter=mi2` and inserts breakpoints with MI commands, but removal sent the bare CLI command `clear file:line`. In MI mode that command is not a valid MI operation; the controller nevertheless removed the entry from `armed_`, leaving the UI/controller state inconsistent with the debugger.
 - GDB removal now routes the CLI operation through `-interpreter-exec console`, with MI-string escaping for backslashes and quotes. The backend command test now asserts the exact MI-wrapped command.
 - The change is committed, but no local build/test or fresh CI result is available yet. This corrects the protocol mismatch; command-result correlation and rollback of `armed_` after an asynchronous debugger rejection remain broader follow-up work.
+
+## MSVC 2026 artifact and CI run reduction (2026-11-01)
+
+- The CI workflow now uploads `build/msvc2026/dist/**` as a dedicated `LightCpp-MSVC2026-<commit>` artifact from the MSVC 2026 job only. No other compiler job publishes application binaries.
+- Push and pull-request CI ignores Markdown-only, `.chatgpt/**`, docs-only, and issue-template-only changes. Source/build/workflow changes still run the full platform matrix; existing concurrency cancellation remains enabled.
+- Further debugger review found GDB breakpoint insertion interpolated a path directly into a quoted MI string. Paths containing a quote could terminate the argument early. The command now uses the same MI-string escaping helper as removal, with a regression test for a quoted POSIX filename.
+- Changes are committed together to minimize additional workflow runs. CI/build verification is pending.
