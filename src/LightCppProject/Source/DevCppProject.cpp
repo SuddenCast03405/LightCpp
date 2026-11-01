@@ -136,6 +136,148 @@ QStringList linkerArguments(const QStringList& raw)
     return out;
 }
 
+
+struct RawUnit {
+    QString fileName;
+    bool compile = true;
+    bool link = true;
+    bool compileCpp = true;
+    bool overrideBuildCmd = false;
+    QString buildCmd;
+};
+
+void appendProjectWarning(QStringList* warnings, const QString& message)
+{
+    if (warnings != nullptr) {
+        warnings->append(message);
+    }
+}
+
+void considerProjectUnit(QMap<int, RawUnit>& unitsByIndex,
+                         QSet<QString>& seenPaths,
+                         const QString& projectDir,
+                         QStringList* warnings,
+                         int index,
+                         const QString& fileName,
+                         bool compile,
+                         bool link,
+                         bool isCpp)
+{
+    if (index < 0 || fileName.trimmed().isEmpty()) {
+        return;
+    }
+
+    const QString key = absoluteFrom(projectDir, fileName).toLower();
+    const auto existing = unitsByIndex.constFind(index);
+    if (existing != unitsByIndex.cend()) {
+        const QString kept = existing->fileName;
+        if (absoluteFrom(projectDir, kept).toLower() != key) {
+            appendProjectWarning(
+                warnings,
+                QStringLiteral("unit %1 is listed twice with different files "
+                               "('%2' wins, '%3' is dropped)")
+                    .arg(index).arg(kept, fileName));
+        }
+        return;
+    }
+
+    if (seenPaths.contains(key)) {
+        appendProjectWarning(
+            warnings,
+            QStringLiteral("'%1' is listed more than once in the "
+                           "project; only one entry is kept").arg(fileName));
+        return;
+    }
+
+    seenPaths.insert(key);
+    RawUnit unit;
+    unit.fileName = fileName;
+    unit.compile = compile;
+    unit.link = link;
+    unit.compileCpp = isCpp;
+    unitsByIndex.insert(index, unit);
+}
+
+QList<DevCppUnit> collectProjectUnits(const QList<IniEntry>& entries,
+                                      const QString& projectDir,
+                                      bool isCpp,
+                                      QStringList* warnings)
+{
+    QMap<int, RawUnit> unitsByIndex;
+    QSet<QString> seenPaths;
+    QStringList unitSections;
+
+    for (const IniEntry& entry : entries) {
+        if (!entry.section.startsWith(QStringLiteral("Unit"),
+                                      Qt::CaseInsensitive)
+            || !isDigits(entry.section.mid(4))) {
+            continue;
+        }
+        if (!unitSections.contains(entry.section, Qt::CaseInsensitive)) {
+            unitSections.append(entry.section);
+        }
+    }
+
+    for (const QString& section : std::as_const(unitSections)) {
+        QString fileName = lookup(entries, section, "FileName");
+        if (fileName.isEmpty()) {
+            fileName = lookup(entries, section, "CppName");
+        }
+        if (fileName.isEmpty()) {
+            fileName = lookup(entries, section, "CName");
+        }
+
+        const QString compile = lookup(entries, section, "Compile");
+        const QString link = lookup(entries, section, "Link");
+        const QString compileCpp = lookup(entries, section, "CompileCpp");
+        const QString overrideBuildCmd =
+            lookup(entries, section, "OverrideBuildCmd");
+        const QString buildCmd = lookup(entries, section, "BuildCmd");
+        const int index = section.mid(4).toInt();
+
+        considerProjectUnit(unitsByIndex, seenPaths, projectDir, warnings,
+                            index, fileName,
+                            compile.isEmpty() || compile != QStringLiteral("0"),
+                            link.isEmpty() || link != QStringLiteral("0"),
+                            isCpp);
+
+        // Preserve per-unit settings for an already accepted index.
+        auto unit = unitsByIndex.find(index);
+        if (unit != unitsByIndex.end()) {
+            if (!compileCpp.isEmpty()) {
+                unit->compileCpp = compileCpp != QStringLiteral("0");
+            }
+            unit->overrideBuildCmd =
+                overrideBuildCmd == QStringLiteral("1");
+            unit->buildCmd = buildCmd;
+        }
+    }
+
+    for (const IniEntry& entry : entries) {
+        if (entry.section.compare(QStringLiteral("Project"),
+                                  Qt::CaseInsensitive) != 0
+            || !entry.key.startsWith(QStringLiteral("Unit"),
+                                     Qt::CaseInsensitive)
+            || !isDigits(entry.key.mid(4))) {
+            continue;
+        }
+        considerProjectUnit(unitsByIndex, seenPaths, projectDir, warnings,
+                            entry.key.mid(4).toInt(), entry.value,
+                            true, true, isCpp);
+    }
+
+    QList<DevCppUnit> units;
+    units.reserve(unitsByIndex.size());
+    for (auto unit = unitsByIndex.cbegin();
+         unit != unitsByIndex.cend(); ++unit) {
+        const RawUnit& raw = unit.value();
+        units.append(DevCppUnit{raw.fileName, raw.compile, raw.link,
+                                raw.compileCpp, raw.overrideBuildCmd,
+                                raw.buildCmd});
+    }
+    return units;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -1009,108 +1151,8 @@ std::optional<DevCppProject> parseDevProject(const QString& filePath,
         }
     };
 
-    // Units are numbered. They are listed either as [UnitN] sections (what a
-    // real project file has) or as UnitN= keys inside [Project] (what a
-    // template has), and the two spellings can appear together — so both go
-    // into one table keyed by N and come out in unit order, whichever form
-    // each entry arrived in.
-    struct RawUnit {
-        QString fileName;
-        bool compile = true;
-        bool link = true;
-        bool compileCpp = true;  // real default filled in by consider()
-        bool overrideBuildCmd = false;
-        QString buildCmd;
-    };
-    QMap<int, RawUnit> unitsByIndex;
-    QSet<QString> seenPaths;
-
-    const auto consider = [&](int index, const QString& fileName,
-                              bool compile, bool link) {
-        // Unit numbering starts at 0 in the IDE's own templates, so index 0
-        // is a legitimate unit and only a negative one is nonsense.
-        if (index < 0 || fileName.trimmed().isEmpty()) {
-            return;
-        }
-        const QString key = absoluteFrom(project.projectDir, fileName).toLower();
-        if (unitsByIndex.contains(index)) {
-            // The other spelling already claimed this index. Same file is
-            // the benign case (both spellings of one unit); a DIFFERENT
-            // file means one of the two silently vanished from the tree.
-            const QString kept = unitsByIndex.value(index).fileName;
-            if (absoluteFrom(project.projectDir, kept).toLower() != key) {
-                warn(QStringLiteral(
-                         "unit %1 is listed twice with different files "
-                         "('%2' wins, '%3' is dropped)")
-                         .arg(index).arg(kept, fileName));
-            }
-            return;
-        }
-        if (seenPaths.contains(key)) {
-            warn(QStringLiteral("'%1' is listed more than once in the "
-                                "project; only one entry is kept")
-                     .arg(fileName));
-            return;
-        }
-        seenPaths.insert(key);
-        // No per-unit CompileCpp= yet → the project's flavour decides.
-        unitsByIndex.insert(index, RawUnit{fileName, compile, link,
-                                           project.isCpp, false, {}});
-    };
-
-    QStringList unitSections;
-    for (const IniEntry& e : entries) {
-        if (!e.section.startsWith(QStringLiteral("Unit"), Qt::CaseInsensitive)
-            || !isDigits(e.section.mid(4))) {
-            continue;  // skips "[UnitTests]" and friends
-        }
-        if (!unitSections.contains(e.section, Qt::CaseInsensitive)) {
-            unitSections.append(e.section);
-        }
-    }
-    for (const QString& section : std::as_const(unitSections)) {
-        QString fileName = lookup(entries, section, "FileName");
-        if (fileName.isEmpty()) {
-            // Templates name the file CppName=/CName= instead.
-            fileName = lookup(entries, section, "CppName");
-        }
-        if (fileName.isEmpty()) {
-            fileName = lookup(entries, section, "CName");
-        }
-        const QString compile = lookup(entries, section, "Compile");
-        const QString link = lookup(entries, section, "Link");
-        const QString compileCpp = lookup(entries, section, "CompileCpp");
-        const QString overrideBuildCmd =
-            lookup(entries, section, "OverrideBuildCmd");
-        const QString buildCmd = lookup(entries, section, "BuildCmd");
-        const int index = section.mid(4).toInt();
-        consider(index, fileName,
-                 compile.isEmpty() || compile != QStringLiteral("0"),
-                 link.isEmpty() || link != QStringLiteral("0"));
-        // consider() skips duplicates/empties; the per-unit extras only
-        // matter when the unit itself was taken.
-        const auto it = unitsByIndex.find(index);
-        if (it != unitsByIndex.end()) {
-            if (!compileCpp.isEmpty()) {
-                it->compileCpp = compileCpp != QStringLiteral("0");
-            }
-            it->overrideBuildCmd = overrideBuildCmd == QStringLiteral("1");
-            it->buildCmd = buildCmd;
-        }
-    }
-    for (const IniEntry& e : entries) {
-        if (e.section.compare(QStringLiteral("Project"), Qt::CaseInsensitive) != 0
-            || !e.key.startsWith(QStringLiteral("Unit"), Qt::CaseInsensitive)
-            || !isDigits(e.key.mid(4))) {
-            continue;  // UnitCount= and friends
-        }
-        consider(e.key.mid(4).toInt(), e.value, true, true);
-    }
-    for (auto it = unitsByIndex.constBegin(); it != unitsByIndex.constEnd(); ++it) {
-        project.units.append({it.value().fileName, it.value().compile,
-                              it.value().link, it.value().compileCpp,
-                              it.value().overrideBuildCmd, it.value().buildCmd});
-    }
+    project.units = collectProjectUnits(
+        entries, project.projectDir, project.isCpp, warnings);
 
     if (project.units.isEmpty()) {
         return fail(QStringLiteral("the project lists no source files"));

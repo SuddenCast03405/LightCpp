@@ -98,3 +98,10 @@
 - Fixed this at the shared first-party CMake warning target: all Windows first-party targets now receive `NOMINMAX`, independent of MSVC vs MinGW. This is preferable to local #undef workarounds because the Windows SDK macro pollution is a project-wide compile-environment issue.
 - Existing `ProcessTreeWindows.cpp` already guarded its own `windows.h` include with `NOMINMAX`; the compile definition makes this consistent for every other Windows SDK include as well.
 - Linux and MSYS2 jobs passed on `ec65d0a8`; macOS CTest still failed (known GB18030 portability issue). The new common Windows definition is pending native MSVC/MinGW CI verification.
+
+
+## MSVC 19.44 C1001 compiler crash (2026-11-01)
+
+- Reproduced the reported failure in the native MSVC 19.44.35207 CI job: compilation reaches `DevCppProject.cpp` and the compiler raises C1001 at the closing namespace line (1156), confirming this is not a source diagnostic at that line. The local report uses the same MSVC toolset patch version.
+- Reduced the compiler stress in `parseDevProject`: extracted numbered-unit collection into small named helper functions, removed the nested `consider`/warning lambdas and the local aggregate-heavy map logic from the already large parser function. The helper keeps the existing INI unit ordering, duplicate detection, unit settings, and warning behavior.
+- Pending native MSVC 19.44 CI verification. Linux/MSYS2/macOS regression suites will also run on the same commit; no claim of resolution until MSVC completes the build.
