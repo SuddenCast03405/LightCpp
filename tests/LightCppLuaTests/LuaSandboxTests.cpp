@@ -11,8 +11,6 @@
 
 namespace {
 
-constexpr char kResultOf[] = "RESULT:";
-
 /// Runs a snippet and returns its runtime error message — a quick way to
 /// move values out of the sandbox is to raise them: error(value).
 QString errorMessageOf(const QString& code,
