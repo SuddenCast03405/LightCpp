@@ -4,7 +4,7 @@
 
 ## Current status
 
-A working Qt6 Widgets IDE per the engineering standards in `要求.md`:
+A working Qt6 Widgets IDE:
 editing (syntax highlighting, code folding, bracket matching), project
 management (native CMake builds; Windows-only MSVC/Dev-C++ build backends;
 parsing of .dsp/.dsw projects), building and running, a
@@ -63,13 +63,14 @@ otherwise-invalid byte stream is opened with a lossless Latin-1 guess rather
 than being mislabeled UTF-8 and silently rewritten with replacement characters;
 the user can select its actual encoding from the editor.
 
-Design notes (spec compliance):
+Design notes:
 - `Utf8.hpp` is header-only and `constexpr`, so decoding/validation can run at
   compile time and be unit-tested without touching the filesystem.
-- No Qt dependency in the logic layers (spec 4.1/4.4): pure functions of
-  their inputs, callable from any thread. The Qt application layer drives
-  file I/O on background threads and marshals results back with queued
-  signals, never blocking the GUI thread.
+- The core logic library is Qt-free; the text, project and settings layers
+  use Qt Core where file, path and JSON APIs are needed, without depending on
+  Qt Widgets. Their file-read APIs are safe to call from background threads.
+  The current MainWindow open/reload paths still perform synchronous reads;
+  moving large-file opens off the UI thread remains follow-up work.
 - `ReadResult` is a small C++20 sum type; `std::expected` was deliberately
   avoided because it is C++23 and the project baseline is C++20.
 
@@ -165,7 +166,7 @@ until the corresponding CI build and tests pass.
 ## Layout
 
 ```
-cmake/CPM.cmake              # CPM.cmake bootstrap (spec 4.2)
+cmake/CPM.cmake              # CPM.cmake bootstrap
 src/LightCppCore/            # core logic library (static)
 src/LightCppText/            # text model / encoding / folding (static)
 src/LightCppProject/         # project & build configs, diagnostics (static)

@@ -17,6 +17,41 @@ namespace {
 /// enough that the check never dominates the read.
 constexpr qsizetype kBinarySniffBytes = 4096;
 
+/// Read no more than maxBytes + 1 bytes when a limit is configured. The extra
+/// byte distinguishes an exact-size file from one that grew after QFileInfo's
+/// preflight size check. Special files are rejected by the callers before
+/// reaching this helper.
+struct LimitedReadResult {
+    QByteArray bytes;
+    bool tooLarge = false;
+    bool failed = false;
+};
+
+LimitedReadResult readFileWithinLimit(QFile& file, std::int64_t maxBytes)
+{
+    LimitedReadResult result;
+    if (maxBytes <= 0
+        || maxBytes >= static_cast<std::int64_t>(
+                           std::numeric_limits<qsizetype>::max())) {
+        result.bytes = file.readAll();
+    } else {
+        const qint64 readLimit = static_cast<qint64>(maxBytes) + 1;
+        while (static_cast<qint64>(result.bytes.size()) < readLimit) {
+            const qint64 remaining =
+                readLimit - static_cast<qint64>(result.bytes.size());
+            const QByteArray chunk = file.read(remaining);
+            if (chunk.isEmpty()) {
+                break;
+            }
+            result.bytes.append(chunk);
+        }
+        result.tooLarge =
+            static_cast<std::int64_t>(result.bytes.size()) > maxBytes;
+    }
+    result.failed = file.error() != QFileDevice::NoError;
+    return result;
+}
+
 }  // namespace
 
 const char* toString(TextFileError error) noexcept
@@ -136,7 +171,7 @@ TextFileResult readDetectedTextFile(const QString& path, const TextFileOptions& 
     if (!info.exists()) {
         return TextFileResult::failure(TextFileError::NotFound);
     }
-    if (info.isDir()) {
+    if (!info.isFile()) {
         return TextFileResult::failure(TextFileError::NotARegularFile);
     }
     if (options.maxBytes > 0 && info.size() > options.maxBytes) {
@@ -147,10 +182,15 @@ TextFileResult readDetectedTextFile(const QString& path, const TextFileOptions& 
     if (!file.open(QIODevice::ReadOnly)) {
         return TextFileResult::failure(TextFileError::ReadError);
     }
-    const QByteArray data = file.readAll();
-    if (file.error() != QFileDevice::NoError) {
+    const LimitedReadResult read =
+        readFileWithinLimit(file, options.maxBytes);
+    if (read.tooLarge) {
+        return TextFileResult::failure(TextFileError::TooLarge);
+    }
+    if (read.failed) {
         return TextFileResult::failure(TextFileError::ReadError);
     }
+    const QByteArray& data = read.bytes;
 
     const EncodingDetection detection = detectEncoding(data);
     if (detection.encoding == TextEncoding::Binary) {
@@ -214,10 +254,15 @@ TextFileResult readTextFileWithEncoding(
     if (!file.open(QIODevice::ReadOnly)) {
         return TextFileResult::failure(TextFileError::ReadError);
     }
-    const QByteArray data = file.readAll();
-    if (file.error() != QFileDevice::NoError) {
+    const LimitedReadResult read =
+        readFileWithinLimit(file, options.maxBytes);
+    if (read.tooLarge) {
+        return TextFileResult::failure(TextFileError::TooLarge);
+    }
+    if (read.failed) {
         return TextFileResult::failure(TextFileError::ReadError);
     }
+    const QByteArray& data = read.bytes;
 
     if (encoding == TextEncoding::Binary) {
         return TextFileResult::failure(TextFileError::BinaryFile);
@@ -263,14 +308,21 @@ TextFileResult readTextFileWithEncoding(
 std::optional<QString> readSearchableTextFile(const QString& path,
                                               std::int64_t maxBytes)
 {
+    const QFileInfo info(path);
+    if (!info.exists() || !info.isFile()
+        || (maxBytes > 0 && info.size() > maxBytes)) {
+        return std::nullopt;
+    }
+
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         return std::nullopt;
     }
-    const QByteArray bytes = file.readAll();
-    if (maxBytes > 0 && bytes.size() > maxBytes) {
+    const LimitedReadResult read = readFileWithinLimit(file, maxBytes);
+    if (read.tooLarge || read.failed) {
         return std::nullopt;
     }
+    const QByteArray& bytes = read.bytes;
     // Binary guard: a NUL byte in the first block means this is not text. The
     // sniff looks at the bytes already in hand instead of reading a prefix
     // first — a prefix read moves the file position, and readAll() afterwards

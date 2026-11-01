@@ -48,3 +48,15 @@
 - Review Windows/UNC/POSIX path semantics and add direct regression tests for the shared project-path helpers.
 - Revisit remaining historical architecture risks against current HEAD: debugger MI command/response state, LSP compilation-database discovery, synchronous file opening, and the Git CLI integration boundary. Verify each before changing it.
 - Confirm all three CI platforms pass after the latest fixes, then record final counts and any platform-specific skips.
+## Additional portability and safety findings (2026-11-01)
+
+- Completed the first-party source/build-path scan across the 130 tracked `src/` files and selected root/plugin/build files. No machine-specific absolute path literals were found in runtime or build logic. Remaining path-looking strings in tests are synthetic fixtures for foreign Windows/POSIX paths; `/proc` is an OS interface, not a developer-machine path.
+- macOS CI build succeeded but CTest exposed two GB18030 failures: `EncodingRoundTrip.Gb18030RoundTripsBmpText` (the platform iconv rejects at least one conversion as non-reversible) and `EncodingRoundTrip.Gb18030PreservesBytesItCannotRender` (the byte sequence `F0 A0 AE B7` re-encodes as `F0 A0 B7 AE`). This is a genuine converter/version interoperability issue; do not claim macOS test parity until resolved. Linux and Windows CTest passed on the same review commit.
+- Found and fixed a file-input boundary issue: searchable-file reads previously called `readAll()` before enforcing `maxBytes`; text-file readers only preflighted `QFileInfo::size()` and did not reject non-regular devices. The fix bounds the actual read to `maxBytes + 1` and requires `QFileInfo::isFile()` before opening.
+- Added explicit UNC path normalization/resolution/relative-path handling and regression tests. This closes a gap not covered by the existing drive-letter-only path tests.
+- README corrected: removed the stale reference to deleted `要求.md`, removed stale spec numbering, and accurately documents that MainWindow open/reload currently performs synchronous reads.
+
+## Current validation
+
+- Review commit `80e1b2a`: Linux build + CTest passed; Windows MSYS2 build + CTest passed; macOS build passed but 2 GB18030 CTest cases failed as detailed above.
+- The bounded-read, non-regular-file and UNC changes in this commit are not yet validated by CI.

@@ -6,6 +6,7 @@
 // that says exactly which shape it is testing.
 
 #include "LightCpp/Project/DevCppProject.hpp"
+#include "LightCpp/Project/ProjectPathUtils.hpp"
 
 #include <gtest/gtest.h>
 
@@ -1258,4 +1259,27 @@ TEST(DevCppProject, AnUncompiledSourceIsStillLinkedThroughItsObject)
               (QStringList{QStringLiteral("main.o"),
                            QStringLiteral("prebuilt.o")}));
     EXPECT_FALSE(hasRuleFor(lines, QStringLiteral("prebuilt.o")));
+}
+
+TEST(ProjectPathUtils, UncPathsStayAbsoluteAndRelativeToTheSameShare)
+{
+    using namespace LightCpp::Project::Paths;
+
+    const QString windowsPath =
+        QStringLiteral("\\\\server\\share\\src\\main.cpp");
+    EXPECT_TRUE(isWindowsUncAbsolutePath(windowsPath));
+    EXPECT_TRUE(isAbsolutePath(windowsPath));
+    EXPECT_EQ(absoluteFilePath(windowsPath),
+              QStringLiteral("//server/share/src/main.cpp"));
+    EXPECT_EQ(directoryForFile(windowsPath),
+              QStringLiteral("//server/share/src"));
+    EXPECT_EQ(resolveReference(QStringLiteral("//server/share/project"),
+                               QStringLiteral("..\\src\\main.cpp")),
+              QStringLiteral("//server/share/src/main.cpp"));
+    EXPECT_EQ(relativePath(QStringLiteral("//server/share/project"),
+                           QStringLiteral("//SERVER/SHARE/project/src/main.cpp")),
+              QStringLiteral("src/main.cpp"));
+    EXPECT_EQ(relativePath(QStringLiteral("//server/share/project"),
+                           QStringLiteral("//server/other/project/src/main.cpp")),
+              QStringLiteral("//server/other/project/src/main.cpp"));
 }

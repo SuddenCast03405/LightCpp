@@ -221,6 +221,26 @@ TEST_F(TextFileTest, TooLargeRejected)
     EXPECT_EQ(result.error(), TextFileError::TooLarge);
 }
 
+TEST_F(TextFileTest, NonRegularDeviceFilesAreRejectedBeforeReading)
+{
+#if defined(Q_OS_UNIX)
+    const QString path = QStringLiteral("/dev/zero");
+    const auto detected = readDetectedTextFile(path);
+    ASSERT_FALSE(detected.hasValue());
+    EXPECT_EQ(detected.error(), TextFileError::NotARegularFile);
+
+    const auto forced = LightCpp::Text::readTextFileWithEncoding(
+        path, TextEncoding::Utf8);
+    ASSERT_FALSE(forced.hasValue());
+    EXPECT_EQ(forced.error(), TextFileError::NotARegularFile);
+
+    EXPECT_FALSE(
+        LightCpp::Text::readSearchableTextFile(path, 1024).has_value());
+#else
+    GTEST_SKIP() << "the /dev/zero device path is POSIX-specific";
+#endif
+}
+
 TEST_F(TextFileTest, BinaryRejected)
 {
     const QByteArray bytes("\x00\x01\x02\x03\xFF\xFE\x00\x00binary\x00", 16);
@@ -703,6 +723,19 @@ TEST_F(TextFileTest, SearchReadRejectsFilesAboveTheLimit)
     EXPECT_FALSE(LightCpp::Text::readSearchableTextFile(path, 9).has_value());
     // 0 means "no limit" rather than "nothing fits".
     EXPECT_TRUE(LightCpp::Text::readSearchableTextFile(path, 0).has_value());
+}
+
+
+TEST_F(TextFileTest, SearchReadStopsAtTheConfiguredLimitForLargeFiles)
+{
+    const QString path = dir_.filePath(QStringLiteral("large-sparse.txt"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    ASSERT_TRUE(file.resize(64LL * 1024 * 1024));
+    file.close();
+
+    EXPECT_FALSE(
+        LightCpp::Text::readSearchableTextFile(path, 1024).has_value());
 }
 
 TEST_F(TextFileTest, SearchReadReturnsEachFileOfItsOwnAccord)
