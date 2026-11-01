@@ -140,6 +140,58 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  msvc-2026:
+    name: MSVC 2026 / Qt 6 / Debug / ctest
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+
+      - name: Install LLVM development headers
+        shell: pwsh
+        run: choco install llvm --yes --no-progress
+
+      - name: Install Qt 6 MSVC x64 kit
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+
+      - name: Vendor third-party sources
+        shell: pwsh
+        run: cmake -P _fetch_deps.cmake
+
+      - name: Configure with Visual Studio 2026
+        shell: pwsh
+        run: >-
+          cmake --preset msvc2026
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+          -DLLVM_ROOT="C:/Program Files/LLVM"
+
+      - name: Build with MSVC 2026
+        shell: pwsh
+        run: cmake --build --preset msvc2026 --parallel 2
+
+      - name: CTest with MSVC 2026
+        shell: pwsh
+        run: ctest --preset msvc2026
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Upload MSVC 2026 CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-msvc2026
+          path: |
+            build/msvc2026/Testing/Temporary/LastTest.log
+            build/msvc2026/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 14
+
   linux-native:
     name: Linux / Qt 6 / native / ctest
     runs-on: ubuntu-24.04

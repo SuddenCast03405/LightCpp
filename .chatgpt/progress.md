@@ -112,3 +112,10 @@
 - CI on commit `49411a27` confirmed `DevCppProject.cpp` now compiles under MSVC 19.44; the reported C1001 no longer reproduces. The remaining MSVC build errors are separate test-source C7744 diagnostics: `\\x9879\\x76EE` was incorrectly used for Unicode code points, so the literals now use the correct universal-character escapes `\\u9879\\u76EE`.
 - MSVC also reported C4702 in the vendored LuaBridge3 header under the project's `/W4 /WX` policy. Marked the third-party LuaBridge include directory as SYSTEM so upstream-header warnings do not fail project builds; project-owned warnings remain errors.
 - macOS native compilation succeeds and 608/609 tests pass. Apple's iconv GB18030 euro-sign mapping cannot round-trip exactly, and the converter correctly rejects it to prevent silent data loss. The euro sample is now conditionally checked when the platform can encode and decode it exactly; the portable Chinese sample remains mandatory.
+
+
+## Visual Studio 2026 CI lane (2026-11-01)
+
+- Added a separate `windows-2025-vs2026` GitHub-hosted runner job using the Visual Studio 18 2026 CMake generator and a new `msvc2026` configure/build/test preset. The existing Visual Studio 2022 job remains as a compatibility baseline.
+- The runner uses the available Qt 6.8.3 MSVC x64 package (`win64_msvc2022_64`); the newer MSVC toolset is used for the project build. This exercises the modern compiler while retaining a published Qt kit with the MSVC 14.x ABI-compatible runtime.
+- The current VS 2026 lane is pending. Compiler identity and version will be visible in the MSBuild output.

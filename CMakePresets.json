@@ -63,6 +63,17 @@
       "cacheVariables": {
         "LIGHTCPP_DEPLOY_QT": "OFF"
       }
+    },
+    {
+      "name": "msvc2026",
+      "displayName": "Visual Studio 2026 (MSVC x64)",
+      "description": "Native MSVC x64 build with Visual Studio 2026. Supply CMAKE_PREFIX_PATH for the Qt MSVC kit and LLVM_ROOT for clang-c/Index.h.",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/msvc2026",
+      "cacheVariables": {
+        "LIGHTCPP_DEPLOY_QT": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -85,6 +96,11 @@
     {
       "name": "msvc2022",
       "configurePreset": "msvc2022",
+      "configuration": "Debug"
+    },
+    {
+      "name": "msvc2026",
+      "configurePreset": "msvc2026",
       "configuration": "Debug"
     }
   ],
@@ -130,6 +146,19 @@
     {
       "name": "msvc2022",
       "configurePreset": "msvc2022",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error",
+        "timeout": 180
+      }
+    },
+    {
+      "name": "msvc2026",
+      "configurePreset": "msvc2026",
       "configuration": "Debug",
       "output": {
         "outputOnFailure": true
