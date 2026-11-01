@@ -329,6 +329,10 @@ TEST(DebuggerController, GdbSignalExitIsNotReportedAsASourcePause)
     }
     ASSERT_EQ(pausedCount, 1);
 
+    // Changing the selected debugger only affects the next session; this
+    // live process is still speaking GDB/MI and must receive -exec-next.
+    controller.setDebuggerPath(fake.dir.filePath(QStringLiteral("cdb.exe")));
+    EXPECT_EQ(controller.backend(), DebuggerController::Backend::Cdb);
     controller.stepOver();
     timer.restart();
     while (!logs.contains(QStringLiteral("target exited"))
