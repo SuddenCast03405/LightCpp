@@ -195,3 +195,10 @@
 - The latest MSYS2 UCRT64 build succeeded, but CTest reported 652/653 passing. The remaining failure was ProcessTreeOnRealProcesses.TerminatingTheShellLeavesItsProgramRunning: the test launched ping.exe as the shell's foreground command, then killed the shell. That setup did not reliably model a child process independently surviving its shell/console, so the test could observe the child disappearing with the foreground command.
 - Changed the Windows fixture to have the persistent cmd.exe launch ping.exe via the start command, making the intended independent child-process scenario explicit. The assertions still require the child to remain observable after shell termination and still verify cleanup; no test was removed or skipped.
 - This is a test-fixture correction, not proof of the production process-tree behavior. A fresh Windows build/CTest run must validate it before claiming the regression is resolved.
+
+
+## Windows process-tree integration test execution (2026-11-01)
+
+- The latest MSYS2 UCRT64 CI run built successfully and reported 653/653 CTest entries passing, but the two real-process process-tree tests were marked Skipped. The source's skip path is taken when the shell/child cannot be observed; therefore this run did not verify the live-process regression.
+- Root cause in the fixture: it used QProcess::startDetached even though this Windows runner's Qt process pipe setup is unavailable in the environment. Changed the Windows fixture to create the persistent cmd process directly with CreateProcessW, avoiding QProcess pipe creation, and kept the child as an independently launched ping.exe via cmd's START builtin.
+- The test assertions remain active and are not weakened or removed. The next Windows CI run must show both ProcessTreeOnRealProcesses cases as Passed (not Skipped) before the live process-tree behavior is considered verified. Other platforms retain the existing POSIX detached-shell fixture.

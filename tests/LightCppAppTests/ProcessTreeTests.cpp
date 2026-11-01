@@ -13,10 +13,10 @@
 // id (the process it names is gone) and a reused one (the id now belongs to
 // somebody else, possibly inside the very subtree being walked).
 //
-// No real process is started. This machine cannot create QProcess' pipes at
-// all ("CreateFile failed. (all pipe instances are in use.)"), so a test that
-// needed a live child could not run here — the same reason ProcessShutdown
-// takes callables instead of QProcess pointers.
+// The live-process regression uses the native process-creation API on
+// Windows. QProcess' pipe setup is unavailable in some test environments
+// ("CreateFile failed. (all pipe instances are in use.)"), even though the
+// process table and native process APIs remain usable.
 
 #include "LightCpp/App/ProcessTree.hpp"
 
@@ -25,6 +25,13 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QProcess>
+
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -100,22 +107,49 @@ QString testChildImage()
 
 unsigned long startShellWithProgram()
 {
-    qint64 pid = 0;
 #ifdef Q_OS_WIN
-    // Launch the workload independently instead of as cmd's foreground
-    // command. This test needs a child that survives shell termination.
-    const bool started = QProcess::startDetached(
-        QStringLiteral("cmd.exe"),
-        {QStringLiteral("/k"),
-         QStringLiteral("start \"\" /b \"%SystemRoot%\\System32\\ping.exe\" -n 30 127.0.0.1 >nul")},
-        QDir::tempPath(), &pid);
+    // Avoid QProcess here: its pipe setup can fail on otherwise usable
+    // Windows test runners. Create the persistent shell directly, then have
+    // cmd's START builtin launch ping as an independent process.
+    wchar_t systemDirectory[MAX_PATH]{};
+    const UINT systemDirectoryLength =
+        GetSystemDirectoryW(systemDirectory, MAX_PATH);
+    if (systemDirectoryLength == 0 ||
+        systemDirectoryLength >= MAX_PATH) {
+        return 0;
+    }
+
+    std::wstring commandProcessor(systemDirectory,
+                                  systemDirectoryLength);
+    commandProcessor += L"\\cmd.exe";
+    std::wstring commandLine =
+        L"\"" + commandProcessor +
+        L"\" /d /k start \"\" /b \"%SystemRoot%\\System32\\ping.exe\" "
+        L"-n 30 127.0.0.1 >nul";
+    const std::wstring workingDirectory =
+        QDir::toNativeSeparators(QDir::tempPath()).toStdWString();
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(commandProcessor.c_str(), commandLine.data(),
+                        nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                        nullptr, workingDirectory.c_str(),
+                        &startup, &process)) {
+        return 0;
+    }
+
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return static_cast<unsigned long>(process.dwProcessId);
 #else
+    qint64 pid = 0;
     const bool started = QProcess::startDetached(
         QStringLiteral("/bin/sh"),
         {QStringLiteral("-c"), QStringLiteral("sleep 30 & wait")},
         QDir::tempPath(), &pid);
-#endif
     return started && pid > 0 ? static_cast<unsigned long>(pid) : 0;
+#endif
 }
 /// The pid of `imageLower` among `rootPid`'s descendants, waiting up to
 /// `timeoutMs` for it to appear; 0 when it never does.
