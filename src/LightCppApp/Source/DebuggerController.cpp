@@ -147,9 +147,14 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
     }
 
     exePath_ = exePath;
+    sessionBackend_ = backend_;
     paused_ = false;
     executionCommandPending_ = false;
     startFailed_ = false;
+    outputBuffer_.clear();
+    pendingCdbBreakpoint_ = false;
+    pendingCommands_.clear();
+    armed_.clear();
     const QList<DebugBreakpoint> toPlant = uniqueLocations(breakpoints);
     pendingCommands_ = startCommands(toPlant);
 
@@ -195,6 +200,11 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
         running_ = false;
         paused_ = false;
         executionCommandPending_ = false;
+        outputBuffer_.clear();
+        pendingCdbBreakpoint_ = false;
+        pendingCommands_.clear();
+        armed_.clear();
+        sessionBackend_ = Backend::Unknown;
         emit stopped();
     });
 
@@ -203,7 +213,7 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
                      .arg(backendName(), QDir::toNativeSeparators(exePath)));
 
     QStringList arguments;
-    switch (backend_) {
+    switch (sessionBackend_) {
     case Backend::Gdb:
         arguments << QStringLiteral("--interpreter=mi2")
                   << QStringLiteral("--quiet") << exePath;
@@ -275,7 +285,11 @@ void DebuggerController::stop()
     running_ = false;
     paused_ = false;
     executionCommandPending_ = false;
+    pendingCommands_.clear();
+    outputBuffer_.clear();
+    pendingCdbBreakpoint_ = false;
     armed_.clear();  // the debugger took the breakpoints with it
+    sessionBackend_ = Backend::Unknown;
     emit logLine(tr("--- debug session ended ---"));
     // The finished handler above is disconnected, so a manual stop would
     // otherwise never announce its own end — anything keyed on stopped()
@@ -297,6 +311,10 @@ void DebuggerController::discardProcess()
     }
     process_->deleteLater();
     process_ = nullptr;
+    outputBuffer_.clear();
+    pendingCdbBreakpoint_ = false;
+    pendingCommands_.clear();
+    sessionBackend_ = Backend::Unknown;
 }
 
 bool DebuggerController::abortStart()
@@ -334,7 +352,7 @@ void DebuggerController::addBreakpoint(const DebugBreakpoint& bp)
             return;
         }
     }
-    writeCommand(addBreakpointCommand(backend_, bp));
+    writeCommand(addBreakpointCommand(sessionBackend_, bp));
     armed_.append(bp);
 }
 
@@ -350,7 +368,7 @@ void DebuggerController::removeBreakpoint(const DebugBreakpoint& bp)
         }
         armed_.removeAt(i);
         for (const QString& command :
-             removeBreakpointCommands(backend_, bp, armed_)) {
+             removeBreakpointCommands(sessionBackend_, bp, armed_)) {
             writeCommand(command);
         }
         return;
@@ -362,11 +380,11 @@ void DebuggerController::removeBreakpoint(const DebugBreakpoint& bp)
 void DebuggerController::cont()
 {
     if (isRunning() && paused_ && !executionCommandPending_) {
-        if (backend_ == Backend::Gdb) {
+        if (sessionBackend_ == Backend::Gdb) {
             executionCommandPending_ = true;
         }
         writeCommand(contCommand());
-        if (backend_ != Backend::Gdb) {
+        if (sessionBackend_ != Backend::Gdb) {
             // LLDB and cdb do not currently expose a parsed async MI-style
             // running record, so retain their optimistic state transition.
             paused_ = false;
@@ -495,7 +513,7 @@ QStringList DebuggerController::startCommands(
     const QList<DebugBreakpoint>& breakpoints) const
 {
     QStringList commands;
-    switch (backend_) {
+    switch (sessionBackend_) {
     case Backend::Gdb:
         // Negotiate the charset before anything else: the rest of this batch
         // carries file paths as UTF-8 bytes, and GDB otherwise decodes its
@@ -543,7 +561,7 @@ QStringList DebuggerController::startCommands(
 
 QString DebuggerController::contCommand() const
 {
-    switch (backend_) {
+    switch (sessionBackend_) {
     case Backend::Gdb:  return QStringLiteral("-exec-continue");
     case Backend::Cdb:  return QStringLiteral("g");
     default:            return QStringLiteral("continue");
@@ -552,7 +570,7 @@ QString DebuggerController::contCommand() const
 
 QString DebuggerController::stepOverCommand() const
 {
-    switch (backend_) {
+    switch (sessionBackend_) {
     case Backend::Gdb:  return QStringLiteral("-exec-next");
     case Backend::Cdb:  return QStringLiteral("p");
     default:            return QStringLiteral("thread step-over");
@@ -561,7 +579,7 @@ QString DebuggerController::stepOverCommand() const
 
 QString DebuggerController::stepIntoCommand() const
 {
-    switch (backend_) {
+    switch (sessionBackend_) {
     case Backend::Gdb:  return QStringLiteral("-exec-step");
     case Backend::Cdb:  return QStringLiteral("t");
     default:            return QStringLiteral("thread step-in");
@@ -570,7 +588,7 @@ QString DebuggerController::stepIntoCommand() const
 
 QString DebuggerController::stepOutCommand() const
 {
-    switch (backend_) {
+    switch (sessionBackend_) {
     case Backend::Gdb:  return QStringLiteral("-exec-finish");
     case Backend::Cdb:  return QStringLiteral("gu");
     default:            return QStringLiteral("thread step-out");
@@ -579,7 +597,7 @@ QString DebuggerController::stepOutCommand() const
 
 QString DebuggerController::quitCommand() const
 {
-    switch (backend_) {
+    switch (sessionBackend_) {
     case Backend::Gdb:  return QStringLiteral("-gdb-exit");
     case Backend::Cdb:  return QStringLiteral("q");
     default:            return QStringLiteral("quit");
@@ -603,7 +621,7 @@ void DebuggerController::onReadyRead()
     // path and break the frame->editor match. cdb reports in the console
     // codepage, which is exactly what fromLocal8Bit decodes.
     const bool utf8Output =
-        backend_ == Backend::Gdb || backend_ == Backend::Lldb;
+        sessionBackend_ == Backend::Gdb || sessionBackend_ == Backend::Lldb;
     const auto decode = [utf8Output](const QByteArray& bytes) {
         return utf8Output ? QString::fromUtf8(bytes)
                           : QString::fromLocal8Bit(bytes);
@@ -632,7 +650,7 @@ void DebuggerController::onReadyRead()
 void DebuggerController::handleLine(const QString& line)
 {
     emit logLine(line);
-    switch (backend_) {
+    switch (sessionBackend_) {
     case Backend::Gdb:  handleGdbLine(line); break;
     case Backend::Lldb: handleLldbLine(line); break;
     case Backend::Cdb:  handleCdbLine(line); break;
