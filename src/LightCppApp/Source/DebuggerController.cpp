@@ -164,6 +164,8 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
     pendingCdbBreakpoint_ = false;
     pendingCommands_.clear();
     armed_.clear();
+    pendingBreakpointOperations_.clear();
+    nextMiToken_ = 1;
     const QList<DebugBreakpoint> toPlant = uniqueLocations(breakpoints);
     pendingCommands_ = startCommands(toPlant);
 
@@ -213,6 +215,7 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
         pendingCdbBreakpoint_ = false;
         pendingCommands_.clear();
         armed_.clear();
+        pendingBreakpointOperations_.clear();
         sessionBackend_ = Backend::Unknown;
         emit stopped();
     });
@@ -298,6 +301,7 @@ void DebuggerController::stop()
     outputBuffer_.clear();
     pendingCdbBreakpoint_ = false;
     armed_.clear();  // the debugger took the breakpoints with it
+    pendingBreakpointOperations_.clear();
     sessionBackend_ = Backend::Unknown;
     emit logLine(tr("--- debug session ended ---"));
     // The finished handler above is disconnected, so a manual stop would
@@ -337,6 +341,7 @@ bool DebuggerController::abortStart()
     executionCommandPending_ = false;
     pendingCommands_.clear();
     armed_.clear();  // nothing was planted if the debugger never came up
+    pendingBreakpointOperations_.clear();
     emit logLine(tr("debugger did not start"));
     emit stopped();
     return false;
@@ -361,6 +366,23 @@ void DebuggerController::addBreakpoint(const DebugBreakpoint& bp)
             return;
         }
     }
+    if (sessionBackend_ == Backend::Gdb) {
+        // MI commands are asynchronous. Do not advertise the breakpoint as
+        // armed until GDB acknowledges this exact command token.
+        for (auto it = pendingBreakpointOperations_.cbegin();
+             it != pendingBreakpointOperations_.cend(); ++it) {
+            if (it.value().kind == PendingBreakpointKind::Add
+                && breakpointLocation(it.value().breakpoint) == key) {
+                return;
+            }
+        }
+        const quint64 token = nextMiToken_++;
+        pendingBreakpointOperations_.insert(
+            token, {PendingBreakpointKind::Add, bp});
+        writeCommand(QString::number(token)
+                     + addBreakpointCommand(sessionBackend_, bp));
+        return;
+    }
     writeCommand(addBreakpointCommand(sessionBackend_, bp));
     armed_.append(bp);
 }
@@ -374,6 +396,19 @@ void DebuggerController::removeBreakpoint(const DebugBreakpoint& bp)
     for (qsizetype i = 0; i < armed_.size(); ++i) {
         if (breakpointLocation(armed_.at(i)) != key) {
             continue;
+        }
+        if (sessionBackend_ == Backend::Gdb) {
+            // Keep the old state until GDB confirms the location was cleared.
+            const quint64 token = nextMiToken_++;
+            const QStringList commands =
+                removeBreakpointCommands(sessionBackend_, bp, armed_);
+            if (commands.isEmpty()) {
+                return;
+            }
+            pendingBreakpointOperations_.insert(
+                token, {PendingBreakpointKind::Remove, bp});
+            writeCommand(QString::number(token) + commands.first());
+            return;
         }
         armed_.removeAt(i);
         for (const QString& command :
@@ -719,6 +754,45 @@ void DebuggerController::handleGdbLine(const QString& line)
         }
         emit paused(file, lineNumber);
         return;
+    }
+    // Dynamic breakpoint commands carry an MI token. Only the matching
+    // ^done commits the controller's state; ^error leaves the prior state
+    // untouched so the user can retry without the UI lying about the result.
+    static const QRegularExpression resultPattern(
+        QStringLiteral("^(\\d+)\\^(done|error)(?:,|$)"));
+    const auto resultMatch = resultPattern.match(line);
+    if (resultMatch.hasMatch()) {
+        bool tokenOk = false;
+        const quint64 token = resultMatch.captured(1).toULongLong(&tokenOk);
+        auto pending = tokenOk ? pendingBreakpointOperations_.find(token)
+                               : pendingBreakpointOperations_.end();
+        if (pending != pendingBreakpointOperations_.end()) {
+            const PendingBreakpointOperation operation = pending.value();
+            pendingBreakpointOperations_.erase(pending);
+            if (resultMatch.captured(2) == QLatin1String("done")) {
+                const QString key = breakpointLocation(operation.breakpoint);
+                if (operation.kind == PendingBreakpointKind::Add) {
+                    bool alreadyArmed = false;
+                    for (const DebugBreakpoint& item : std::as_const(armed_)) {
+                        alreadyArmed = alreadyArmed
+                            || breakpointLocation(item) == key;
+                    }
+                    if (!alreadyArmed) {
+                        armed_.append(operation.breakpoint);
+                    }
+                } else {
+                    for (qsizetype i = 0; i < armed_.size(); ++i) {
+                        if (breakpointLocation(armed_.at(i)) == key) {
+                            armed_.removeAt(i);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                emit logLine(tr("debugger breakpoint command failed: %1").arg(line));
+            }
+            return;
+        }
     }
     if (line.startsWith(QLatin1String("^error"))) {
         executionCommandPending_ = false;

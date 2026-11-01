@@ -26,6 +26,7 @@
 #pragma once
 
 #include <QObject>
+#include <QHash>
 #include <QProcess>
 #include <QString>
 #include <QStringList>
@@ -131,6 +132,12 @@ private:
     QString stepOutCommand() const;
     QString quitCommand() const;
 
+    enum class PendingBreakpointKind { Add, Remove };
+    struct PendingBreakpointOperation {
+        PendingBreakpointKind kind;
+        DebugBreakpoint breakpoint;
+    };
+
     QProcess* process_ = nullptr;
     QString debuggerPath_;
     Backend backend_ = Backend::Unknown;  // selected for the next session
@@ -153,6 +160,9 @@ private:
     /// means re-arming these afterwards; without the list the removal would
     /// have to be "clear everything", which is what used to happen.
     QList<DebugBreakpoint> armed_;
+    /// GDB changes are committed to armed_ only after the matching MI result.
+    QHash<quint64, PendingBreakpointOperation> pendingBreakpointOperations_;
+    quint64 nextMiToken_ = 1;
 };
 
 // --- breakpoint dialects ---------------------------------------------------

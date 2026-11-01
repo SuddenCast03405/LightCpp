@@ -165,3 +165,11 @@
 - CI policy changed: push and pull-request events run only MSYS2 UCRT64. A manual `workflow_dispatch` checkbox named `full_validation` enables MSVC 2022, MSVC 2026, Linux and macOS jobs alongside MSYS2. The MSVC 2026 application artifact remains exclusive to the MSVC 2026 job and is produced during full validation.
 - Previous run results: Linux and macOS passed; MSYS2 build passed with the one test failure above. No MSVC application artifact was produced because the MSVC 2026 build stopped before CTest/upload.
 - Validation of these corrections is pending the next Actions run.
+
+
+## GDB breakpoint acknowledgement and state consistency (2026-11-01)
+
+- Dynamic GDB breakpoint insert/remove commands now carry MI tokens and are tracked until their matching `^done` or `^error` response arrives.
+- The controller commits additions/removals to `armed_` only on `^done`. A rejected command logs a breakpoint-specific failure and preserves the prior state, allowing a retry. Duplicate pending insertions are suppressed.
+- LLDB and cdb retain their existing console-command behavior; this acknowledgement change is specific to the MI protocol.
+- CI validation is pending. The daily workflow remains MSYS2 UCRT64 only; the full compiler/platform matrix remains manual.
