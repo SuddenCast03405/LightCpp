@@ -275,7 +275,16 @@ private:
                     parsed.config = values;
                 } else if (op == QLatin1String("-=")) {
                     for (const QString& value : values) {
-                        parsed.config.removeAll(value, Qt::CaseInsensitive);
+                        // QList::removeAll has no case-sensitivity overload in Qt 6.
+                        // Remove matching CONFIG entries explicitly, from the end so
+                        // duplicate values are handled without invalidating indices.
+                        for (qsizetype index = parsed.config.size(); index > 0; --index) {
+                            const qsizetype current = index - 1;
+                            if (parsed.config.at(current).compare(
+                                    value, Qt::CaseInsensitive) == 0) {
+                                parsed.config.removeAt(current);
+                            }
+                        }
                     }
                 } else {
                     parsed.config.append(values);

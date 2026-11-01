@@ -173,3 +173,12 @@
 - The controller commits additions/removals to `armed_` only on `^done`. A rejected command logs a breakpoint-specific failure and preserves the prior state, allowing a retry. Duplicate pending insertions are suppressed.
 - LLDB and cdb retain their existing console-command behavior; this acknowledgement change is specific to the MI protocol.
 - Added fake-GDB regressions for rejected insert and remove commands, verifying the same operation can be retried with a new token. CI validation is pending. The daily workflow remains MSYS2 UCRT64 only; the full compiler/platform matrix remains manual.
+
+
+## Qt qmake plugin build regression (2026-11-01)
+
+- Reviewed branch `check/feature-audit-2026-11-01` and its PR report against the post-merge `master`. The report correctly identified a real Qt 6 compile error in `QtCppBackend.cpp`: `QStringList::removeAll(value, Qt::CaseInsensitive)` is not a supported overload. The local fix mentioned in the report had not been included in the branch/merge result.
+- The first post-merge MSYS2 UCRT64 run `41308103387` reproduced this exact compiler error at the QtCppPlugin target; the application build stopped before CTest, so this was a blocking regression and test results are not yet available.
+- Fixed CONFIG -= handling by explicitly comparing entries with `Qt::CaseInsensitive` and removing matches from the end of the list. This preserves qmake's case-insensitive removal semantics and avoids relying on a nonexistent Qt overload.
+- The audit report's historical PluginManagerTests compile warnings were also checked against current `master`: `TrackedPlugin` is defined outside the Windows-only section and the Dev-C++ fixture helpers are correctly guarded, so those specific reported line errors do not describe the current source.
+- Validation of the Qt fix is pending the next MSYS2 CI build/CTest run. Do not treat the merge as verified until that run completes successfully.
