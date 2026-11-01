@@ -32,6 +32,16 @@ DebuggerController::Backend backendForPath(const QString& exePath)
 
 /// MI string values escape backslashes and quotes; this undoes the common
 /// subset GDB actually emits for file paths.
+QString escapeMiString(const QString& value)
+{
+    QString escaped = value;
+    escaped.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+    escaped.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+    return escaped;
+}
+
+/// MI string values escape backslashes and quotes; this undoes the common
+/// subset GDB actually emits for file paths.
 QString unescapeMi(const QString& value)
 {
     QString out;
@@ -481,7 +491,9 @@ QStringList removeBreakpointCommands(DebuggerController::Backend backend,
     case DebuggerController::Backend::Gdb:
         // GDB's console has delete-by-location, so one command is enough and
         // no other breakpoint is touched.
-        return {QStringLiteral("clear %1").arg(breakpointLocation(target))};
+        return {QStringLiteral("-interpreter-exec console \"%1\"")
+                .arg(escapeMiString(QStringLiteral("clear %1")
+                                        .arg(breakpointLocation(target))))};
     case DebuggerController::Backend::Cdb:
     case DebuggerController::Backend::Lldb: {
         // Neither backend can delete one breakpoint from a location, and
