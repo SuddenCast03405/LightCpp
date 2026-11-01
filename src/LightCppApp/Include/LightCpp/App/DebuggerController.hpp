@@ -133,7 +133,8 @@ private:
 
     QProcess* process_ = nullptr;
     QString debuggerPath_;
-    Backend backend_ = Backend::Unknown;
+    Backend backend_ = Backend::Unknown;  // selected for the next session
+    Backend sessionBackend_ = Backend::Unknown;  // immutable while process_ is live
     QString exePath_;
     bool running_ = false;       // start() succeeded, stop() not yet
     /// errorOccurred(FailedToStart) is delivered from inside start(), so the
