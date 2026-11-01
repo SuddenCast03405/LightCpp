@@ -49,14 +49,13 @@ GitClient::GitClient(QObject* parent)
         const QString text = GitCommandPolicy::timeoutMessage(
             job.title, job.kind, GitCommandPolicy::timeoutMsFor(job.kind));
         if (job.feedsStatus) {
-            // The panel is waiting for this answer, and silence is what made
-            // the symptom invisible: give it the empty summary (the same shape
-            // as "not a repository") and put the reason in the log through the
-            // log-only signal. Not commandFinished: the window answers that one
-            // with another refresh, so a wedged git would be killed once a
-            // minute for the rest of the session.
-            emit statusReady(LightCpp::Project::GitStatusSummary{});
-            emit statusTimedOut(text);
+            // A refresh belongs to the directory it was queued for. If the
+            // user switched projects while git was running, discard both the
+            // answer and its diagnostic rather than repainting the new project.
+            if (job.workingDirectory == workingDirectory_) {
+                emit statusReady(LightCpp::Project::GitStatusSummary{});
+                emit statusTimedOut(text);
+            }
         } else {
             emit commandFinished(job.title, text, -1);
         }
@@ -123,7 +122,7 @@ void GitClient::run(const QStringList& arguments, const QString& title,
         return;
     }
     queue_.append(Job{arguments, title, feedsStatus,
-                      GitCommandPolicy::kindOf(arguments)});
+                      GitCommandPolicy::kindOf(arguments), workingDirectory_});
     startNext();
 }
 
@@ -147,8 +146,9 @@ void GitClient::startNext()
                 this, [this](int code, QProcess::ExitStatus status) {
             if (process_ == nullptr) return;
             watchdog_->stop();
-            const QString title = current_.title;
-            const bool feedsStatus = current_.feedsStatus;
+            const Job job = current_;
+            const QString title = job.title;
+            const bool feedsStatus = job.feedsStatus;
             current_ = Job{};
             if (title.isEmpty()) {
                 // The watchdog already reported this job as timed out; the
@@ -162,12 +162,14 @@ void GitClient::startNext()
             const int exitCode = (status == QProcess::NormalExit) ? code : -1;
 
             if (feedsStatus) {
-                // A failing `git status` is how "this is not a repository" is
-                // reported — an empty answer, not an error to print.
-                emit statusReady(exitCode == 0
-                                     ? LightCpp::Project::parseGitStatus(
-                                           stdoutText.toUtf8())
-                                     : LightCpp::Project::GitStatusSummary{});
+                // Do not let a response from a previous project overwrite
+                // the status of the directory the window is showing now.
+                if (job.workingDirectory == workingDirectory_) {
+                    emit statusReady(exitCode == 0
+                                         ? LightCpp::Project::parseGitStatus(
+                                               stdoutText.toUtf8())
+                                         : LightCpp::Project::GitStatusSummary{});
+                }
             } else {
                 QString text = stdoutText;
                 if (!stderrText.isEmpty()) {
@@ -186,10 +188,21 @@ void GitClient::startNext()
                 return;
             }
             watchdog_->stop();
-            const QString title = current_.title;
+            const Job job = current_;
+            const QString error = process_->errorString();
             current_ = Job{};
-            emit commandFinished(title, process_->errorString(), -1);
-            startNext();
+            if (job.feedsStatus) {
+                if (job.workingDirectory == workingDirectory_) {
+                    emit statusReady(LightCpp::Project::GitStatusSummary{});
+                    emit statusFailed(error);
+                }
+            } else {
+                emit commandFinished(job.title, error, -1);
+            }
+            // FailedToStart may be delivered synchronously from start() on
+            // Windows. Do not reuse QProcess until its start() call has
+            // unwound; queued jobs are pumped on the next event-loop turn.
+            QTimer::singleShot(0, this, [this] { startNext(); });
         });
     }
 
@@ -232,7 +245,7 @@ void GitClient::startNext()
     env.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
     env.insert(QStringLiteral("GIT_TERMINAL_PROMPT"), QStringLiteral("0"));
     process_->setProcessEnvironment(env);
-    process_->setWorkingDirectory(workingDirectory_);
+    process_->setWorkingDirectory(current_.workingDirectory);
     // Non-ASCII file names arrive quoted in octal escapes ("\346\265\213…")
     // unless quotepath is off; the parser and the log pane want the real
     // names (the output is decoded as UTF-8 further up).
