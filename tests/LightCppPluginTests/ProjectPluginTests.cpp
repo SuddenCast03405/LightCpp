@@ -594,12 +594,15 @@ TEST(ProjectPlugins, QtProUsesPerConfigurationShadowBuilds)
     } else {
         // Build needs both halves: qmake to write the Makefile and make to
         // drive it. Either one missing declines the build with a reason.
-        EXPECT_FALSE(anyToolInstalled({QStringLiteral("qmake6"),
-                                       QStringLiteral("qmake-qt6"),
-                                       QStringLiteral("qmake"),
-                                       QStringLiteral("make"),
-                                       QStringLiteral("gmake"),
-                                       QStringLiteral("mingw32-make")}));
+        const bool qmakeInstalled =
+            anyToolInstalled({QStringLiteral("qmake6"),
+                              QStringLiteral("qmake-qt6"),
+                              QStringLiteral("qmake")});
+        const bool makeInstalled =
+            anyToolInstalled({QStringLiteral("make"),
+                              QStringLiteral("gmake"),
+                              QStringLiteral("mingw32-make")});
+        EXPECT_TRUE(!qmakeInstalled || !makeInstalled);
     }
 }
 

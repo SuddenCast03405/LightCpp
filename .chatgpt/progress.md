@@ -182,3 +182,9 @@
 - Fixed CONFIG -= handling by explicitly comparing entries with `Qt::CaseInsensitive` and removing matches from the end of the list. This preserves qmake's case-insensitive removal semantics and avoids relying on a nonexistent Qt overload.
 - The audit report's historical PluginManagerTests compile warnings were also checked against current `master`: `TrackedPlugin` is defined outside the Windows-only section and the Dev-C++ fixture helpers are correctly guarded, so those specific reported line errors do not describe the current source.
 - Validation of the Qt fix is pending the next MSYS2 CI build/CTest run. Do not treat the merge as verified until that run completes successfully.
+
+## Qt qmake test environment assertion (2026-11-01)
+
+- The post-fix MSYS2 UCRT64 build completed successfully, but CTest reported 652/653 passing. The sole failure, `ProjectPlugins.QtProUsesPerConfigurationShadowBuilds`, came from an incorrect test assumption: it required all qmake and make executables to be absent when build steps were unavailable. The CI image has a make tool but no qmake, which is a valid reason for the backend to decline the build.
+- Corrected the assertion to check the actual contract: unavailable build steps are expected when either qmake or make is missing. This keeps the test meaningful on partially provisioned toolchains instead of requiring both tool families to be wholly absent.
+- A new MSYS2 UCRT64 build/CTest run is required to verify this correction. Full platform validation remains manual by workflow policy.
