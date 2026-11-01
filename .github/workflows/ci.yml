@@ -1,9 +1,8 @@
 name: CI
 
-# Validate the native Windows, Linux and macOS builds. The Windows job
-# exercises MSYS2 UCRT64 and the Windows-only MSVC integration; the POSIX jobs
-# exercise the separate process backend, host compiler discovery and iconv
-# text conversion.
+# Validate native MSVC, MSYS2 UCRT64, Linux and macOS builds. The two Windows
+# jobs deliberately use different compiler families: Visual Studio/MSVC and
+# MinGW GCC. POSIX jobs exercise the separate process backend and iconv.
 #
 # Scope: master only. main is a stub branch (README + LICENSE) and is not
 # built here.
@@ -86,6 +85,60 @@ jobs:
           path: |
             build/ci/Testing/Temporary/LastTest.log
             build/ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  msvc-2022:
+    name: MSVC 2022 / Qt 6 / Debug / ctest
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+
+      - name: Install LLVM development headers
+        shell: pwsh
+        run: choco install llvm --yes --no-progress
+
+      - name: Install Qt 6 for MSVC 2022
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+
+      - name: Vendor third-party sources
+        shell: pwsh
+        run: cmake -P _fetch_deps.cmake
+
+      - name: Configure with Visual Studio 2022
+        shell: pwsh
+        run: >-
+          cmake -S . -B build/msvc2022
+          -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+          -DLLVM_ROOT="C:/Program Files/LLVM"
+          -DLIGHTCPP_DEPLOY_QT=OFF
+
+      - name: Build with MSVC
+        shell: pwsh
+        run: cmake --build build/msvc2022 --config Debug --parallel 2
+
+      - name: CTest with MSVC
+        shell: pwsh
+        run: ctest --test-dir build/msvc2022 -C Debug --output-on-failure --no-tests=error
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Upload MSVC CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-msvc
+          path: |
+            build/msvc2022/Testing/Temporary/LastTest.log
+            build/msvc2022/Testing/Temporary/LastTestsFailed.log
           if-no-files-found: ignore
           retention-days: 14
 

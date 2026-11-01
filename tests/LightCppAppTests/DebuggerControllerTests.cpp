@@ -131,7 +131,7 @@ struct FakeGdb {
             "while IFS= read -r command; do\n"
             "  case \"$command\" in\n"
             "    -exec-run) printf '%s\\n' '*stopped,reason=\"breakpoint-hit\",frame={file=\"main.cpp\",line=\"3\"}' ;;\n"
-            "    -exec-continue) printf '%s\\n' '*running,thread-id=\"all\"' '*running,thread-id=\"all\"' ;;\n"
+            "    -exec-continue) printf '%s\\n' 'continue-command' '*running,thread-id=\"all\"' '*running,thread-id=\"all\"' ;;\n"
             "    -gdb-exit) exit 0 ;;\n"
             "  esac\n"
             "done\n";
