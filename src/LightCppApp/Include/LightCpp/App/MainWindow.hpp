@@ -456,6 +456,10 @@ private:
     void updateProjectActions();
     /// Name for the window title and log lines.
     [[nodiscard]] QString projectDisplayName() const;
+    /// What Run Project starts for the open project: a backend's runProgram
+    /// when it names one (an interpreter), else the built output. Empty when
+    /// no project is open or the backend produced nothing runnable yet.
+    [[nodiscard]] QString projectRunTarget() const;
     /// The directory the project lives in — what the Explorer shows while a
     /// project is open. Falls back to the descriptor's own directory.
     [[nodiscard]] QString projectRootDirectory() const;
@@ -490,7 +494,10 @@ private:
     };
     [[nodiscard]] BuildTarget resolveBuildTarget(CodeEditor* editor) const;
     /// Launch `exePath`, capturing its output into the Program Output channel.
-    void startProgram(const QString& exePath, const QString& workDir);
+    /// `arguments` reach the program in every output mode (captured, console
+    /// pauser, embedded/external terminal).
+    void startProgram(const QString& exePath, const QString& workDir,
+                      const QStringList& arguments = {});
     /// Create the embedded program runner (a merged-channel QProcess whose
     /// output goes through the run decoder) exactly once. Used both by the
     /// captured Program Output mode and by embedded terminal modes.
@@ -530,12 +537,14 @@ private:
     /// Launch `exePath` through ConsolePauser.exe in its own console window
     /// (preferences run.output = "consolePauser"). Nothing is captured; the
     /// console owns the program's input and output.
-    void startWithConsolePauser(const QString& exePath, const QString& workDir);
+    void startWithConsolePauser(const QString& exePath, const QString& workDir,
+                                const QStringList& arguments);
     /// Launch `exePath` inside a user-defined terminal from the editable
     /// list (preferences run.output = a terminal id). Embedded terminals are
     /// captured by the Program Output channel; non-embedded ones open their
     /// own console window. Either way the IDE keeps no input field.
-    void startInTerminal(const QString& exePath, const QString& workDir);
+    void startInTerminal(const QString& exePath, const QString& workDir,
+                         const QStringList& arguments);
     /// The system's default console code page as an iconv name ("GBK" on
     /// zh-CN Windows). Console-backed run modes compile the program's
     /// narrow literals for it, since their output lands in a real console

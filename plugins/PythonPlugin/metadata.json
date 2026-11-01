@@ -1,0 +1,6 @@
+{
+    "name": "PythonProject",
+    "version": "1.0.0",
+    "publisher": "LightCpp",
+    "description": "Python support: reads pyproject.toml, setup.py or requirements.txt, checks the sources with compileall and runs the entry script with the found interpreter."
+}

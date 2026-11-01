@@ -5340,15 +5340,50 @@ void MainWindow::onRunProject()
             !preferred.isEmpty()) {
             lastProjectExe_ = preferred;
         }
+    } else if (projectKind_ == ProjectKind::DevCpp && hasDevProject_
+               && pluginManager_ != nullptr) {
+        // The backend knows the selected configuration's output layout (Qt
+        // Debug/Release directories, Cargo profiles, ...). Ask it instead of
+        // holding on to the snapshot taken at open time.
+        if (auto* backend = pluginManager_->backendFor(devSummary_.filePath)) {
+            const QString resolved = backend->outputPath(currentBuildConfigurationName());
+            if (!resolved.isEmpty()) {
+                lastProjectExe_ = resolved;
+            }
+        }
     }
-    if (lastProjectExe_.isEmpty() || !QFileInfo::exists(lastProjectExe_)) {
+    const QString target = projectRunTarget();
+    if (target.isEmpty() || !QFileInfo::exists(target)) {
         outputPanel_->showChannel(OutputPanel::ChannelBuild);
         outputPanel_->appendBuildOutput(
             tr("Nothing to run yet — build the project first (%1).")
                 .arg(actBuildProject_->shortcut().toString()));
         return;
     }
-    startProgram(lastProjectExe_, QFileInfo(lastProjectExe_).absolutePath());
+    // A backend that names a runner (an interpreter) also names its working
+    // set: the project root, so relative paths in the script resolve the way
+    // the user expects. Compiled binaries run next to their output.
+    QStringList arguments;
+    QString workDir = QFileInfo(target).absolutePath();
+    if (projectKind_ == ProjectKind::DevCpp && hasDevProject_) {
+        arguments = devSummary_.runArguments;
+        if (!devSummary_.projectDir.isEmpty()) {
+            workDir = devSummary_.projectDir;
+        }
+    }
+    startProgram(target, workDir, arguments);
+}
+
+QString MainWindow::projectRunTarget() const
+{
+    if (projectKind_ == ProjectKind::CMake) {
+        return lastProjectExe_;
+    }
+    if (projectKind_ == ProjectKind::DevCpp && hasDevProject_) {
+        return devSummary_.runProgram.isEmpty() ? lastProjectExe_
+                                                : devSummary_.runProgram;
+    }
+    return {};
 }
 
 void MainWindow::openProjectFile(const QString& path, bool showInExplorer)
@@ -5692,9 +5727,19 @@ void MainWindow::finishProjectBuild(bool succeeded, int exitCode)
                 LightCpp::Project::buildDirectory(*cmakeProject_, buildConfiguration()));
         } else if (hasDevProject_) {
             lastProjectExe_ = devSummary_.outputPath;
+            if (pluginManager_ != nullptr) {
+                if (auto* backend = pluginManager_->backendFor(devSummary_.filePath)) {
+                    const QString resolved =
+                        backend->outputPath(currentBuildConfigurationName());
+                    if (!resolved.isEmpty()) {
+                        lastProjectExe_ = resolved;
+                    }
+                }
+            }
         }
-        if (!lastProjectExe_.isEmpty()) {
-            outputPanel_->appendBuildOutput(tr("Run Project will start: %1").arg(lastProjectExe_));
+        const QString runTarget = projectRunTarget();
+        if (!runTarget.isEmpty()) {
+            outputPanel_->appendBuildOutput(tr("Run Project will start: %1").arg(runTarget));
         }
     } else {
         outputPanel_->appendBuildOutput(
@@ -5710,8 +5755,14 @@ void MainWindow::finishProjectBuild(bool succeeded, int exitCode)
 void MainWindow::updateProjectActions()
 {
     const bool hasProject = (projectKind_ != ProjectKind::None);
-    const bool hasRunTarget = hasProject && !lastProjectExe_.isEmpty()
-                              && QFileInfo::exists(lastProjectExe_);
+    // A library project (static/dynamic) has a build output but nothing to
+    // run; a backend says so with producesExecutable, and Run stays off even
+    // after the output appears on disk.
+    const bool runnable = projectKind_ == ProjectKind::CMake
+                          || (hasDevProject_ && devSummary_.producesExecutable);
+    const QString runTarget = projectRunTarget();
+    const bool hasRunTarget = hasProject && runnable && !runTarget.isEmpty()
+                              && QFileInfo::exists(runTarget);
     if (actConfigureProject_ != nullptr) {
         actConfigureProject_->setEnabled(projectKind_ == ProjectKind::CMake);
     }
@@ -6669,7 +6720,8 @@ QProcess* MainWindow::ensureTerminalRunner()
     return terminalRunner_;
 }
 
-void MainWindow::startProgram(const QString& exePath, const QString& workDir)
+void MainWindow::startProgram(const QString& exePath, const QString& workDir,
+                              const QStringList& arguments)
 {
     if (exePath.isEmpty() || !QFileInfo::exists(exePath)) {
         outputPanel_->appendProgramOutput(
@@ -6680,11 +6732,11 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
     // its own console via ConsolePauser.exe, or inside a terminal from the
     // editable list (embedded: captured, non-embedded: its own console).
     if (programOutputMode_ == QLatin1String("consolePauser")) {
-        startWithConsolePauser(exePath, workDir);
+        startWithConsolePauser(exePath, workDir, arguments);
         return;
     }
     if (programOutputMode_ != QLatin1String("program")) {
-        startInTerminal(exePath, workDir);
+        startInTerminal(exePath, workDir, arguments);
         return;
     }
     QProcess* runner = ensureProgramRunner();
@@ -6713,7 +6765,7 @@ void MainWindow::startProgram(const QString& exePath, const QString& workDir)
     outputPanel_->showChannel(OutputPanel::ChannelProgram);
     outputPanel_->appendProgramOutput(
         tr("--- Running: %1 ---").arg(QFileInfo(exePath).absoluteFilePath()));
-    runner_->start(exePath, {});
+    runner_->start(exePath, arguments);
     updateRunActionStates();
 }
 void MainWindow::startTerminalProgramWatch(const QString& exePath)
@@ -6823,12 +6875,14 @@ bool MainWindow::startDetachedInNewConsole(const QString& program,
 }
 
 void MainWindow::startWithConsolePauser(const QString& exePath,
-                                        const QString& workDir)
+                                        const QString& workDir,
+                                        const QStringList& arguments)
 {
     outputPanel_->showChannel(OutputPanel::ChannelProgram);
 #ifndef Q_OS_WIN
     Q_UNUSED(exePath);
     Q_UNUSED(workDir);
+    Q_UNUSED(arguments);
     outputPanel_->appendProgramOutput(
         tr("Console Pauser is only available on Windows. Select Program Output or a terminal instead."));
     return;
@@ -6853,14 +6907,16 @@ void MainWindow::startWithConsolePauser(const QString& exePath,
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     prependToPath(env, runtimeBinDir);
 
-    // ConsolePauser.exe <filename> <parameters> — we never pass extra
-    // parameters, so the program itself is the only argument. Launched via
-    // `cmd /c start`: the console window is always brand new, never the
-    // terminal the IDE itself was started from, and the IDE captures
-    // nothing. The window stays up after the program exits (that is the
-    // pause the tool adds). The environment (PATH with the toolchain's bin
-    // directory) travels through cmd into the child.
-    if (!startDetachedInNewConsole(pauser, {exePath}, workDir, env)) {
+    // ConsolePauser.exe <filename> <parameters> — the program itself comes
+    // first, then its arguments. Launched via `cmd /c start`: the console
+    // window is always brand new, never the terminal the IDE itself was
+    // started from, and the IDE captures nothing. The window stays up after
+    // the program exits (that is the pause the tool adds). The environment
+    // (PATH with the toolchain's bin directory) travels through cmd into the
+    // child.
+    QStringList pauserArgs{exePath};
+    pauserArgs.append(arguments);
+    if (!startDetachedInNewConsole(pauser, pauserArgs, workDir, env)) {
         outputPanel_->appendProgramOutput(
             tr("Failed to start %1.").arg(QDir::toNativeSeparators(pauser)));
         return;
@@ -6903,7 +6959,8 @@ QString MainWindow::resolveConsolePauser(const QString& exePath) const
     return found;
 }
 
-void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
+void MainWindow::startInTerminal(const QString& exePath, const QString& workDir,
+                                 const QStringList& arguments)
 {
     outputPanel_->showChannel(OutputPanel::ChannelProgram);
 
@@ -6980,7 +7037,8 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
             needsCallOperator = true;
         }
         const QString firstInput =
-            LightCpp::App::TerminalLaunch::programCommandLine(exePath, needsCallOperator);
+            LightCpp::App::TerminalLaunch::programCommandLine(exePath, needsCallOperator,
+                                                              arguments);
         runner->setProcessEnvironment(env);
         runner->setWorkingDirectory(workDir);
         outputPanel_->appendTerminalOutput(
@@ -7030,12 +7088,13 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir)
                                        Qt::CaseInsensitive) == 0;
     if (isPowerShell && (isPowerShellCommand || isShellCommand)) {
         externalArgs << LightCpp::App::TerminalLaunch::programCommandLine(
-            exePath, true);
+            exePath, true, arguments);
     } else if (!isPowerShell && isShellCommand) {
         externalArgs << LightCpp::App::TerminalLaunch::programCommandLine(
-            exePath, false);
+            exePath, false, arguments);
     } else {
         externalArgs << exePath;
+        externalArgs.append(arguments);
     }
     if (!startDetachedInNewConsole(program, externalArgs, workDir, env)) {
         outputPanel_->appendProgramOutput(

@@ -1,0 +1,6 @@
+{
+    "name": "ZigProject",
+    "version": "1.0.0",
+    "publisher": "LightCpp",
+    "description": "Zig support: reads build.zig, builds with the zig tool (Debug/Release optimized) and runs the artifact from zig-out/bin."
+}

@@ -12,12 +12,17 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QProcess>
+#include <QRegularExpression>
+
+#include <optional>
+#include <utility>
 
 #include "LightCpp/Plugin/Plugin.hpp"
 #include "LightCpp/Plugin/PluginTypes.hpp"
 #include "LightCpp/Plugin/ProjectBackend.hpp"
 #include "LightCpp/Project/DspProject.hpp"
 #include "LightCpp/Project/MsvcProject.hpp"
+#include "PluginSupport.hpp"
 
 namespace LightCpp::Plugins::Msvc {
 
@@ -36,7 +41,7 @@ public:
     }
     [[nodiscard]] QString version() const override
     {
-        return QStringLiteral("1.0.0");
+        return QStringLiteral("1.1.0");
     }
 
     bool initialize(LightCpp::Plugin::IdeServices* services) override
@@ -58,6 +63,7 @@ public:
         const QString suffix = QFileInfo(filePath).suffix().toLower();
         return suffix == QLatin1String("vcxproj")
                || suffix == QLatin1String("vcproj")
+               || suffix == QLatin1String("sln")
                || suffix == QLatin1String("dsp")
                || suffix == QLatin1String("dsw");
     }
@@ -65,14 +71,20 @@ public:
     [[nodiscard]] QString projectFilter() const override
     {
         return QStringLiteral(
-            "MSVC project (*.vcxproj *.vcproj *.dsp *.dsw)");
+            "MSVC project (*.vcxproj *.vcproj *.sln *.dsp *.dsw)");
     }
 
     bool openProject(const QString& filePath,
                      LightCpp::Plugin::ProjectSummary* summary,
                      QString* error) override
     {
+        // Every path out of an open failure leaves a closed backend: the IDE
+        // would otherwise keep building the previously opened project.
+        resetOpenState();
         const QString suffix = QFileInfo(filePath).suffix().toLower();
+        if (suffix == QLatin1String("sln")) {
+            return openSolution(filePath, summary, error);
+        }
         if (suffix == QLatin1String("dsp")
             || suffix == QLatin1String("dsw")) {
             return openDspOrWorkspace(filePath, summary, error);
@@ -103,8 +115,134 @@ public:
         return {};
     }
 
+    [[nodiscard]] QString outputPath(const QString& configuration) const override
+    {
+        if (!open_) {
+            return {};
+        }
+        if (hasDsp_) {
+            const LightCpp::Project::DspConfiguration* config =
+                dspProject_.configurationFor(configuration);
+            if (config == nullptr) {
+                config = dspProject_.defaultConfiguration();
+            }
+            return config == nullptr ? QString() : dspProject_.outputPathFor(*config);
+        }
+        if (msvcOpen_) {
+            const LightCpp::Project::MsvcConfiguration* config =
+                msvcProject_.configurationFor(configuration);
+            if (config == nullptr) {
+                config = msvcProject_.defaultConfiguration();
+            }
+            if (config == nullptr) {
+                return {};
+            }
+            // Projects opened through a .sln expand $(SolutionDir) with the
+            // solution root that msbuild is actually given.
+            return msvcProject_.outputPathFor(*config,
+                                              hasSolution_ ? solutionDir_ : QString());
+        }
+        return {};
+    }
+
 private:
     // --- opening -----------------------------------------------------------
+
+    /// .sln: open the solution's C++ project (the one named like the
+    /// solution, else the first), but keep the solution as the build
+    /// descriptor so msbuild sees the same configuration mapping VS uses.
+    bool openSolution(const QString& filePath,
+                      LightCpp::Plugin::ProjectSummary* summary,
+                      QString* error)
+    {
+        const QString absolute = QFileInfo(filePath).absoluteFilePath();
+        QString readError;
+        const QString text = Support::readTextFile(absolute, &readError);
+        if (text.isEmpty()) {
+            if (error != nullptr) {
+                *error = readError.isEmpty() ? QStringLiteral("the solution is empty")
+                                             : readError;
+            }
+            return false;
+        }
+
+        struct SolutionProject {
+            QString name;
+            QString path;
+        };
+        QList<SolutionProject> projects;
+        static const QRegularExpression projectLine(
+            QStringLiteral("^Project\\s*\\(\\s*\"[^\"]*\"\\s*\\)\\s*=\\s*\"([^\"]+)\"\\s*,\\s*\"([^\"]+)\""));
+        const QString solutionDir = QFileInfo(absolute).absolutePath();
+        for (const QString& line : Support::splitLines(text)) {
+            const QRegularExpressionMatch match = projectLine.match(line.trimmed());
+            if (!match.hasMatch()) {
+                continue;
+            }
+            const QString relative = match.captured(2);
+            const QString suffix = QFileInfo(relative).suffix().toLower();
+            if (suffix != QLatin1String("vcxproj")
+                && suffix != QLatin1String("vcproj")) {
+                continue;
+            }
+            projects.append({match.captured(1), QDir(solutionDir).filePath(relative)});
+        }
+        if (projects.isEmpty()) {
+            if (error != nullptr) {
+                *error = QStringLiteral("the solution lists no C++ project "
+                                        "(.vcxproj/.vcproj)");
+            }
+            return false;
+        }
+
+        const QString stem = QFileInfo(absolute).completeBaseName();
+        SolutionProject chosen = projects.first();
+        for (const SolutionProject& project : projects) {
+            if (QFileInfo(project.path).completeBaseName().compare(
+                    stem, Qt::CaseInsensitive)
+                == 0) {
+                chosen = project;
+                break;
+            }
+        }
+        if (!QFileInfo::exists(chosen.path)) {
+            if (error != nullptr) {
+                *error = QStringLiteral("the solution references %1, which does "
+                                        "not exist")
+                             .arg(QDir::toNativeSeparators(chosen.path));
+            }
+            return false;
+        }
+
+        if (!openVcProject(chosen.path, summary, error)) {
+            return false;
+        }
+
+        hasSolution_ = true;
+        solutionPath_ = absolute;
+        solutionDir_ = solutionDir;
+        descriptorPath_ = absolute;
+
+        if (summary != nullptr) {
+            summary->filePath = absolute;      // reopening goes through the .sln
+            summary->projectDir = solutionDir; // Explorer/git root
+            summary->name = stem.isEmpty() ? chosen.name : stem;
+            summary->formatName = QStringLiteral("Visual Studio (solution)");
+            const LightCpp::Project::MsvcConfiguration* config =
+                msvcProject_.defaultConfiguration();
+            if (config != nullptr) {
+                summary->outputPath = msvcProject_.outputPathFor(*config, solutionDir);
+            }
+        }
+        if (services_ != nullptr) {
+            services_->log(QStringLiteral(
+                               "[MsvcProject] Solution %1: building %2 (%3 C++ "
+                               "project(s) listed).")
+                               .arg(stem, QDir::toNativeSeparators(chosen.path))
+                               .arg(projects.size()));
+        }
+        return true;
+    }
 
     /// .dsp directly, or .dsw by opening the project it lists (the one
     /// named like the workspace, else the first — a workspace usually sits
@@ -149,12 +287,20 @@ private:
         msvcOpen_ = false;
         hasDsp_ = true;
         open_ = true;
+        hasSolution_ = false;
+        descriptorPath_ = filePath;
+        solutionDir_ = QFileInfo(filePath).suffix().compare(QLatin1String("dsw"),
+                                                            Qt::CaseInsensitive)
+                           == 0
+                           ? QFileInfo(filePath).absolutePath()
+                           : QFileInfo(dspPath).absolutePath();
 
         const LightCpp::Project::DspConfiguration* config =
             dspProject_.defaultConfiguration();
         if (summary != nullptr) {
+            *summary = {};
             summary->filePath = filePath;
-            summary->projectDir = QFileInfo(dspPath).absolutePath();
+            summary->projectDir = solutionDir_;
             summary->name = dspProject_.name;
             summary->formatName = QStringLiteral("Visual Studio 6");
             summary->targetLabel =
@@ -172,6 +318,7 @@ private:
             summary->producesExecutable =
                 config == nullptr
                 || config->kind == LightCpp::Project::DspTargetKind::Application;
+            summary->runProgram.clear();
             summary->runArguments.clear();
         }
         return true;
@@ -190,10 +337,20 @@ private:
             }
             return false;
         }
+        if (!project->isValid()) {
+            if (error != nullptr) {
+                *error = QStringLiteral("no build configurations in %1")
+                             .arg(QDir::toNativeSeparators(filePath));
+            }
+            return false;
+        }
         msvcProject_ = std::move(*project);
         msvcOpen_ = true;
         hasDsp_ = false;
+        hasSolution_ = false;
         open_ = true;
+        descriptorPath_ = msvcProject_.filePath;
+        solutionDir_ = msvcProject_.projectDir;
 
         // The configuration a plain "build this" uses: Debug, else Release,
         // else the first — the same default the model answers for output
@@ -202,6 +359,7 @@ private:
             msvcProject_.defaultConfiguration();
 
         if (summary != nullptr) {
+            *summary = {};
             summary->filePath = msvcProject_.filePath;
             summary->projectDir = msvcProject_.projectDir;
             summary->name = msvcProject_.name;
@@ -221,6 +379,7 @@ private:
             summary->producesExecutable =
                 config == nullptr
                 || config->kind == LightCpp::Project::MsvcTargetKind::Application;
+            summary->runProgram.clear();
             summary->runArguments.clear();
         }
         return true;
@@ -306,20 +465,22 @@ private:
         LightCpp::Plugin::BuildStep step;
         step.program = msbuild;
         step.arguments = QStringList{
-            msvcProject_.filePath,
+            descriptorPath_.isEmpty() ? msvcProject_.filePath : descriptorPath_,
             QStringLiteral("/p:Configuration=%1").arg(config.name),
             QStringLiteral("/p:Platform=%1").arg(config.platform),
-            // Single-project semantics: msbuild leaves SolutionDir
-            // undefined when no .sln is involved, which breaks the
-            // OutDir=$(SolutionDir)$(Configuration) templates. Pinning it
-            // to the project directory gives the same output location the
-            // user would get from building the project inside an IDE.
-            QStringLiteral("/p:SolutionDir=%1\\").arg(msvcProject_.projectDir),
+            // msbuild leaves SolutionDir undefined when no .sln is involved,
+            // which breaks the OutDir=$(SolutionDir)$(Configuration)
+            // templates. Pin it to the solution root (or the project
+            // directory for a standalone project) so the output lands where
+            // the banner predicted.
+            QStringLiteral("/p:SolutionDir=%1\\")
+                .arg(hasSolution_ ? solutionDir_ : msvcProject_.projectDir),
             QStringLiteral("/m"),
             QStringLiteral("/nologo"),
             QStringLiteral("/v:m"),
         };
-        step.workingDirectory = msvcProject_.projectDir;
+        step.workingDirectory =
+            hasSolution_ ? solutionDir_ : msvcProject_.projectDir;
         step.label = tr("MSBuild [%1|%2]").arg(config.name, config.platform);
         return {step};
     }
@@ -345,10 +506,11 @@ private:
         LightCpp::Plugin::BuildStep step;
         step.program = vcbuild;
         step.arguments = QStringList{
-            msvcProject_.filePath,
+            descriptorPath_.isEmpty() ? msvcProject_.filePath : descriptorPath_,
             QStringLiteral("%1|%2").arg(config.name, config.platform),
         };
-        step.workingDirectory = msvcProject_.projectDir;
+        step.workingDirectory =
+            hasSolution_ ? solutionDir_ : msvcProject_.projectDir;
         step.label = tr("vcbuild [%1|%2]").arg(config.name, config.platform);
         return {step};
     }
@@ -375,42 +537,51 @@ private:
         return msbuildPath_;
     }
 
+    [[nodiscard]] static QStringList programFilesRoots()
+    {
+        QStringList roots;
+        for (const char* variable : {"ProgramFiles(x86)", "ProgramFiles", "ProgramW6432"}) {
+            const QString root = qEnvironmentVariable(variable);
+            if (!root.isEmpty() && !roots.contains(root)) {
+                roots.append(root);
+            }
+        }
+        return roots;
+    }
+
     [[nodiscard]] QString probeMsBuild() const
     {
-        const QString programFilesX86 =
-            qEnvironmentVariable("ProgramFiles(x86)");
-        if (programFilesX86.isEmpty()) {
-            return {};
-        }
-        const QString vswhere = QDir(programFilesX86).filePath(
-            QStringLiteral("Microsoft Visual Studio/Installer/vswhere.exe"));
-        if (!QFileInfo::exists(vswhere)) {
-            return {};
-        }
+        for (const QString& programFiles : programFilesRoots()) {
+            const QString vswhere = QDir(programFiles).filePath(
+                QStringLiteral("Microsoft Visual Studio/Installer/vswhere.exe"));
+            if (!QFileInfo::exists(vswhere)) {
+                continue;
+            }
 
-        QProcess process;
-        process.start(vswhere,
-                      QStringList{
-                          QStringLiteral("-prerelease"),
-                          QStringLiteral("-latest"),
-                          QStringLiteral("-products"),
-                          QStringLiteral("*"),
-                          QStringLiteral("-requires"),
-                          QStringLiteral("Microsoft.Component.MSBuild"),
-                          QStringLiteral("-find"),
-                          QStringLiteral("MSBuild\\**\\Bin\\MSBuild.exe"),
-                      });
-        if (!process.waitForStarted(5000) || !process.waitForFinished(15000)) {
-            process.kill();
-            return {};
-        }
-        const QStringList lines =
-            QString::fromUtf8(process.readAllStandardOutput().trimmed())
-                .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-        for (QString line : lines) {
-            line = line.trimmed();
-            if (!line.isEmpty() && QFileInfo::exists(line)) {
-                return line;
+            QProcess process;
+            process.start(vswhere,
+                          QStringList{
+                              QStringLiteral("-prerelease"),
+                              QStringLiteral("-latest"),
+                              QStringLiteral("-products"),
+                              QStringLiteral("*"),
+                              QStringLiteral("-requires"),
+                              QStringLiteral("Microsoft.Component.MSBuild"),
+                              QStringLiteral("-find"),
+                              QStringLiteral("MSBuild\\**\\Bin\\MSBuild.exe"),
+                          });
+            if (!process.waitForStarted(5000) || !process.waitForFinished(15000)) {
+                process.kill();
+                continue;
+            }
+            const QStringList lines =
+                QString::fromUtf8(process.readAllStandardOutput().trimmed())
+                    .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+            for (QString line : lines) {
+                line = line.trimmed();
+                if (!line.isEmpty() && QFileInfo::exists(line)) {
+                    return line;
+                }
             }
         }
         return {};
@@ -421,20 +592,19 @@ private:
     /// versions predate the installer database vswhere reads.
     [[nodiscard]] QString locateVcBuild() const
     {
-        const QString programFilesX86 =
-            qEnvironmentVariable("ProgramFiles(x86)");
-        if (programFilesX86.isEmpty()) {
-            return {};
-        }
         static const char* kCandidates[] = {
             "Microsoft Visual Studio 9.0/VC/vcpackages/vcbuild.exe",
+            // VS2005's directory is "Microsoft Visual Studio 8", not 8.0.
+            "Microsoft Visual Studio 8/VC/vcpackages/vcbuild.exe",
             "Microsoft Visual Studio 8.0/VC/vcpackages/vcbuild.exe",
         };
-        for (const char* candidate : kCandidates) {
-            const QString path =
-                QDir(programFilesX86).filePath(QString::fromUtf8(candidate));
-            if (QFileInfo::exists(path)) {
-                return path;
+        for (const QString& programFiles : programFilesRoots()) {
+            for (const char* candidate : kCandidates) {
+                const QString path =
+                    QDir(programFiles).filePath(QString::fromUtf8(candidate));
+                if (QFileInfo::exists(path)) {
+                    return path;
+                }
             }
         }
         return {};
@@ -445,14 +615,32 @@ private:
     /// would just open the GUI instead of building.
     [[nodiscard]] QString locateMsDev() const
     {
-        const QString programFilesX86 =
-            qEnvironmentVariable("ProgramFiles(x86)");
-        if (programFilesX86.isEmpty()) {
-            return {};
+        for (const QString& programFiles : programFilesRoots()) {
+            const QString path = QDir(programFiles).filePath(QStringLiteral(
+                "Microsoft Visual Studio/Common/MSDev98/Bin/MSDEV.COM"));
+            if (QFileInfo::exists(path)) {
+                return path;
+            }
         }
-        const QString path = QDir(programFilesX86).filePath(QStringLiteral(
-            "Microsoft Visual Studio/Common/MSDev98/Bin/MSDEV.COM"));
-        return QFileInfo::exists(path) ? path : QString();
+        return {};
+    }
+
+    /// Drops every trace of a previously opened project. Any failure path in
+    /// openProject leaves the backend closed, so buildSteps() cannot answer
+    /// for a project the user already replaced.
+    void resetOpenState()
+    {
+        msvcProject_ = {};
+        dspProject_ = {};
+        workspace_ = {};
+        hasWorkspace_ = false;
+        hasDsp_ = false;
+        msvcOpen_ = false;
+        open_ = false;
+        hasSolution_ = false;
+        solutionPath_.clear();
+        solutionDir_.clear();
+        descriptorPath_.clear();
     }
 
     LightCpp::Plugin::IdeServices* services_ = nullptr;
@@ -473,6 +661,15 @@ private:
     bool hasDsp_ = false;
     bool msvcOpen_ = false;
     bool open_ = false;
+    /// A .sln opened as a wrapper around one of its C++ projects. The
+    /// solution (not the project) is then what msbuild/vcbuild is pointed at,
+    /// and $(SolutionDir) expands to the solution's directory.
+    bool hasSolution_ = false;
+    QString solutionPath_;
+    QString solutionDir_;
+    /// The file build steps name: the .sln when there is one, else the
+    /// project itself.
+    QString descriptorPath_;
 };
 
 }  // namespace LightCpp::Plugins::Msvc

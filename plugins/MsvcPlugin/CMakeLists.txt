@@ -20,6 +20,7 @@ set_target_properties(MsvcPlugin PROPERTIES
 target_include_directories(MsvcPlugin PRIVATE
     ${CMAKE_SOURCE_DIR}/src/LightCppPlugin/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppProject/Include
+    ${CMAKE_SOURCE_DIR}/plugins/Support
 )
 
 target_link_libraries(MsvcPlugin PRIVATE

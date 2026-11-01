@@ -467,13 +467,22 @@ std::optional<MsvcProject> parseVcproj(const QString& filePath,
 // --- macro expansion ------------------------------------------------------
 
 QString expandMsvcMacros(const QString& value, const MsvcProject& project,
-                         const MsvcConfiguration& config)
+                         const MsvcConfiguration& config,
+                         const QString& solutionDir)
 {
     QString expanded = value;
     const QString projectDirWithSlash =
         project.projectDir.endsWith(QLatin1Char('/'))
             ? project.projectDir
             : project.projectDir + QLatin1Char('/');
+    QString solutionDirWithSlash = solutionDir;
+    if (!solutionDirWithSlash.isEmpty()
+        && !solutionDirWithSlash.endsWith(QLatin1Char('/'))) {
+        solutionDirWithSlash += QLatin1Char('/');
+    }
+    if (solutionDirWithSlash.isEmpty()) {
+        solutionDirWithSlash = projectDirWithSlash;
+    }
 
     // $(OutDir) references other macros (usually $(SolutionDir)$(Config)),
     // so expansion is iterative; a cycle or a pile of unknown macros simply
@@ -492,7 +501,8 @@ QString expandMsvcMacros(const QString& value, const MsvcProject& project,
         next.replace(QStringLiteral("$(Platform)"), config.platform);
         // Single-project semantics: the solution root is the project root,
         // with the trailing separator msbuild's own SolutionDir carries.
-        next.replace(QStringLiteral("$(SolutionDir)"), projectDirWithSlash);
+        // A project opened through a .sln passes its solution directory.
+        next.replace(QStringLiteral("$(SolutionDir)"), solutionDirWithSlash);
         if (!config.outDir.isEmpty()) {
             next.replace(QStringLiteral("$(OutDir)"), config.outDir);
         }
@@ -583,7 +593,8 @@ const MsvcConfiguration* MsvcProject::defaultConfiguration() const
     return configurations.isEmpty() ? nullptr : &configurations.first();
 }
 
-QString MsvcProject::outputPathFor(const MsvcConfiguration& config) const
+QString MsvcProject::outputPathFor(const MsvcConfiguration& config,
+                                   const QString& solutionDir) const
 {
     if (config.kind == MsvcTargetKind::Makefile) {
         return {};
@@ -595,16 +606,16 @@ QString MsvcProject::outputPathFor(const MsvcConfiguration& config) const
     //   fallback: project name
     QString relative;
     if (!config.outputFile.isEmpty()) {
-        relative = expandMsvcMacros(config.outputFile, *this, config);
+        relative = expandMsvcMacros(config.outputFile, *this, config, solutionDir);
     } else {
         const QString outDir =
             expandMsvcMacros(config.outDir.isEmpty()
                                  ? QStringLiteral("$(Configuration)\\")
                                  : config.outDir,
-                             *this, config);
+                             *this, config, solutionDir);
         const QString target =
             expandMsvcMacros(config.targetName.isEmpty() ? name : config.targetName,
-                             *this, config);
+                             *this, config, solutionDir);
         const QString ext = config.kind == MsvcTargetKind::DynamicLibrary
                                 ? QStringLiteral(".dll")
                                 : config.kind == MsvcTargetKind::StaticLibrary

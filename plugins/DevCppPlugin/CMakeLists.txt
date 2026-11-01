@@ -19,6 +19,7 @@ set_target_properties(DevCppPlugin PROPERTIES
 target_include_directories(DevCppPlugin PRIVATE
     ${CMAKE_SOURCE_DIR}/src/LightCppPlugin/Include
     ${CMAKE_SOURCE_DIR}/src/LightCppProject/Include
+    ${CMAKE_SOURCE_DIR}/plugins/Support
 )
 
 target_link_libraries(DevCppPlugin PRIVATE

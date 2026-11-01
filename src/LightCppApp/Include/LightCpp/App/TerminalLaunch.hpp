@@ -14,6 +14,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 namespace LightCpp::App::TerminalLaunch {
 
@@ -23,6 +24,15 @@ namespace LightCpp::App::TerminalLaunch {
 /// `& '<path>'` (with single quotes inside doubled); every other shell here
 /// (cmd.exe) takes the double-quoted path, which is one word to it and keeps
 /// spaces, `&`, `^` and `|` inside the name from being read as syntax.
-[[nodiscard]] QString programCommandLine(const QString& exePath, bool powerShellStyle);
+/// `arguments` are appended with the same quoting rules, one shell word each.
+[[nodiscard]] QString programCommandLine(const QString& exePath, bool powerShellStyle,
+                                         const QStringList& arguments);
+
+/// The argument-free form: `programCommandLine(exePath, powerShellStyle, {})`.
+[[nodiscard]] inline QString programCommandLine(const QString& exePath,
+                                                bool powerShellStyle)
+{
+    return programCommandLine(exePath, powerShellStyle, {});
+}
 
 }  // namespace LightCpp::App::TerminalLaunch

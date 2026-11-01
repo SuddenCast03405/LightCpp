@@ -93,19 +93,23 @@ struct MsvcProject {
 
     /// The produced file, macros expanded, as an absolute path. Empty for a
     /// Makefile project (what it produces is whatever the makefile says).
+    /// `solutionDir` overrides $(SolutionDir) for projects opened through a
+    /// .sln; empty keeps the single-project default (the project directory).
     [[nodiscard]] QString outputPathFor(
-        const MsvcConfiguration& config) const;
+        const MsvcConfiguration& config, const QString& solutionDir = {}) const;
 };
 
 /// Expands the MSVC macros this model tracks, iteratively until stable:
 /// $(ProjectDir), $(ProjectName), $(Configuration)/$(ConfigurationName),
-/// $(Platform), $(SolutionDir) (the project directory — this IDE builds
-/// single projects, so the solution root is the project root), $(OutDir),
-/// $(TargetName), $(TargetExt), $(TargetFileName). Unknown macros expand to
-/// empty, which is what msbuild itself does with them.
+/// $(Platform), $(SolutionDir) (the project directory unless `solutionDir`
+/// is given — this IDE builds single projects, so the solution root is the
+/// project root by default), $(OutDir), $(TargetName), $(TargetExt),
+/// $(TargetFileName). Unknown macros expand to empty, which is what msbuild
+/// itself does with them.
 [[nodiscard]] QString expandMsvcMacros(const QString& value,
                                        const MsvcProject& project,
-                                       const MsvcConfiguration& config);
+                                       const MsvcConfiguration& config,
+                                       const QString& solutionDir = {});
 
 /// What the target kind produces, for the build banner: "Application",
 /// "Dynamic Library", "Static Library", "Makefile".

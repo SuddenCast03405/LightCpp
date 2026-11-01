@@ -10,11 +10,15 @@
 #include <QDir>
 #include <QFileInfo>
 
+#include <optional>
+#include <utility>
+
 #include "LightCpp/Plugin/Plugin.hpp"
 #include "LightCpp/Plugin/PluginTypes.hpp"
 #include "LightCpp/Plugin/ProjectBackend.hpp"
 #include "LightCpp/Project/BuildConfiguration.hpp"
 #include "LightCpp/Project/DevCppProject.hpp"
+#include "PluginSupport.hpp"
 
 namespace LightCpp::Plugins::DevCpp {
 
@@ -95,6 +99,7 @@ public:
         }
 
         if (summary != nullptr) {
+            *summary = {};
             summary->filePath = project_.filePath;
             summary->projectDir = project_.projectDir;
             summary->name = project_.name;
@@ -104,9 +109,16 @@ public:
             summary->unitCount = project_.units.size();
             summary->buildUnitCount = project_.buildUnitPaths().size();
             summary->producesExecutable = project_.producesExecutable();
+            summary->runProgram.clear();  // the linked binary is what runs
             summary->runArguments = project_.runArguments;
         }
         return true;
+    }
+
+    [[nodiscard]] QString outputPath(const QString& configuration) const override
+    {
+        Q_UNUSED(configuration);  // Dev-C++ writes both configurations to BIN.
+        return open_ ? project_.outputPath() : QString();
     }
 
     [[nodiscard]] QList<LightCpp::Plugin::BuildStep>
@@ -120,11 +132,27 @@ public:
             LightCpp::Project::buildConfigurationFromName(request.configuration)
                 .value_or(BuildConfiguration::Debug);
 
+        // The IDE resolves the kit's make; a bare invocation (tests, another
+        // host) still gets a working default instead of an empty program.
+        QString make = request.make.trimmed();
+        if (make.isEmpty()) {
+            make = Support::findTool({QStringLiteral("mingw32-make"),
+                                      QStringLiteral("make")});
+        }
+        if (make.isEmpty()) {
+            if (services_ != nullptr) {
+                services_->log(QStringLiteral(
+                    "[DevCppProject] no make tool found on PATH; install "
+                    "MinGW-w64 or select a kit with mingw32-make."));
+            }
+            return {};
+        }
+
         if (project_.useCustomMakefile) {
             // The project builds through its own makefile; the IDE-resolved
             // make (the kit's when it names one) drives it.
             return {LightCpp::Plugin::BuildStep{
-                request.make,
+                make,
                 LightCpp::Project::makeArguments(project_) + request.extraMakeArgs,
                 project_.projectDir,
                 tr("Running the project's own makefile: %1")
@@ -159,7 +187,7 @@ public:
         }
 
         LightCpp::Plugin::BuildStep step;
-        step.program = request.make;
+        step.program = make;
         step.arguments =
             QStringList{QStringLiteral("-f"), plan.path, QStringLiteral("all")}
             + request.extraMakeArgs;
