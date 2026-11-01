@@ -132,6 +132,7 @@ struct FakeGdb {
             "  case \"$command\" in\n"
             "    -exec-run) printf '%s\\n' '*stopped,reason=\"breakpoint-hit\",frame={file=\"main.cpp\",line=\"3\"}' ;;\n"
             "    -exec-continue) printf '%s\\n' 'continue-command' '*running,thread-id=\"all\"' '*running,thread-id=\"all\"' ;;\n"
+            "    -exec-next) printf '%s\\n' '*stopped,reason=\"exited-signalled\",signal-name=\"SIGTERM\"' ;;\n"
             "    -gdb-exit) exit 0 ;;\n"
             "  esac\n"
             "done\n";
@@ -304,6 +305,38 @@ TEST(DebuggerController, GdbRunningRecordsEmitOneResumedNotification)
     }
     EXPECT_EQ(resumedCount, 1);
     EXPECT_EQ(continueCommandCount, 1);
+    controller.stop();
+}
+TEST(DebuggerController, GdbSignalExitIsNotReportedAsASourcePause)
+{
+    FakeGdb fake;
+    ASSERT_TRUE(fake.ready);
+
+    DebuggerController controller;
+    controller.setDebuggerPath(fake.debuggerPath);
+    int pausedCount = 0;
+    QStringList logs;
+    QObject::connect(&controller, &DebuggerController::paused,
+                     [&] { ++pausedCount; });
+    QObject::connect(&controller, &DebuggerController::logLine,
+                     [&](const QString& line) { logs.append(line); });
+
+    ASSERT_TRUE(controller.start(fake.targetPath, fake.dir.path(), {}));
+    QElapsedTimer timer;
+    timer.start();
+    while (pausedCount == 0 && timer.elapsed() < 2000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    ASSERT_EQ(pausedCount, 1);
+
+    controller.stepOver();
+    timer.restart();
+    while (!logs.contains(QStringLiteral("target exited"))
+           && timer.elapsed() < 2000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    EXPECT_TRUE(logs.contains(QStringLiteral("target exited")));
+    EXPECT_EQ(pausedCount, 1);
     controller.stop();
 }
 #endif
