@@ -760,6 +760,13 @@ MainWindow::MainWindow(QWidget* parent)
                     tr("--- git status (abandoned) ---"));
                 outputPanel_->appendGitOutput(text);
             });
+    connect(git_, &LightCpp::App::GitClient::statusFailed, this,
+            [this](const QString& text) {
+                outputPanel_->showChannel(OutputPanel::ChannelGit);
+                outputPanel_->appendGitOutput(
+                    tr("--- git status (failed to start) ---"));
+                outputPanel_->appendGitOutput(text);
+            });
     syncGitWorkingDirectory();
 
     // Locate MSVC in the background. cl.exe needs INCLUDE/LIB built by hand,
