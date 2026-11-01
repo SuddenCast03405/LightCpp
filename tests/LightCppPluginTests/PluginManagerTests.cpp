@@ -57,6 +57,7 @@ public:
     }
 };
 
+#ifdef Q_OS_WIN
 QString writeDevProject(const QTemporaryDir& dir, const QString& content)
 {
     const QString path = dir.filePath(QStringLiteral("hello.dev"));
@@ -81,6 +82,7 @@ const char* kDevFixture =
     "FileName=main.cpp\n"
     "Compile=1\n"
     "Link=1\n";
+#endif  // Q_OS_WIN
 
 }  // namespace
 
