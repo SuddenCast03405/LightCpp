@@ -42,6 +42,18 @@ public:
     /// formats like .dev).
     [[nodiscard]] virtual QList<BuildStep>
     configureSteps(const BuildRequest& request) = 0;
+
+    /// The file a build in `configuration` produces, or empty when the
+    /// backend cannot name one. The summary's outputPath is a snapshot taken
+    /// at open time; this answers for the configuration the user actually
+    /// built, so Run Project never starts a stale binary from another profile.
+    /// The default suits backends whose output does not depend on the
+    /// configuration.
+    [[nodiscard]] virtual QString outputPath(const QString& configuration) const
+    {
+        (void)configuration;
+        return {};
+    }
 };
 
 }  // namespace LightCpp::Plugin

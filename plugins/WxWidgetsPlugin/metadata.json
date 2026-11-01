@@ -1,0 +1,6 @@
+{
+    "name": "WxWidgetsProject",
+    "version": "1.0.0",
+    "publisher": "LightCpp",
+    "description": "wxWidgets support through Code::Blocks .cbp projects (the format wxSmith writes): reads targets and builds them with the Code::Blocks command line."
+}

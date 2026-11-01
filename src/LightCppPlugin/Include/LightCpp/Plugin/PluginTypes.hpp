@@ -39,6 +39,10 @@ struct ProjectSummary {
     int unitCount = 0;        // units listed in the file
     int buildUnitCount = 0;   // units that actually take part in the build
     bool producesExecutable = true;  // false for static/dynamic libraries
+    /// The program Run Project starts. Empty means "run outputPath" — the
+    /// normal case for compiled languages. Interpreted projects (Python)
+    /// name their interpreter here instead, with the script in runArguments.
+    QString runProgram;
     QStringList runArguments; // arguments passed when running the result
 };
 

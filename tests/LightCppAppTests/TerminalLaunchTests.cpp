@@ -27,10 +27,23 @@ int shellWordCount(const QString& line)
     int words = 0;
     bool inWord = false;
     QChar quote;
-    for (const QChar c : line) {
+    for (qsizetype i = 0; i < line.size(); ++i) {
+        const QChar c = line.at(i);
         if (!quote.isNull()) {
-            if (c == quote) {
+            if (quote == u'"' && c == u'\\' && i + 1 < line.size()) {
+                ++i;  // A backslash inside double quotes escapes one character.
+            } else if (c == quote) {
                 quote = QChar();
+            }
+            continue;
+        }
+        if (c == u'\\' && i + 1 < line.size()) {
+            // Outside quotes a backslash escapes the next character. That is
+            // what keeps 'it'\''s fine' a single word instead of three.
+            ++i;
+            if (!inWord) {
+                ++words;
+                inWord = true;
             }
             continue;
         }
@@ -119,3 +132,50 @@ TEST(TerminalLaunch, PowerShellSingleQuotesInThePathAreDoubled)
                                             /*powerShellStyle=*/true);
     EXPECT_EQ(line, QStringLiteral("& 'C:/O''Brien/hello.exe'"));
 }
+
+// ---------------------------------------------------------------------------
+// Program arguments (Run Project passes the backend's runArguments through)
+// ---------------------------------------------------------------------------
+
+TEST(TerminalLaunch, ArgumentsBecomeTheirOwnShellWords)
+{
+    // A run argument with a space must not be split: the project's
+    // runArguments are one word each, quoted like the program path.
+    const QString script = QStringLiteral("C:/My Docs/script.py");
+    const QString line = programCommandLine(QStringLiteral("python.exe"),
+                                            /*powerShellStyle=*/false,
+                                            {script, QStringLiteral("--verbose")});
+#ifdef Q_OS_WIN
+    EXPECT_EQ(line,
+              QStringLiteral("\"python.exe\" \"C:/My Docs/script.py\" "
+                             "\"--verbose\""));
+#else
+    EXPECT_EQ(line,
+              QStringLiteral("'python.exe' 'C:/My Docs/script.py' '--verbose'"));
+#endif
+    EXPECT_EQ(shellWordCount(line), 3);
+}
+
+TEST(TerminalLaunch, PowerShellQuotesEveryArgument)
+{
+    const QString line = programCommandLine(QStringLiteral("C:/app/hello.exe"),
+                                            /*powerShellStyle=*/true,
+                                            {QStringLiteral("--name"),
+                                             QStringLiteral("O'Brien")});
+    EXPECT_EQ(line,
+              QStringLiteral("& 'C:/app/hello.exe' '--name' 'O''Brien'"));
+    // The call operator is its own word; the program and its two arguments
+    // follow it, each quoted as one word.
+    EXPECT_EQ(shellWordCount(line), 4);
+}
+
+#ifndef Q_OS_WIN
+TEST(TerminalLaunch, PosixArgumentsEscapeEmbeddedQuotes)
+{
+    const QString line = programCommandLine(QStringLiteral("/app/hello"),
+                                            /*powerShellStyle=*/false,
+                                            {QStringLiteral("it's fine")});
+    EXPECT_EQ(line, QStringLiteral("'/app/hello' 'it'\\''s fine'"));
+    EXPECT_EQ(shellWordCount(line), 2);
+}
+#endif

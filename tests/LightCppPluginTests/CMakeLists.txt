@@ -5,6 +5,7 @@
 add_executable(LightCppPluginTests
     PluginManagerTests.cpp
     PluginPathsTests.cpp
+    ProjectPluginTests.cpp
 )
 
 target_compile_definitions(LightCppPluginTests PRIVATE
@@ -16,6 +17,23 @@ target_link_libraries(LightCppPluginTests PRIVATE
     GTest::gtest_main
     LightCppWarnings
 )
+
+# ProjectPluginTests loads the real plugin DLLs out of LIGHTCPP_BUILT_PLUGIN_DIR.
+# Depend on them so `cmake --build . --target LightCppPluginTests` stages them
+# too; a test run without the DLLs would skip instead of exercising them.
+foreach(plugin_target IN ITEMS
+        DevCppPlugin
+        MsvcPlugin
+        GoPlugin
+        RustPlugin
+        PythonPlugin
+        ZigPlugin
+        QtCppPlugin
+        WxWidgetsPlugin)
+    if(TARGET ${plugin_target})
+        add_dependencies(LightCppPluginTests ${plugin_target})
+    endif()
+endforeach()
 
 if(MINGW)
     target_link_options(LightCppPluginTests PRIVATE -static-libgcc -static-libstdc++)
