@@ -188,6 +188,8 @@ TEST(PluginManager, DevCppPluginLoadsOpensAndAnswersBuildSteps)
 // Registered-plugin hot unload
 // ---------------------------------------------------------------------------
 
+#endif  // Q_OS_WIN
+
 namespace {
 
 class TrackedPlugin final : public LightCpp::Plugin::Plugin {
@@ -207,8 +209,6 @@ private:
 };
 
 }  // namespace
-
-#endif  // Q_OS_WIN
 
 TEST(PluginManager, RegisteredPluginHotUnloadsBySource)
 {
