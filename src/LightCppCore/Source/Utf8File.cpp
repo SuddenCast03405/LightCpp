@@ -106,7 +106,18 @@ ReadResult readUtf8File(const std::filesystem::path& path, const ReadOptions& op
 #ifdef _WIN32
     // On Windows std::filesystem::path::c_str() yields wchar_t, so use the
     // wide-character fopen to support non-ANSI paths (e.g. Chinese filenames).
+#ifdef _MSC_VER
+    // MSVC's /W4 /WX treats the legacy _wfopen entry point's C4996 warning as
+    // an error. The secure variant has the same path/encoding semantics.
+    std::FILE* rawFile = nullptr;
+    if (::_wfopen_s(&rawFile, path.c_str(), L"rb") != 0) {
+        rawFile = nullptr;
+    }
+    FileHandle file{rawFile};
+#else
+    // MinGW provides _wfopen and does not issue MSVC's C4996 diagnostic.
     FileHandle file{::_wfopen(path.c_str(), L"rb")};
+#endif
 #else
     FileHandle file{::fopen(path.c_str(), "rb")};
 #endif

@@ -106,6 +106,29 @@ powershell -File build_msys2.ps1 -FullSpeed
 powershell -File build_msys2.ps1 -DeployQt
 ```
 
+### Windows native MSVC (Visual Studio 2022)
+
+Install Visual Studio 2022 with the **Desktop development with C++** workload
+(MSVC v143 and a Windows SDK), CMake 3.24+, a Qt 6 MSVC 2022 x64 development
+kit, and LLVM development headers containing `clang-c/Index.h`. The Qt kit
+must match the compiler family: the MinGW Qt package cannot be used with MSVC.
+
+From a Visual Studio Developer PowerShell (or a shell where the VS C++ tools
+are available), run:
+
+```powershell
+cmake -P _fetch_deps.cmake
+cmake --preset msvc2022 -DCMAKE_PREFIX_PATH="C:/Qt/6.8.3/msvc2022_64" -DLLVM_ROOT="C:/Program Files/LLVM"
+cmake --build --preset msvc2022 --parallel 2
+ctest --preset msvc2022
+```
+
+Replace the Qt and LLVM prefixes with their actual installation locations.
+The preset selects the Visual Studio 2022 x64 generator and Debug
+configuration; it does not assume a drive letter or a fixed Qt/LLVM location.
+The project enables `/W4 /WX /permissive- /utf-8` for first-party C++ code, so
+MSVC diagnostics are treated as build failures rather than silently ignored.
+
 ### Linux and macOS (native preset)
 
 Install CMake 3.24+, Ninja, Qt 6.5 development packages (Core, Widgets and

@@ -115,19 +115,17 @@ jobs:
       - name: Configure with Visual Studio 2022
         shell: pwsh
         run: >-
-          cmake -S . -B build/msvc2022
-          -G "Visual Studio 17 2022" -A x64
+          cmake --preset msvc2022
           -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
           -DLLVM_ROOT="C:/Program Files/LLVM"
-          -DLIGHTCPP_DEPLOY_QT=OFF
 
       - name: Build with MSVC
         shell: pwsh
-        run: cmake --build build/msvc2022 --config Debug --parallel 2
+        run: cmake --build --preset msvc2022 --parallel 2
 
       - name: CTest with MSVC
         shell: pwsh
-        run: ctest --test-dir build/msvc2022 -C Debug --output-on-failure --no-tests=error
+        run: ctest --preset msvc2022
         env:
           QT_QPA_PLATFORM: offscreen
 

@@ -52,6 +52,17 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "LIGHTCPP_DEPLOY_QT": "OFF"
       }
+    },
+    {
+      "name": "msvc2022",
+      "displayName": "Visual Studio 2022 (MSVC x64)",
+      "description": "Native MSVC x64 build. Supply CMAKE_PREFIX_PATH for the Qt MSVC kit and LLVM_ROOT for clang-c/Index.h.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/msvc2022",
+      "cacheVariables": {
+        "LIGHTCPP_DEPLOY_QT": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -70,6 +81,11 @@
     {
       "name": "native",
       "configurePreset": "native"
+    },
+    {
+      "name": "msvc2022",
+      "configurePreset": "msvc2022",
+      "configuration": "Debug"
     }
   ],
   "testPresets": [
@@ -102,6 +118,19 @@
     {
       "name": "native",
       "configurePreset": "native",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error",
+        "timeout": 180
+      }
+    },
+    {
+      "name": "msvc2022",
+      "configurePreset": "msvc2022",
+      "configuration": "Debug",
       "output": {
         "outputOnFailure": true
       },

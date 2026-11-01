@@ -81,3 +81,12 @@
 - Rechecked CI run `41274503312` for commit `a551b91c98`: MSYS2 UCRT64 build + all 608 CTest cases passed; Linux build passed but 1/608 tests failed; macOS build passed but 2/608 tests failed. The Linux/macOS shared failure is the fake-GDB regression's command counter: the fixture expected a `continue-command` marker but never emitted it. Updated the fake debugger to emit the marker when it receives `-exec-continue`.
 - macOS additionally fails `EncodingRoundTrip.Gb18030RoundTripsBmpText`: Apple's iconv rejects the BMP sample's exact reverse conversion (`e282ac20e6aca7e58583e7aca6e58fb7`, beginning with EURO SIGN), so the strict no-silent-corruption guard rejects the save. This remains an explicit codec portability issue to investigate; do not weaken the exact round-trip safety check without an equally safe mapping.
 - Verification pending: the new native MSVC job and the fake-GDB regression fix have not yet run in CI. No local MSVC toolchain is available in this session.
+
+
+## Native MSVC compile findings (2026-11-01)
+
+- The new Visual Studio 2022/MSVC job configured successfully with MSVC 19.44.35229, Qt 6.8.3 `win64_msvc2022_64`, Windows SDK 10.0.26100 and LLVM headers. This proves the native generator, compiler discovery, Qt kit and Clang header discovery work together.
+- The first MSVC compile stopped in `src/LightCppCore/Source/Utf8File.cpp`: `_wfopen` raises MSVC C4996, promoted to an error by the intentional `/W4 /WX` policy. Fixed the MSVC branch to call `_wfopen_s`; MinGW retains `_wfopen`. Added a Unicode filename read regression so the wide-path behavior remains covered.
+- Found and corrected a stale contradictory comment in `BuildConfiguration.hpp`: the implementation and tests intentionally retain MSVC `/Zi` debug information for cdb; the header previously claimed that Debug emits no debug database.
+- Added a reusable `msvc2022` configure/build/test preset and documented the Visual Studio 2022, matching Qt MSVC kit, LLVM headers and command sequence in README. Updated CI to exercise those presets rather than duplicating generator commands.
+- Linux passed all 608/608 CTest cases on commit `059dbfd6`, including the fake-GDB command-count regression fix. MSVC still requires a new build after the `_wfopen_s` correction; macOS GB18030 and the current run's MinGW/macOS results remain pending.

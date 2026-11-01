@@ -92,6 +92,26 @@ TEST_F(Utf8FileTest, ReadsPlainAscii)
     EXPECT_EQ(result.value().replacedInvalidSequences, 0u);
 }
 
+TEST_F(Utf8FileTest, ReadsUnicodePath)
+{
+#ifdef _WIN32
+    const fs::path path = dir_ / L"中文文件.txt";
+#else
+    const fs::path path = dir_ / "中文文件.txt";
+#endif
+    const std::string payload = "路径中的中文文件名\n";
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(out.is_open());
+        out.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+        ASSERT_TRUE(out.good());
+    }
+
+    const auto result = readUtf8File(path);
+    ASSERT_TRUE(result.hasValue());
+    EXPECT_EQ(result.value().content, payload);
+}
+
 TEST_F(Utf8FileTest, ReadsMultiByteUtf8PreservingNewlines)
 {
     const std::string payload = "// 注释\xE4\xB8\xAD\r\nint x;\r\n";
