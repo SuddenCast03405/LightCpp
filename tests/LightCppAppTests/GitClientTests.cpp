@@ -15,8 +15,12 @@
 
 #include <gtest/gtest.h>
 
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QObject>
 #include <QString>
+#include <QTemporaryDir>
 
 using LightCpp::App::GitClient;
 
@@ -98,6 +102,74 @@ TEST(GitClient, EveryQueuedCommandIsStillAnswered)
     client.run({QStringLiteral("init")}, QStringLiteral("git init"));
     client.run({QStringLiteral("status")}, QStringLiteral("git status"));
 
+    EXPECT_EQ(finished, 2);
+    EXPECT_FALSE(client.isBusy());
+}
+
+TEST(GitClient, AFailedStatusStartIsReportedOnceWithoutRetryingItself)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    GitClient client;
+    client.setWorkingDirectory(dir.path());
+    client.setToolPath(dir.filePath(QStringLiteral("missing-git")));
+
+    int statusCalls = 0;
+    int failureCalls = 0;
+    int commandCalls = 0;
+    QObject::connect(&client, &GitClient::statusReady,
+                     [&](const LightCpp::Project::GitStatusSummary&) {
+                         ++statusCalls;
+                     });
+    QObject::connect(&client, &GitClient::statusFailed,
+                     [&](const QString&) { ++failureCalls; });
+    QObject::connect(&client, &GitClient::commandFinished,
+                     [&](const QString&, const QString&, int) {
+                         ++commandCalls;
+                     });
+
+    client.refreshStatus();
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 2000 && failureCalls == 0) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    }
+    ASSERT_EQ(failureCalls, 1);
+    EXPECT_EQ(statusCalls, 1);
+    EXPECT_EQ(commandCalls, 0);
+    EXPECT_FALSE(client.isBusy());
+
+    // The main window refreshes after ordinary commands. A failed status is
+    // deliberately not reported as commandFinished, so it cannot trigger
+    // that same refresh path recursively.
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+    EXPECT_EQ(failureCalls, 1);
+    EXPECT_EQ(statusCalls, 1);
+}
+
+TEST(GitClient, FailedToStartPumpsQueuedCommandsAfterStartReturns)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    GitClient client;
+    client.setWorkingDirectory(dir.path());
+    client.setToolPath(dir.filePath(QStringLiteral("missing-git")));
+
+    int finished = 0;
+    QObject::connect(&client, &GitClient::commandFinished,
+                     [&](const QString&, const QString&, int code) {
+                         EXPECT_EQ(code, -1);
+                         ++finished;
+                     });
+
+    client.run({QStringLiteral("status")}, QStringLiteral("first"));
+    client.run({QStringLiteral("log")}, QStringLiteral("second"));
+
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 2000 && finished < 2) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    }
     EXPECT_EQ(finished, 2);
     EXPECT_FALSE(client.isBusy());
 }
