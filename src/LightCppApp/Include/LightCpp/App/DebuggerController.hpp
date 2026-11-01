@@ -141,6 +141,7 @@ private:
     /// feet. It raises this flag and start() does the cleanup instead.
     bool startFailed_ = false;
     bool paused_ = false;        // target currently stopped
+    bool executionCommandPending_ = false;  // GDB command awaiting *running/*stopped/^error
     QStringList pendingCommands_;         // sent once the process is up
     QByteArray outputBuffer_;             // partial line accumulation
     /// cdb prints the breakpoint-hit banner first and the source line

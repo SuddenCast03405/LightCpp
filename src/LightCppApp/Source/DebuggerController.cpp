@@ -148,6 +148,7 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
 
     exePath_ = exePath;
     paused_ = false;
+    executionCommandPending_ = false;
     startFailed_ = false;
     const QList<DebugBreakpoint> toPlant = uniqueLocations(breakpoints);
     pendingCommands_ = startCommands(toPlant);
@@ -193,6 +194,7 @@ bool DebuggerController::start(const QString& exePath, const QString& workDir,
         process_ = nullptr;
         running_ = false;
         paused_ = false;
+        executionCommandPending_ = false;
         emit stopped();
     });
 
@@ -272,6 +274,7 @@ void DebuggerController::stop()
     discardProcess();
     running_ = false;
     paused_ = false;
+    executionCommandPending_ = false;
     armed_.clear();  // the debugger took the breakpoints with it
     emit logLine(tr("--- debug session ended ---"));
     // The finished handler above is disconnected, so a manual stop would
@@ -304,6 +307,7 @@ bool DebuggerController::abortStart()
     discardProcess();
     running_ = false;
     paused_ = false;
+    executionCommandPending_ = false;
     pendingCommands_.clear();
     armed_.clear();  // nothing was planted if the debugger never came up
     emit logLine(tr("debugger did not start"));
@@ -357,12 +361,14 @@ void DebuggerController::removeBreakpoint(const DebugBreakpoint& bp)
 
 void DebuggerController::cont()
 {
-    if (isRunning() && paused_) {
+    if (isRunning() && paused_ && !executionCommandPending_) {
+        if (backend_ == Backend::Gdb) {
+            executionCommandPending_ = true;
+        }
         writeCommand(contCommand());
         if (backend_ != Backend::Gdb) {
             // LLDB and cdb do not currently expose a parsed async MI-style
             // running record, so retain their optimistic state transition.
-            // GDB changes state only when its *running record arrives.
             paused_ = false;
             emit resumed();
         }
@@ -371,7 +377,10 @@ void DebuggerController::cont()
 
 void DebuggerController::stepOver()
 {
-    if (isRunning() && paused_) {
+    if (isRunning() && paused_ && !executionCommandPending_) {
+        if (backend_ == Backend::Gdb) {
+            executionCommandPending_ = true;
+        }
         writeCommand(stepOverCommand());
         if (backend_ != Backend::Gdb) {
             paused_ = false;
@@ -382,7 +391,10 @@ void DebuggerController::stepOver()
 
 void DebuggerController::stepInto()
 {
-    if (isRunning() && paused_) {
+    if (isRunning() && paused_ && !executionCommandPending_) {
+        if (backend_ == Backend::Gdb) {
+            executionCommandPending_ = true;
+        }
         writeCommand(stepIntoCommand());
         if (backend_ != Backend::Gdb) {
             paused_ = false;
@@ -393,7 +405,10 @@ void DebuggerController::stepInto()
 
 void DebuggerController::stepOut()
 {
-    if (isRunning() && paused_) {
+    if (isRunning() && paused_ && !executionCommandPending_) {
+        if (backend_ == Backend::Gdb) {
+            executionCommandPending_ = true;
+        }
         writeCommand(stepOutCommand());
         if (backend_ != Backend::Gdb) {
             paused_ = false;
@@ -653,6 +668,7 @@ void DebuggerController::handleGdbLine(const QString& line)
             emit logLine(tr("target exited"));
             return;
         }
+        executionCommandPending_ = false;
         paused_ = true;
         static const QRegularExpression filePattern(
             QStringLiteral("file=\"([^\"]*)\""));
@@ -672,13 +688,16 @@ void DebuggerController::handleGdbLine(const QString& line)
         return;
     }
     if (line.startsWith(QLatin1String("^error"))) {
+        executionCommandPending_ = false;
         emit logLine(tr("debugger command failed: %1").arg(line));
         return;
     }
     if (line.startsWith(QLatin1String("*running"))) {
         const bool wasPaused = paused_;
+        const bool wasPending = executionCommandPending_;
+        executionCommandPending_ = false;
         paused_ = false;
-        if (wasPaused) {
+        if (wasPaused || wasPending) {
             emit resumed();
         }
     }

@@ -269,10 +269,17 @@ TEST(DebuggerController, GdbRunningRecordsEmitOneResumedNotification)
     controller.setDebuggerPath(fake.debuggerPath);
     int pausedCount = 0;
     int resumedCount = 0;
+    int continueCommandCount = 0;
     QObject::connect(&controller, &DebuggerController::paused,
                      [&] { ++pausedCount; });
     QObject::connect(&controller, &DebuggerController::resumed,
                      [&] { ++resumedCount; });
+    QObject::connect(&controller, &DebuggerController::logLine,
+                     [&](const QString& line) {
+                         if (line == QStringLiteral("continue-command")) {
+                             ++continueCommandCount;
+                         }
+                     });
 
     ASSERT_TRUE(controller.start(fake.targetPath, fake.dir.path(), {}));
 
@@ -284,6 +291,7 @@ TEST(DebuggerController, GdbRunningRecordsEmitOneResumedNotification)
     ASSERT_EQ(pausedCount, 1);
 
     controller.cont();
+    controller.cont();  // a second click before *running must be ignored
     timer.restart();
     while (resumedCount == 0 && timer.elapsed() < 2000) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
@@ -295,6 +303,7 @@ TEST(DebuggerController, GdbRunningRecordsEmitOneResumedNotification)
         QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     }
     EXPECT_EQ(resumedCount, 1);
+    EXPECT_EQ(continueCommandCount, 1);
     controller.stop();
 }
 #endif
