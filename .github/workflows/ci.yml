@@ -23,6 +23,12 @@ on:
       - 'docs/**'
       - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
+    inputs:
+      full_validation:
+        description: 'Run the complete MSVC 2022/2026, Linux and macOS matrix'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -99,6 +105,7 @@ jobs:
           retention-days: 14
 
   msvc-2022:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_validation }}
     name: MSVC 2022 / Qt 6 / Debug / ctest
     runs-on: windows-2022
     timeout-minutes: 90
@@ -151,6 +158,7 @@ jobs:
           retention-days: 14
 
   msvc-2026:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_validation }}
     name: MSVC 2026 / Qt 6 / Debug / ctest
     runs-on: windows-2025-vs2026
     timeout-minutes: 90
@@ -212,6 +220,7 @@ jobs:
           retention-days: 14
 
   linux-native:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_validation }}
     name: Linux / Qt 6 / native / ctest
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -258,6 +267,7 @@ jobs:
           retention-days: 14
 
   macos-native:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_validation }}
     name: macOS / Qt 6 / native / ctest
     runs-on: macos-latest
     timeout-minutes: 60

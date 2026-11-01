@@ -7,7 +7,16 @@ extern "C" {
 }
 
 // After the Lua headers: LuaBridge refuses to be included before them.
+#if defined(_MSC_VER)
+// LuaBridge3 dispatch templates contain branches MSVC proves unreachable
+// after instantiation (C4702). Scope the suppression to this dependency.
+#pragma warning(push)
+#pragma warning(disable : 4702)
+#endif
 #include "LuaBridge/LuaBridge.h"
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 #include "LightCpp/Plugin/PluginManager.hpp"
 

@@ -156,3 +156,12 @@
 - Push and pull-request CI ignores Markdown-only, `.chatgpt/**`, docs-only, and issue-template-only changes. Source/build/workflow changes still run the full platform matrix; existing concurrency cancellation remains enabled.
 - Further debugger review found GDB breakpoint insertion interpolated a path directly into a quoted MI string. Paths containing a quote could terminate the argument early. The command now uses the same MI-string escaping helper as removal, with a regression test for a quoted POSIX filename.
 - Changes are committed together to minimize additional workflow runs. CI/build verification is pending.
+
+
+## CI frequency and current regression follow-up (2026-11-01)
+
+- Inspected run `41290672035`: MSVC 2022 and MSVC 2026 both configured successfully but failed compiling LuaBridge3's `CFunctions.h` with warning C4702 promoted to C2220. The prior SYSTEM include marking did not suppress this template diagnostic. Scoped MSVC warning suppression to the LuaBridge include only; first-party warnings remain /W4 /WX.
+- The same run's MSYS2 UCRT64 build succeeded, but 1 of 635 tests failed: the new quoted-path test assumed POSIX backslash semantics. On Windows, Qt normalizes that backslash as a path separator. The test now uses a quote-only filename so it exercises MI quoting consistently across platforms.
+- CI policy changed: push and pull-request events run only MSYS2 UCRT64. A manual `workflow_dispatch` checkbox named `full_validation` enables MSVC 2022, MSVC 2026, Linux and macOS jobs alongside MSYS2. The MSVC 2026 application artifact remains exclusive to the MSVC 2026 job and is produced during full validation.
+- Previous run results: Linux and macOS passed; MSYS2 build passed with the one test failure above. No MSVC application artifact was produced because the MSVC 2026 build stopped before CTest/upload.
+- Validation of these corrections is pending the next Actions run.
