@@ -10,8 +10,18 @@ name: CI
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - '**/*.md'
+      - '.chatgpt/**'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
   pull_request:
     branches: [master]
+    paths-ignore:
+      - '**/*.md'
+      - '.chatgpt/**'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
 
 permissions:
@@ -180,6 +190,15 @@ jobs:
         run: ctest --preset msvc2026
         env:
           QT_QPA_PLATFORM: offscreen
+
+      - name: Upload MSVC 2026 application artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LightCpp-MSVC2026-${{ github.sha }}
+          path: build/msvc2026/dist/**
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload MSVC 2026 CTest log
         if: always()
