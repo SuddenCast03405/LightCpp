@@ -1,0 +1,14 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "docs-core",
+  "name": "Docs & Help",
+  "nameZh": "文档与帮助",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "快速帮助、快捷键、插件文档、C/C++ 标准与第三方库文档、Doxygen 注释解析与 API 浏览。",
+  "capabilitySets": [
+    "doc.core"
+  ]
+}

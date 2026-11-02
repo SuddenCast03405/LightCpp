@@ -1,0 +1,20 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "test-core",
+  "name": "Test Explorer Core",
+  "nameZh": "测试核心",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "测试列表视图、运行/重跑、超时控制、输出解析与覆盖率（gcov / lcov）的统一框架。",
+  "capabilitySets": [
+    "test.core",
+    "test.coverage"
+  ],
+  "contributes": {
+    "testExplorer": {
+      "frameworks": "testFrameworks"
+    }
+  }
+}

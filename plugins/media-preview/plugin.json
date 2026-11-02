@@ -1,0 +1,30 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "media-preview",
+  "name": "Media Preview",
+  "nameZh": "图像 / 资源预览",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "在编辑器内预览图像、字体与常见资源文件。",
+  "capabilitySets": [
+    "tool.runtime"
+  ],
+  "contributes": {
+    "fileAssociations": [
+      {
+        "pattern": "*.png",
+        "viewer": "image"
+      },
+      {
+        "pattern": "*.svg",
+        "viewer": "image"
+      },
+      {
+        "pattern": "*.ttf",
+        "viewer": "font"
+      }
+    ]
+  }
+}
