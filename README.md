@@ -19,7 +19,7 @@ python tools/lightcpp_pm.py graph --format mermaid        # 输出分层依赖�
 python tools/lightcpp_pm.py coverage                      # 功能覆盖统计
 python tools/lightcpp_pm.py engines                       # 互斥引擎组（clangd / ccls）
 python tools/lightcpp_pm.py docs --check                  # 检查生成文档是否过期
-python -m unittest discover -s tests -v                   # 24 个用例
+python -m unittest discover -s tests -v                   # 25 个用例
 ```
 
 `resolve` 的典型输出：
