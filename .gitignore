@@ -39,10 +39,10 @@
 *.out
 *.app
 
-# Build directories
-build/
-Build/
-build-*/
+# Build directories（锚定仓库根，避免误伤 plugins/build-* 这类插件目录）
+/build/
+/Build/
+/build-*/
 
 # CMake generated files
 CMakeFiles/
@@ -65,8 +65,8 @@ vcpkg_installed/
 *.dwo
 
 # test output & cache
-Testing/
-.cache/
+/Testing/
+/.cache/
 
 # Python
 __pycache__/

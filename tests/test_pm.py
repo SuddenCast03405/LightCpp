@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """lightcpp_pm 的行为测试：既校验真实仓库，也用合成仓库覆盖各类错误分支。"""
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -118,6 +119,17 @@ class RealRepoTests(unittest.TestCase):
             if lsp:
                 groups.setdefault(lsp["exclusiveGroup"], []).append(lsp["engine"])
         self.assertEqual(sorted(groups["cpp-lsp"]), ["ccls", "clangd"])
+
+    def test_every_plugin_dir_is_tracked(self):
+        """防止 .gitignore 规则（如 build-*/）把插件目录吞掉。"""
+        if not (ROOT / ".git").exists():
+            self.skipTest("非 git 工作区")
+        out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "plugins"],
+                             capture_output=True, text=True, check=True).stdout
+        tracked = {Path(line).parts[1] for line in out.splitlines()
+                   if line.endswith("plugin.json")}
+        on_disk = {p.name for p in (ROOT / "plugins").iterdir() if p.is_dir()}
+        self.assertEqual(on_disk - tracked, set(), "存在未被 git 跟踪的插件目录")
 
     def test_docs_up_to_date(self):
         self.assertEqual(pm.build_plugins_doc(self.repo),
