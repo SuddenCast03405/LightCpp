@@ -1,8 +1,7 @@
-<!-- 由 tools/lightcpp_pm.py docs 生成，请勿手工编辑 -->
-
+<!-- 由 lightcpp-pm docs 生成，请勿手工编辑 -->
 # 功能目录
 
-规划中的每一条能力都登记在此，并用 `plugins` / `except` 标注归属，`tools/lightcpp_pm.py validate` 会强制要求所有 `required` 功能有归属。
+规划中的每一条能力都登记在此，并用 `plugins` / `except` 标注归属，`lightcpp-pm validate` 会强制要求所有 `required` 功能有归属。
 
 ## 语言与编辑器基础
 

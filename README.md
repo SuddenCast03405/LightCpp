@@ -9,7 +9,33 @@ LightCpp 是一个面向 C/C++ 的轻量级跨平台 IDE。本仓库先把 **插
 
 ## 快速开始
 
-无需任何第三方依赖，Python 3.9+ 即可：
+仓库里有 **两套等价实现**：C++ 内核（`core/`，交付主线）与 Python 参考实现（`tools/`，用于交叉验证）。
+两者读同一份清单、产出同一份文档，`docs --check` 在两边都能过。
+
+### C++ 内核（推荐）
+
+只依赖 CMake 3.16+ 与一个 C++17 编译器，无任何第三方库：
+
+```bash
+cmake -S core -B core/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build core/build
+ctest --test-dir core/build --output-on-failure
+
+core/build/bin/lightcpp-pm validate --strict      # 47 组件 / 40 功能集 / 189 条功能
+core/build/bin/lightcpp-pm resolve cpp-extension-pack
+core/build/bin/lightcpp-pm docs --check
+core/build/bin/lightcpp-pm host                   # 真实 dlopen 加载内置插件
+```
+
+严格模式（CI 使用，警告即错误）：
+
+```bash
+cmake -S core -B core/build -G Ninja -DLIGHTC_WERROR=ON -DLIGHTC_WITH_SANITIZERS=ON
+```
+
+### Python 参考实现
+
+Python 3.9+ 即可，无需第三方依赖：
 
 ```bash
 python tools/lightcpp_pm.py validate                     # 校验清单、依赖、功能覆盖、计划不变量
@@ -42,8 +68,9 @@ python -m unittest discover -s tests -v                   # 25 个用例
 | `catalog/features.json` | 189 条功能目录，按 12 个域、40 个功能集组织，标注归属插件与状态 |
 | `catalog/invariants.json` | 规划中的硬性条款（如"Dev-C++ 强依赖 Make""CMake 连带 Ninja"），逐条自动校验 |
 | `schemas/plugin.schema.json` | 插件清单的 JSON Schema |
-| `tools/lightcpp_pm.py` | 校验 / 解析 / 依赖图 / 功能矩阵 / 文档生成 |
-| `tests/test_pm.py` | 真实仓库回归 + 合成仓库的异常分支测试 |
+| `core/` | **C++17 内核**：清单解析、校验器、解析器、插件宿主、CLI、8 个原生插件、单元测试 |
+| `tools/lightcpp_pm.py` | Python 参考实现：校验 / 解析 / 依赖图 / 功能矩阵 / 文档生成 |
+| `tests/test_pm.py` | Python 侧回归：真实仓库 + 合成仓库的异常分支测试 |
 | `docs/` | 架构说明、规划追溯表、插件开发指南，以及自动生成的清单与功能目录 |
 
 ## 分层
@@ -82,14 +109,17 @@ graph TD
 - **远程构建**：`planned`，v0.1 不提供入口。
 - **内置终端**：规划中即标注"目前有问题"，功能状态 `known-issue`，v0.1 以外部终端 + Shell 集成兜底。
 - **汇编**：仅 x86 系与 Arm 系，其他架构不提供高亮与编译。
-- **宿主体**：本仓库当前阶段只到"清单 + 工具链"，插件加载器、贡献点注册、UI 宿主在后续里程碑实现。
+- **宿主体**：C++ 内核已实现插件宿主（`dlopen` + 贡献点注册 + 互斥组仲裁），但 **UI 宿主** 与真实构建/调试执行仍在后续里程碑。
+  当前 `host` 命令只做"清单级自检"：加载真实动态库、注册贡献点，不启动任何构建或调试进程。
+- **原生实现覆盖**：内置 8 个插件带真实 `.so`（`cpp-base`、`clang-core`、`gdb`、`test-core`、`cmake`/`meson`/`make`/`ninja`），
+  其余 34 个仍是纯清单插件，`host` 会如实汇报"缺少实现库"。
 
 ## 路线图
 
 | 里程碑 | 内容 | 状态 |
 | --- | --- | --- |
-| v0.1 | 插件生态 SSOT：清单、功能目录、不变量、解析器、文档生成、CI | 本分支已完成 |
-| v0.2 | 插件宿主运行时：加载/激活、贡献点注册（languages / buildSystems / debuggers / lsp） | 计划中 |
+| v0.1 | 插件生态 SSOT：清单、功能目录、不变量、解析器、文档生成、CI | 已完成（Python 参考实现） |
+| v0.2 | 插件宿主运行时：C++ 内核、加载/激活、贡献点注册、8 个原生插件、CLI 与单测 | **本分支已完成** |
 | v0.3 | 构建首个可用闭环：CMake + Ninja + compile_commands + clangd 索引 | 计划中 |
 | v0.4 | 调试闭环：GDB / LLDB DAP 适配，断点与变量视图 | 计划中 |
 | v0.5 | 市场与扩展包一键安装 | 计划中 |
