@@ -1,0 +1,14 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "log-viewer",
+  "name": "Log Viewer",
+  "nameZh": "日志查看器",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "结构化日志查看、过滤与跟随（tail -f）。",
+  "capabilitySets": [
+    "tool.runtime"
+  ]
+}

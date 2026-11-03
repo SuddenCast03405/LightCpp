@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "terminal",
+  "name": "Terminal & Tools",
+  "nameZh": "终端与工具集成",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "命令面板、外部工具配置、运行/调试程序入口与 Shell 集成；内置终端在当前版本存在已知问题。",
+  "capabilitySets": [
+    "tool.workbench"
+  ],
+  "activation": [
+    "onStartup"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "workbench.action.terminal.new",
+        "title": "新建终端"
+      },
+      {
+        "id": "workbench.action.tasks.run",
+        "title": "运行任务"
+      },
+      {
+        "id": "workbench.action.debug.start",
+        "title": "启动调试"
+      }
+    ],
+    "knownIssues": [
+      "内置终端目前有问题，v0.1 以外部终端 + Shell 集成为兜底"
+    ]
+  }
+}

@@ -1,4 +1,7 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> origin/merge/deliveries-2026-11-03
 # Build output
 build/
 
@@ -35,16 +38,31 @@ Thumbs.db
 .DS_Store
 
 .tmp.txt
+<<<<<<< HEAD
 =======
 # Prerequisites
 *.d
 
 # Compiled Object files
+=======
+
+# ---------------------------------------------------------------------------
+# Merged from LightCpp-交付包-2026-11-03.zip (plugin-ecosystem delivery).
+# Union of the delivery package's ignore rules with the rules above; nothing
+# above was removed, so the third_party/ and .workbuddy/ entries still apply.
+# ---------------------------------------------------------------------------
+
+# Prerequisites
+*.d
+
+# Compiled object files
+>>>>>>> origin/merge/deliveries-2026-11-03
 *.slo
 *.lo
 *.o
 *.obj
 
+<<<<<<< HEAD
 # Precompiled Headers
 *.gch
 *.pch
@@ -56,10 +74,23 @@ Thumbs.db
 *.pdb
 
 # Compiled Dynamic libraries
+=======
+# Precompiled headers
+*.gch
+*.pch
+
+# Linker / debug artifacts
+*.ilk
+*.pdb
+*.dwo
+
+# Compiled libraries
+>>>>>>> origin/merge/deliveries-2026-11-03
 *.so
 *.dylib
 *.dll
 *.so.*
+<<<<<<< HEAD
 
 
 # Fortran module files
@@ -73,14 +104,28 @@ Thumbs.db
 *.lib
 
 # Executables
+=======
+*.lai
+*.la
+*.lib
+
+# Compiled executables
+>>>>>>> origin/merge/deliveries-2026-11-03
 *.exe
 *.out
 *.app
 
+<<<<<<< HEAD
 # Build directories
 build/
 Build/
 build-*/
+=======
+# More build directories — anchored to the repo root so that plugin
+# directories such as plugins/build-core/ are not swallowed.
+/Build/
+/build-*/
+>>>>>>> origin/merge/deliveries-2026-11-03
 
 # CMake generated files
 CMakeFiles/
@@ -99,6 +144,7 @@ compile_commands.json
 # vcpkg
 vcpkg_installed/
 
+<<<<<<< HEAD
 # debug information files
 *.dwo
 
@@ -106,3 +152,14 @@ vcpkg_installed/
 Testing/
 .cache/
 >>>>>>> origin/check/feature-audit-2026-11-01
+=======
+# Test output & caches
+/Testing/
+/.cache/
+
+# Python (tools/lightcpp_pm.py, tests/test_pm.py)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+>>>>>>> origin/merge/deliveries-2026-11-03

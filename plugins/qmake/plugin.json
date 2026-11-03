@@ -1,0 +1,42 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "qmake",
+  "name": "Qt QMake",
+  "nameZh": "Qt QMake",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "解析 .pro / .pri 工程文件并驱动 qmake 构建，是 Qt C++ Core 的构建基础。",
+  "dependencies": {
+    "cpp-base": "^0.1.0",
+    "build-core": "^0.1.0"
+  },
+  "capabilitySets": [
+    "lang.buildfile"
+  ],
+  "contributes": {
+    "buildSystems": [
+      "qmake"
+    ],
+    "languages": [
+      {
+        "id": "qmake",
+        "extensions": [
+          ".pro",
+          ".pri"
+        ]
+      }
+    ],
+    "fileAssociations": [
+      {
+        "pattern": "*.pro",
+        "language": "qmake"
+      },
+      {
+        "pattern": "*.pri",
+        "language": "qmake"
+      }
+    ]
+  }
+}

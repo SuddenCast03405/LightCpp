@@ -1,0 +1,23 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "pkg-conan",
+  "name": "Conan Integration",
+  "nameZh": "Conan 集成",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "集成 Conan 2 的 profile 与依赖解析，生成构建系统可消费的配置。",
+  "dependencies": {
+    "build-core": "^0.1.0"
+  },
+  "capabilitySets": [
+    "tool.pkg"
+  ],
+  "contributes": {
+    "packageManager": {
+      "id": "conan",
+      "manifest": "conanfile.txt"
+    }
+  }
+}

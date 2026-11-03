@@ -1,0 +1,23 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "catch2",
+  "name": "Catch2",
+  "nameZh": "Catch2",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "Catch2 适配器：按标签过滤、解析断言失败位置。",
+  "dependencies": {
+    "test-core": "^0.1.0"
+  },
+  "capabilitySets": [
+    "test.framework"
+  ],
+  "contributes": {
+    "testFramework": {
+      "id": "catch2",
+      "label": "Catch2"
+    }
+  }
+}

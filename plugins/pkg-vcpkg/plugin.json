@@ -1,0 +1,23 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "pkg-vcpkg",
+  "name": "vcpkg Integration",
+  "nameZh": "vcpkg 集成",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "检测并驱动 vcpkg 清单模式，向构建系统注入工具链文件与依赖信息。",
+  "dependencies": {
+    "build-core": "^0.1.0"
+  },
+  "capabilitySets": [
+    "tool.pkg"
+  ],
+  "contributes": {
+    "packageManager": {
+      "id": "vcpkg",
+      "manifest": "vcpkg.json"
+    }
+  }
+}

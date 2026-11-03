@@ -1,0 +1,9 @@
+# cmake：构建系统层插件，复用 BuildSystemCore 的适配器实现。
+lightcpp_add_plugin(lightcpp_plugin_cmake
+    OUTPUT_OUT cmake
+    SOURCES CMakePlugin.cpp)
+target_link_libraries(lightcpp_plugin_cmake PRIVATE lightcpp_buildsystem_core)
+target_compile_definitions(lightcpp_plugin_cmake PRIVATE
+    LIGHTC_PLUGIN_ID="cmake"
+    LIGHTC_PLUGIN_VERSION="0.1.0")
+target_compile_definitions(lightcpp_plugin_cmake PRIVATE LIGHTC_HAVE_BUILD_SYSTEM_CORE=1)

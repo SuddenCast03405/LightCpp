@@ -1,0 +1,29 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "cpp-extension-pack",
+  "name": "C/C++ Extension Pack",
+  "nameZh": "C/C++ 扩展包",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "pack",
+  "layer": "pack",
+  "description": "面向现代 C/C++ 开发的一键安装集合，本身无业务逻辑，仅声明依赖。",
+  "dependencies": {
+    "cpp-base": "^0.1.0",
+    "clang-core": "^0.1.0",
+    "ccls": "^0.1.0",
+    "build-core": "^0.1.0",
+    "cmake": "^0.1.0",
+    "make": "^0.1.0",
+    "meson": "^0.1.0",
+    "bazel": "^0.1.0",
+    "ninja": "^0.1.0",
+    "compile-commands": "^0.1.0",
+    "custom-command": "^0.1.0",
+    "asm": "^0.1.0"
+  },
+  "activation": [],
+  "tags": [
+    "recommended"
+  ]
+}

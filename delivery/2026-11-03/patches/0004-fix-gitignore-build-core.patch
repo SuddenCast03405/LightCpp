@@ -1,0 +1,121 @@
+From 7db07c97bcfe16deb4d1d2a77570c3054f52110b Mon Sep 17 00:00:00 2001
+From: LightCpp Bot <bot@lightcpp.local>
+Date: Mon, 2 Nov 2026 22:06:57 +0800
+Subject: [PATCH 4/5] =?UTF-8?q?fix(gitignore):=20=E9=94=9A=E5=AE=9A?=
+ =?UTF-8?q?=E6=9E=84=E5=BB=BA=E7=9B=AE=E5=BD=95=E8=A7=84=E5=88=99=EF=BC=8C?=
+ =?UTF-8?q?=E8=A1=A5=E5=9B=9E=E8=A2=AB=E8=AF=AF=E5=BF=BD=E7=95=A5=E7=9A=84?=
+ =?UTF-8?q?=20build-core=20=E6=8F=92=E4=BB=B6?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+.gitignore 中的 build-*/ 会匹配任意层级的 build-* 目录，把 plugins/build-core 一起吞掉，
+导致提交里缺了构建核心框架插件。改为只匹配仓库根下的构建产物目录，
+并新增用例：磁盘上的插件目录必须全部被 git 跟踪。
+---
+ .gitignore                     | 12 ++++++------
+ plugins/build-core/plugin.json | 31 +++++++++++++++++++++++++++++++
+ tests/test_pm.py               | 12 ++++++++++++
+ 3 files changed, 49 insertions(+), 6 deletions(-)
+ create mode 100644 plugins/build-core/plugin.json
+
+diff --git a/.gitignore b/.gitignore
+index 84f208c..1678ef6 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -39,10 +39,10 @@
+ *.out
+ *.app
+ 
+-# Build directories
+-build/
+-Build/
+-build-*/
++# Build directories（锚定仓库根，避免误伤 plugins/build-* 这类插件目录）
++/build/
++/Build/
++/build-*/
+ 
+ # CMake generated files
+ CMakeFiles/
+@@ -65,8 +65,8 @@ vcpkg_installed/
+ *.dwo
+ 
+ # test output & cache
+-Testing/
+-.cache/
++/Testing/
++/.cache/
+ 
+ # Python
+ __pycache__/
+diff --git a/plugins/build-core/plugin.json b/plugins/build-core/plugin.json
+new file mode 100644
+index 0000000..456eec6
+--- /dev/null
++++ b/plugins/build-core/plugin.json
+@@ -0,0 +1,31 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "build-core",
++  "name": "Build & Project Core",
++  "nameZh": "项目与构建系统核心",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-framework",
++  "description": "所有具体构建系统插件的前置核心框架：提供统一的项目管理接口、构建任务调度引擎，并向下分发项目/配置/工具链/执行/诊断/高级特性等标准化构建能力。",
++  "dependencies": {
++    "cpp-base": "^0.1.0"
++  },
++  "capabilitySets": [
++    "project.core",
++    "build.config",
++    "build.toolchain",
++    "build.exec",
++    "build.diagnostics",
++    "build.advanced"
++  ],
++  "activation": [
++    "onStartup"
++  ],
++  "contributes": {
++    "buildTaskEngine": {
++      "providers": "buildSystems",
++      "queue": "per-workspace"
++    }
++  }
++}
+diff --git a/tests/test_pm.py b/tests/test_pm.py
+index 6696547..1379caa 100644
+--- a/tests/test_pm.py
++++ b/tests/test_pm.py
+@@ -2,6 +2,7 @@
+ # -*- coding: utf-8 -*-
+ """lightcpp_pm 的行为测试：既校验真实仓库，也用合成仓库覆盖各类错误分支。"""
+ import json
++import subprocess
+ import sys
+ import tempfile
+ import unittest
+@@ -119,6 +120,17 @@ class RealRepoTests(unittest.TestCase):
+                 groups.setdefault(lsp["exclusiveGroup"], []).append(lsp["engine"])
+         self.assertEqual(sorted(groups["cpp-lsp"]), ["ccls", "clangd"])
+ 
++    def test_every_plugin_dir_is_tracked(self):
++        """防止 .gitignore 规则（如 build-*/）把插件目录吞掉。"""
++        if not (ROOT / ".git").exists():
++            self.skipTest("非 git 工作区")
++        out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "plugins"],
++                             capture_output=True, text=True, check=True).stdout
++        tracked = {Path(line).parts[1] for line in out.splitlines()
++                   if line.endswith("plugin.json")}
++        on_disk = {p.name for p in (ROOT / "plugins").iterdir() if p.is_dir()}
++        self.assertEqual(on_disk - tracked, set(), "存在未被 git 跟踪的插件目录")
++
+     def test_docs_up_to_date(self):
+         self.assertEqual(pm.build_plugins_doc(self.repo),
+                          (ROOT / "docs" / "PLUGINS.md").read_text(encoding="utf-8"))
+-- 
+2.43.0
+

@@ -1,0 +1,26 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "custom-command",
+  "name": "Custom Command",
+  "nameZh": "自定义命令",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "脱离标准构建系统，自定义编译/构建的 Shell 或批处理命令。",
+  "dependencies": {
+    "cpp-base": "^0.1.0",
+    "build-core": "^0.1.0"
+  },
+  "contributes": {
+    "buildSystems": [
+      "custom"
+    ],
+    "commands": [
+      {
+        "id": "customCommand.run",
+        "title": "运行自定义构建命令"
+      }
+    ]
+  }
+}

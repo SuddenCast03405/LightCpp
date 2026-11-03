@@ -1,0 +1,50 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "meson",
+  "name": "Meson",
+  "nameZh": "Meson",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "解析 meson.build 完成配置与构建；安装时自动连带安装 Ninja 作为默认后端。",
+  "dependencies": {
+    "cpp-base": "^0.1.0",
+    "build-core": "^0.1.0"
+  },
+  "capabilitySets": [
+    "lang.buildfile"
+  ],
+  "contributes": {
+    "buildSystems": [
+      "meson"
+    ],
+    "fileAssociations": [
+      {
+        "pattern": "meson.build",
+        "language": "meson"
+      },
+      {
+        "pattern": "meson_options.txt",
+        "language": "meson"
+      }
+    ],
+    "commands": [
+      {
+        "id": "meson.setup",
+        "title": "配置 (Meson)"
+      },
+      {
+        "id": "meson.build",
+        "title": "构建 (Meson)"
+      }
+    ]
+  },
+  "recommends": {
+    "ninja": {
+      "version": "^0.1.0",
+      "autoInstall": true,
+      "reason": "Meson 默认后端（ninja backend），安装 Meson 时自动连带安装"
+    }
+  }
+}

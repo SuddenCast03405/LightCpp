@@ -1,0 +1,1504 @@
+{
+  "schemaVersion": 1,
+  "source": "lightcpp.1.md",
+  "domains": [
+    {
+      "id": "lang",
+      "label": "语言与编辑器基础"
+    },
+    {
+      "id": "project",
+      "label": "项目与文件管理"
+    },
+    {
+      "id": "build",
+      "label": "构建配置与执行"
+    },
+    {
+      "id": "clang",
+      "label": "Clang 工具链集成"
+    },
+    {
+      "id": "debug",
+      "label": "调试器"
+    },
+    {
+      "id": "intel",
+      "label": "代码智能"
+    },
+    {
+      "id": "analysis",
+      "label": "静态分析与代码质量"
+    },
+    {
+      "id": "git",
+      "label": "版本控制"
+    },
+    {
+      "id": "tool",
+      "label": "终端与工具集成"
+    },
+    {
+      "id": "test",
+      "label": "测试"
+    },
+    {
+      "id": "doc",
+      "label": "文档与帮助"
+    },
+    {
+      "id": "qt",
+      "label": "Qt 生态"
+    }
+  ],
+  "sets": [
+    {
+      "id": "lang.cpp",
+      "domain": "lang",
+      "label": "C/C++ 语言基础",
+      "plugins": [
+        "cpp-base"
+      ],
+      "features": [
+        {
+          "id": "lang.cpp.highlight",
+          "label": "C/C++ 语法高亮",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "lang.asm",
+      "domain": "lang",
+      "label": "汇编支持（仅 x86 系与 Arm 系）",
+      "plugins": [
+        "asm"
+      ],
+      "features": [
+        {
+          "id": "lang.asm.highlight",
+          "label": "汇编语法高亮（x86 / Arm）",
+          "status": "required"
+        },
+        {
+          "id": "lang.asm.compile",
+          "label": "汇编文件编译与目标文件产出",
+          "status": "required"
+        },
+        {
+          "id": "lang.asm.limit",
+          "label": "非 x86/Arm 架构不提供汇编支持（规划约束）",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "lang.buildfile",
+      "domain": "lang",
+      "label": "构建描述文件高亮",
+      "plugins": [
+        "cmake",
+        "meson",
+        "make",
+        "ninja",
+        "bazel",
+        "qmake",
+        "clang-core"
+      ],
+      "features": [
+        {
+          "id": "lang.buildfile.highlight",
+          "label": "构建描述文件高亮（CMakeLists.txt / *.cmake / Makefile / *.ninja / meson.build / BUILD / .clangd / .clang-format）",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "lang.qml",
+      "domain": "qt",
+      "label": "QML 语言支持",
+      "plugins": [
+        "qt-qml"
+      ],
+      "features": [
+        {
+          "id": "lang.qml.highlight",
+          "label": "QML 语法高亮",
+          "status": "required"
+        },
+        {
+          "id": "lang.qml.diagnostics",
+          "label": "QML 诊断与补全",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "lang.ui",
+      "domain": "qt",
+      "label": "Qt Designer 资源",
+      "plugins": [
+        "qt-ui"
+      ],
+      "features": [
+        {
+          "id": "lang.ui.preview",
+          "label": ".ui 文件预览与编辑器",
+          "status": "required"
+        },
+        {
+          "id": "lang.ui.resource",
+          "label": ".qrc 资源预览",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "project.core",
+      "domain": "project",
+      "label": "项目与文件管理",
+      "plugins": [
+        "build-core"
+      ],
+      "features": [
+        {
+          "id": "project.create",
+          "label": "新建项目 / 打开项目 / 项目模板",
+          "status": "required"
+        },
+        {
+          "id": "project.tree",
+          "label": "项目树 / 文件树 / 目录监视",
+          "status": "required"
+        },
+        {
+          "id": "project.file.ops",
+          "label": "添加文件 / 删除文件 / 重命名文件",
+          "status": "required"
+        },
+        {
+          "id": "project.targets",
+          "label": "项目依赖关系 / 目标 (Target) 管理",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "build.config",
+      "domain": "build",
+      "label": "构建配置管理",
+      "plugins": [
+        "build-core"
+      ],
+      "features": [
+        {
+          "id": "build.config.configuration",
+          "label": "项目配置 / 多构建配置 (Debug / Release / RelWithDebInfo)",
+          "status": "required"
+        },
+        {
+          "id": "build.config.platform",
+          "label": "多目标平台支持",
+          "status": "required"
+        },
+        {
+          "id": "build.config.runtime",
+          "label": "环境变量 / 工作目录 / 命令行参数配置",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "build.toolchain",
+      "domain": "build",
+      "label": "工具链与编译参数管理",
+      "plugins": [
+        "build-core"
+      ],
+      "features": [
+        {
+          "id": "build.toolchain.cross",
+          "label": "交叉编译配置 / 交叉编译工具链配置",
+          "status": "required"
+        },
+        {
+          "id": "build.toolchain.detect",
+          "label": "工具链检测 / 编译器检测",
+          "status": "required"
+        },
+        {
+          "id": "build.toolchain.standard",
+          "label": "标准选择 (C / C++ Standard)",
+          "status": "required"
+        },
+        {
+          "id": "build.toolchain.defines",
+          "label": "宏定义管理",
+          "status": "required"
+        },
+        {
+          "id": "build.toolchain.includes",
+          "label": "Include 路径管理",
+          "status": "required"
+        },
+        {
+          "id": "build.toolchain.libs",
+          "label": "链接库管理",
+          "status": "required"
+        },
+        {
+          "id": "build.toolchain.flags",
+          "label": "编译选项管理",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "build.exec",
+      "domain": "build",
+      "label": "构建执行操作",
+      "plugins": [
+        "build-core"
+      ],
+      "features": [
+        {
+          "id": "build.exec.build",
+          "label": "本地构建",
+          "status": "required"
+        },
+        {
+          "id": "build.exec.compile",
+          "label": "编译",
+          "status": "required"
+        },
+        {
+          "id": "build.exec.rebuild",
+          "label": "重新编译",
+          "status": "required"
+        },
+        {
+          "id": "build.exec.clean",
+          "label": "清理",
+          "status": "required"
+        },
+        {
+          "id": "build.exec.install",
+          "label": "安装 (Install)",
+          "status": "required"
+        },
+        {
+          "id": "build.exec.package",
+          "label": "打包 (Package)",
+          "status": "required"
+        },
+        {
+          "id": "build.exec.target",
+          "label": "构建指定 target",
+          "status": "required"
+        },
+        {
+          "id": "build.exec.parallel",
+          "label": "并行构建",
+          "status": "required"
+        },
+        {
+          "id": "build.exec.incremental",
+          "label": "增量构建",
+          "status": "required"
+        },
+        {
+          "id": "build.exec.remote",
+          "label": "远程构建",
+          "status": "planned",
+          "note": "规划中 / 暂不支持，v0.1 不提供入口"
+        }
+      ]
+    },
+    {
+      "id": "build.diagnostics",
+      "domain": "build",
+      "label": "构建反馈与诊断",
+      "plugins": [
+        "build-core"
+      ],
+      "features": [
+        {
+          "id": "build.diagnostics.output",
+          "label": "构建输出窗口",
+          "status": "required"
+        },
+        {
+          "id": "build.diagnostics.log",
+          "label": "构建日志保存",
+          "status": "required"
+        },
+        {
+          "id": "build.diagnostics.error",
+          "label": "编译错误解析",
+          "status": "required"
+        },
+        {
+          "id": "build.diagnostics.warning",
+          "label": "编译警告解析",
+          "status": "required"
+        },
+        {
+          "id": "build.diagnostics.jump",
+          "label": "点击错误 / 警告跳转至对应文件及行号",
+          "status": "required"
+        },
+        {
+          "id": "build.diagnostics.commandline",
+          "label": "编译命令查看（具体执行的编译命令行）",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "build.advanced",
+      "domain": "build",
+      "label": "高级构建特性",
+      "plugins": [
+        "build-core"
+      ],
+      "features": [
+        {
+          "id": "build.advanced.cache",
+          "label": "构建缓存支持 / CCache 支持",
+          "status": "required"
+        },
+        {
+          "id": "build.advanced.compile_commands",
+          "label": "生成 / 管理编译数据库 (compile_commands.json)",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "clang.format",
+      "domain": "clang",
+      "label": "clang-format 策略",
+      "plugins": [
+        "clang-core"
+      ],
+      "features": [
+        {
+          "id": "clang.format.single",
+          "label": "单文件格式化优先调用 clangd 内置能力",
+          "status": "required"
+        },
+        {
+          "id": "clang.format.project",
+          "label": "多文件 / 项目级格式化调用独立 clang-format 可执行文件",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "clang.tidy",
+      "domain": "clang",
+      "label": "clang-tidy",
+      "plugins": [
+        "clang-core"
+      ],
+      "features": [
+        {
+          "id": "clang.tidy.realtime",
+          "label": "clang-tidy 实时检查（可关闭以保证大项目性能）",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "clang.discovery",
+      "domain": "clang",
+      "label": "配置自动发现",
+      "plugins": [
+        "clang-core"
+      ],
+      "features": [
+        {
+          "id": "clang.discovery.scan",
+          "label": "打开项目时扫描项目根目录及父目录的 .clang-format / .clang-tidy",
+          "status": "required"
+        },
+        {
+          "id": "clang.discovery.apply",
+          "label": "存在配置时自动应用规则，无需手动配置",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "clang.settings",
+      "domain": "clang",
+      "label": "Clang Core 设置页",
+      "plugins": [
+        "clang-core"
+      ],
+      "features": [
+        {
+          "id": "clang.settings.tidy",
+          "label": "开关 clang-tidy 实时检查",
+          "status": "required"
+        },
+        {
+          "id": "clang.settings.style",
+          "label": "默认 clang-format 风格（LLVM / Google / Chromium / Mozilla / WebKit）",
+          "status": "required"
+        },
+        {
+          "id": "clang.settings.path",
+          "label": "自定义 clangd / clang-tidy 可执行文件路径",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "debug.breakpoint",
+      "domain": "debug",
+      "label": "断点体系",
+      "plugins": [
+        "gdb",
+        "lldb",
+        "cdb",
+        "vs-debugger"
+      ],
+      "features": [
+        {
+          "id": "debug.bp.line",
+          "label": "断点",
+          "status": "required"
+        },
+        {
+          "id": "debug.bp.conditional",
+          "label": "条件断点",
+          "status": "required"
+        },
+        {
+          "id": "debug.bp.logpoint",
+          "label": "日志断点",
+          "status": "required",
+          "except": [
+            "cdb",
+            "vs-debugger"
+          ]
+        },
+        {
+          "id": "debug.bp.hitcount",
+          "label": "忽略次数断点",
+          "status": "required"
+        },
+        {
+          "id": "debug.bp.temporary",
+          "label": "临时断点",
+          "status": "required"
+        },
+        {
+          "id": "debug.bp.function",
+          "label": "函数断点",
+          "status": "required"
+        },
+        {
+          "id": "debug.bp.address",
+          "label": "地址断点",
+          "status": "required",
+          "except": [
+            "vs-debugger"
+          ]
+        },
+        {
+          "id": "debug.bp.memory",
+          "label": "内存断点",
+          "status": "required",
+          "except": [
+            "vs-debugger"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "debug.control",
+      "domain": "debug",
+      "label": "执行控制",
+      "plugins": [
+        "gdb",
+        "lldb",
+        "cdb",
+        "vs-debugger"
+      ],
+      "features": [
+        {
+          "id": "debug.control.step_in",
+          "label": "单步进入",
+          "status": "required"
+        },
+        {
+          "id": "debug.control.step_over",
+          "label": "单步跳过",
+          "status": "required"
+        },
+        {
+          "id": "debug.control.step_out",
+          "label": "单步跳出",
+          "status": "required"
+        },
+        {
+          "id": "debug.control.continue",
+          "label": "继续运行",
+          "status": "required"
+        },
+        {
+          "id": "debug.control.pause",
+          "label": "暂停",
+          "status": "required"
+        },
+        {
+          "id": "debug.control.stop",
+          "label": "停止",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "debug.inspect",
+      "domain": "debug",
+      "label": "状态查看",
+      "plugins": [
+        "gdb",
+        "lldb",
+        "cdb",
+        "vs-debugger"
+      ],
+      "features": [
+        {
+          "id": "debug.view.locals",
+          "label": "局部变量查看",
+          "status": "required"
+        },
+        {
+          "id": "debug.view.watch",
+          "label": "监视变量",
+          "status": "required"
+        },
+        {
+          "id": "debug.view.evaluate",
+          "label": "表达式求值",
+          "status": "required"
+        },
+        {
+          "id": "debug.view.callstack",
+          "label": "调用栈",
+          "status": "required"
+        },
+        {
+          "id": "debug.view.threads",
+          "label": "线程列表",
+          "status": "required"
+        },
+        {
+          "id": "debug.view.registers",
+          "label": "寄存器视图",
+          "status": "required"
+        },
+        {
+          "id": "debug.view.memory",
+          "label": "内存视图",
+          "status": "required"
+        },
+        {
+          "id": "debug.view.disassembly",
+          "label": "反汇编视图",
+          "status": "required"
+        },
+        {
+          "id": "debug.view.console",
+          "label": "控制台输入输出",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "debug.attach",
+      "domain": "debug",
+      "label": "附加与载入",
+      "plugins": [
+        "gdb",
+        "lldb",
+        "cdb",
+        "vs-debugger"
+      ],
+      "features": [
+        {
+          "id": "debug.attach.process",
+          "label": "进程附加",
+          "status": "required"
+        },
+        {
+          "id": "debug.attach.core",
+          "label": "core 文件加载",
+          "status": "required"
+        },
+        {
+          "id": "debug.attach.remote",
+          "label": "远程调试",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "debug.symbols",
+      "domain": "debug",
+      "label": "符号与可视化",
+      "plugins": [
+        "gdb",
+        "lldb",
+        "cdb",
+        "vs-debugger"
+      ],
+      "features": [
+        {
+          "id": "debug.symbol.load",
+          "label": "符号加载",
+          "status": "required"
+        },
+        {
+          "id": "debug.symbol.sourcemap",
+          "label": "源码映射",
+          "status": "required"
+        },
+        {
+          "id": "debug.symbol.pretty",
+          "label": "pretty-printer",
+          "status": "required",
+          "plugins": [
+            "gdb",
+            "lldb"
+          ]
+        },
+        {
+          "id": "debug.symbol.stl",
+          "label": "STL 容器展开",
+          "status": "required",
+          "plugins": [
+            "gdb",
+            "lldb"
+          ]
+        },
+        {
+          "id": "debug.symbol.smartptr",
+          "label": "智能指针展开",
+          "status": "required",
+          "plugins": [
+            "gdb",
+            "lldb"
+          ]
+        },
+        {
+          "id": "debug.symbol.enum",
+          "label": "枚举显示",
+          "status": "required"
+        },
+        {
+          "id": "debug.symbol.natvis",
+          "label": "natvis 可视化器",
+          "status": "required",
+          "plugins": [
+            "cdb",
+            "vs-debugger"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "debug.log",
+      "domain": "debug",
+      "label": "调试日志",
+      "plugins": [
+        "gdb",
+        "lldb",
+        "cdb",
+        "vs-debugger"
+      ],
+      "features": [
+        {
+          "id": "debug.log.window",
+          "label": "调试日志窗口",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "intel.core",
+      "domain": "intel",
+      "label": "代码智能基础能力",
+      "plugins": [
+        "clang-core",
+        "ccls"
+      ],
+      "features": [
+        {
+          "id": "intel.completion",
+          "label": "代码补全",
+          "status": "required"
+        },
+        {
+          "id": "intel.highlight.semantic",
+          "label": "语义高亮",
+          "status": "required"
+        },
+        {
+          "id": "intel.diagnostics",
+          "label": "诊断错误",
+          "status": "required"
+        },
+        {
+          "id": "intel.quickfix",
+          "label": "快速修复",
+          "status": "required"
+        },
+        {
+          "id": "intel.hover",
+          "label": "悬停提示",
+          "status": "required"
+        },
+        {
+          "id": "intel.signature",
+          "label": "函数签名提示",
+          "status": "required"
+        },
+        {
+          "id": "intel.goto.definition",
+          "label": "转到定义",
+          "status": "required"
+        },
+        {
+          "id": "intel.find.references",
+          "label": "查找引用",
+          "status": "required"
+        },
+        {
+          "id": "intel.symbol.search",
+          "label": "符号搜索",
+          "status": "required"
+        },
+        {
+          "id": "intel.rename",
+          "label": "重命名",
+          "status": "required"
+        },
+        {
+          "id": "intel.format",
+          "label": "代码格式化",
+          "status": "required"
+        },
+        {
+          "id": "intel.include.completion",
+          "label": "Include 补全",
+          "status": "required"
+        },
+        {
+          "id": "intel.include.sort",
+          "label": "Include 排序",
+          "status": "required"
+        },
+        {
+          "id": "intel.macro.expand",
+          "label": "宏展开",
+          "status": "required"
+        },
+        {
+          "id": "intel.type.hint",
+          "label": "类型推导提示",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "intel.nav",
+      "domain": "intel",
+      "label": "代码导航",
+      "plugins": [
+        "clang-core",
+        "ccls"
+      ],
+      "features": [
+        {
+          "id": "intel.nav.code",
+          "label": "代码导航",
+          "status": "required"
+        },
+        {
+          "id": "intel.nav.call.hierarchy",
+          "label": "调用层级",
+          "status": "required"
+        },
+        {
+          "id": "intel.nav.type.hierarchy",
+          "label": "类型层级",
+          "status": "required"
+        },
+        {
+          "id": "intel.nav.inheritance",
+          "label": "继承关系",
+          "status": "required"
+        },
+        {
+          "id": "intel.nav.class",
+          "label": "类视图",
+          "status": "required"
+        },
+        {
+          "id": "intel.nav.callgraph",
+          "label": "函数调用图",
+          "status": "required"
+        },
+        {
+          "id": "intel.nav.outline",
+          "label": "代码大纲",
+          "status": "required"
+        },
+        {
+          "id": "intel.nav.doc",
+          "label": "文档注释预览",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "analysis.engine",
+      "domain": "analysis",
+      "label": "静态分析引擎",
+      "plugins": [
+        "clang-core"
+      ],
+      "features": [
+        {
+          "id": "analysis.cppcheck",
+          "label": "Cppcheck",
+          "status": "required"
+        },
+        {
+          "id": "analysis.clang_sa",
+          "label": "Clang Static Analyzer",
+          "status": "required"
+        },
+        {
+          "id": "analysis.pvs",
+          "label": "PVS-Studio 集成",
+          "status": "required"
+        },
+        {
+          "id": "analysis.coverity",
+          "label": "Coverity 集成",
+          "status": "required"
+        },
+        {
+          "id": "analysis.compiler_warnings",
+          "label": "编译器警告分析",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "analysis.quality",
+      "domain": "analysis",
+      "label": "代码质量检查",
+      "plugins": [
+        "clang-core"
+      ],
+      "features": [
+        {
+          "id": "analysis.style",
+          "label": "代码规范检查",
+          "status": "required"
+        },
+        {
+          "id": "analysis.complexity",
+          "label": "复杂度分析",
+          "status": "required"
+        },
+        {
+          "id": "analysis.unused",
+          "label": "未使用变量检查",
+          "status": "required"
+        },
+        {
+          "id": "analysis.leak",
+          "label": "内存泄漏检查",
+          "status": "required"
+        },
+        {
+          "id": "analysis.nullptr",
+          "label": "空指针检查",
+          "status": "required"
+        },
+        {
+          "id": "analysis.bounds",
+          "label": "数组越界检查",
+          "status": "required"
+        },
+        {
+          "id": "analysis.coding_standard",
+          "label": "编码规范检查",
+          "status": "required"
+        },
+        {
+          "id": "analysis.security",
+          "label": "安全漏洞检查",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "git.core",
+      "domain": "git",
+      "label": "仓库与分支操作",
+      "plugins": [
+        "git"
+      ],
+      "features": [
+        {
+          "id": "git.clone",
+          "label": "克隆仓库",
+          "status": "required"
+        },
+        {
+          "id": "git.open",
+          "label": "打开仓库",
+          "status": "required"
+        },
+        {
+          "id": "git.branch.manage",
+          "label": "分支管理",
+          "status": "required"
+        },
+        {
+          "id": "git.branch.checkout",
+          "label": "切换分支",
+          "status": "required"
+        },
+        {
+          "id": "git.branch.create",
+          "label": "创建分支",
+          "status": "required"
+        },
+        {
+          "id": "git.merge",
+          "label": "合并",
+          "status": "required"
+        },
+        {
+          "id": "git.rebase",
+          "label": "rebase",
+          "status": "required"
+        },
+        {
+          "id": "git.cherry_pick",
+          "label": "cherry-pick",
+          "status": "required"
+        },
+        {
+          "id": "git.stash",
+          "label": "stash",
+          "status": "required"
+        },
+        {
+          "id": "git.commit",
+          "label": "commit",
+          "status": "required"
+        },
+        {
+          "id": "git.push",
+          "label": "push",
+          "status": "required"
+        },
+        {
+          "id": "git.pull",
+          "label": "pull",
+          "status": "required"
+        },
+        {
+          "id": "git.fetch",
+          "label": "fetch",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "git.history",
+      "domain": "git",
+      "label": "历史与差异",
+      "plugins": [
+        "git"
+      ],
+      "features": [
+        {
+          "id": "git.history.log",
+          "label": "查看历史",
+          "status": "required"
+        },
+        {
+          "id": "git.history.blame",
+          "label": "查看 blame",
+          "status": "required"
+        },
+        {
+          "id": "git.history.diff",
+          "label": "查看 diff",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "git.advanced",
+      "domain": "git",
+      "label": "进阶操作",
+      "plugins": [
+        "git"
+      ],
+      "features": [
+        {
+          "id": "git.conflict",
+          "label": "解决冲突",
+          "status": "required"
+        },
+        {
+          "id": "git.submodule",
+          "label": "子模块支持",
+          "status": "required"
+        },
+        {
+          "id": "git.worktree",
+          "label": "worktree 支持",
+          "status": "required"
+        },
+        {
+          "id": "git.tag",
+          "label": "tag 管理",
+          "status": "required"
+        },
+        {
+          "id": "git.remote",
+          "label": "remote 管理",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "git.ui",
+      "domain": "git",
+      "label": "编辑器内呈现",
+      "plugins": [
+        "git"
+      ],
+      "features": [
+        {
+          "id": "git.status",
+          "label": "文件状态显示",
+          "status": "required"
+        },
+        {
+          "id": "git.inline",
+          "label": "行内修改标记",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "git.auth",
+      "domain": "git",
+      "label": "提交与认证",
+      "plugins": [
+        "git"
+      ],
+      "features": [
+        {
+          "id": "git.commit.template",
+          "label": "提交模板",
+          "status": "required"
+        },
+        {
+          "id": "git.commit.gpg",
+          "label": "GPG 签名",
+          "status": "required"
+        },
+        {
+          "id": "git.auth.ssh_https",
+          "label": "SSH / HTTPS 认证",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "tool.workbench",
+      "domain": "tool",
+      "label": "工作台集成",
+      "plugins": [
+        "terminal"
+      ],
+      "features": [
+        {
+          "id": "tool.terminal",
+          "label": "内置终端",
+          "status": "known-issue",
+          "note": "规划中标注「目前有问题」，v0.1 以外部终端兜底"
+        },
+        {
+          "id": "tool.palette",
+          "label": "命令面板",
+          "status": "required"
+        },
+        {
+          "id": "tool.external",
+          "label": "外部工具配置",
+          "status": "required"
+        },
+        {
+          "id": "tool.run",
+          "label": "运行程序",
+          "status": "required"
+        },
+        {
+          "id": "tool.launch",
+          "label": "调试程序（插件）",
+          "status": "required"
+        },
+        {
+          "id": "tool.shell",
+          "label": "Shell 集成",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "tool.pkg",
+      "domain": "tool",
+      "label": "包管理器集成",
+      "plugins": [
+        "pkg-vcpkg",
+        "pkg-conan",
+        "pkg-hunter",
+        "pkg-native"
+      ],
+      "features": [
+        {
+          "id": "tool.pkg.vcpkg",
+          "label": "vcpkg",
+          "status": "required",
+          "plugins": [
+            "pkg-vcpkg"
+          ]
+        },
+        {
+          "id": "tool.pkg.conan",
+          "label": "conan",
+          "status": "required",
+          "plugins": [
+            "pkg-conan"
+          ]
+        },
+        {
+          "id": "tool.pkg.hunter",
+          "label": "Hunter",
+          "status": "required",
+          "plugins": [
+            "pkg-hunter"
+          ]
+        },
+        {
+          "id": "tool.pkg.system",
+          "label": "apt / brew / winget",
+          "status": "required",
+          "plugins": [
+            "pkg-native"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tool.runtime",
+      "domain": "tool",
+      "label": "运行环境与外部工具",
+      "plugins": [
+        "wsl",
+        "serial-terminal",
+        "log-viewer",
+        "hex-viewer",
+        "media-preview"
+      ],
+      "features": [
+        {
+          "id": "tool.wsl",
+          "label": "WSL 集成（插件）",
+          "status": "required",
+          "plugins": [
+            "wsl"
+          ]
+        },
+        {
+          "id": "tool.serial",
+          "label": "串口终端",
+          "status": "required",
+          "plugins": [
+            "serial-terminal"
+          ]
+        },
+        {
+          "id": "tool.log",
+          "label": "日志查看器",
+          "status": "required",
+          "plugins": [
+            "log-viewer"
+          ]
+        },
+        {
+          "id": "tool.hex",
+          "label": "Hex 查看器",
+          "status": "required",
+          "plugins": [
+            "hex-viewer"
+          ]
+        },
+        {
+          "id": "tool.media",
+          "label": "图像 / 资源预览",
+          "status": "required",
+          "plugins": [
+            "media-preview"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "test.core",
+      "domain": "test",
+      "label": "测试框架集成",
+      "plugins": [
+        "test-core"
+      ],
+      "features": [
+        {
+          "id": "test.unit.integration",
+          "label": "单元测试集成",
+          "status": "required"
+        },
+        {
+          "id": "test.explorer",
+          "label": "测试列表视图",
+          "status": "required"
+        },
+        {
+          "id": "test.run.single",
+          "label": "运行单个测试",
+          "status": "required"
+        },
+        {
+          "id": "test.run.all",
+          "label": "运行全部测试",
+          "status": "required"
+        },
+        {
+          "id": "test.failure.jump",
+          "label": "测试失败跳转",
+          "status": "required"
+        },
+        {
+          "id": "test.output.parse",
+          "label": "测试输出解析",
+          "status": "required"
+        },
+        {
+          "id": "test.timeout",
+          "label": "测试超时控制",
+          "status": "required"
+        },
+        {
+          "id": "test.log",
+          "label": "测试日志",
+          "status": "required"
+        },
+        {
+          "id": "test.rerun",
+          "label": "测试重跑",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "test.coverage",
+      "domain": "test",
+      "label": "覆盖率",
+      "plugins": [
+        "test-core"
+      ],
+      "features": [
+        {
+          "id": "test.coverage.report",
+          "label": "覆盖率统计",
+          "status": "required"
+        },
+        {
+          "id": "test.coverage.gcov_lcov",
+          "label": "gcov / lcov 集成",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "test.framework",
+      "domain": "test",
+      "label": "测试框架适配器",
+      "plugins": [
+        "gtest",
+        "catch2",
+        "boost-test",
+        "ctest"
+      ],
+      "features": [
+        {
+          "id": "test.fw.gtest",
+          "label": "GoogleTest 适配",
+          "status": "required",
+          "plugins": [
+            "gtest"
+          ]
+        },
+        {
+          "id": "test.fw.catch2",
+          "label": "Catch2 适配",
+          "status": "required",
+          "plugins": [
+            "catch2"
+          ]
+        },
+        {
+          "id": "test.fw.boost",
+          "label": "Boost.Test 适配",
+          "status": "required",
+          "plugins": [
+            "boost-test"
+          ]
+        },
+        {
+          "id": "test.fw.ctest",
+          "label": "CTest 适配",
+          "status": "required",
+          "plugins": [
+            "ctest"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "doc.core",
+      "domain": "doc",
+      "label": "文档与帮助",
+      "plugins": [
+        "docs-core"
+      ],
+      "features": [
+        {
+          "id": "doc.quickhelp",
+          "label": "快速帮助",
+          "status": "required"
+        },
+        {
+          "id": "doc.api",
+          "label": "API 文档浏览",
+          "status": "required"
+        },
+        {
+          "id": "doc.doxygen",
+          "label": "Doxygen 注释解析",
+          "status": "required"
+        },
+        {
+          "id": "doc.stdlib",
+          "label": "C/C++ 标准文档",
+          "status": "required"
+        },
+        {
+          "id": "doc.thirdparty",
+          "label": "第三方库文档",
+          "status": "required"
+        },
+        {
+          "id": "doc.inline",
+          "label": "代码提示文档",
+          "status": "required"
+        },
+        {
+          "id": "doc.shortcuts",
+          "label": "快捷键帮助",
+          "status": "required"
+        },
+        {
+          "id": "doc.plugin",
+          "label": "插件文档",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "doc.preview",
+      "domain": "doc",
+      "label": "内容预览",
+      "plugins": [
+        "doc-preview"
+      ],
+      "features": [
+        {
+          "id": "doc.preview.markdown",
+          "label": "Markdown 预览",
+          "status": "required"
+        },
+        {
+          "id": "doc.preview.rst",
+          "label": "reStructuredText 预览",
+          "status": "required"
+        },
+        {
+          "id": "doc.preview.browser",
+          "label": "内置浏览器",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "qt.build",
+      "domain": "qt",
+      "label": "Qt 项目与构建",
+      "plugins": [
+        "qt-cpp-core"
+      ],
+      "features": [
+        {
+          "id": "qt.project",
+          "label": "Qt 项目识别与 .pro / .pri 解析",
+          "status": "required"
+        },
+        {
+          "id": "qt.qmake.build",
+          "label": "基于 qmake 的 Qt 项目构建",
+          "status": "required"
+        }
+      ]
+    },
+    {
+      "id": "qt.cmake",
+      "domain": "qt",
+      "label": "Qt CMake 集成",
+      "plugins": [
+        "qt-cmake"
+      ],
+      "features": [
+        {
+          "id": "qt.cmake.integration",
+          "label": "Qt CMake 目标识别与构建（前置 CMake 插件）",
+          "status": "required"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # ---------------------------------------------------------------- C++ 内核
+  cxx:
+    name: C++ 内核（${{ matrix.os }} / ${{ matrix.cxx }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cxx: g++
+            extra: -DLIGHTC_WITH_SANITIZERS=ON
+          - os: ubuntu-latest
+            cxx: clang++
+            extra: ""
+          - os: macos-latest
+            cxx: clang++
+            extra: ""
+          - os: windows-latest
+            cxx: cl
+            extra: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Ninja
+        if: runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y ninja-build
+          else
+            brew install ninja || true
+          fi
+
+      - name: 配置（严格模式：警告即错误）
+        run: >
+          cmake -S core -B core/build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DLIGHTC_WERROR=ON
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          ${{ matrix.extra }}
+
+      - name: 构建
+        run: cmake --build core/build
+
+      - name: 单元测试与 CLI 冒烟测试
+        run: ctest --test-dir core/build --output-on-failure
+
+      - name: 清单校验（C++ 实现）
+        shell: bash
+        run: |
+          core/build/bin/lightcpp-pm validate --strict
+          core/build/bin/lightcpp-pm docs --check
+
+  # ---------------------------------------------------------------- Python 参考实现
+  python:
+    name: Python 参考实现
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 校验插件清单、依赖与功能覆盖
+        run: python tools/lightcpp_pm.py validate --strict
+
+      - name: 生成文档与清单保持一致
+        run: python tools/lightcpp_pm.py docs --check
+
+      - name: 单元测试
+        run: python -m unittest discover -s tests -v
+
+  # ---------------------------------------------------------------- 打包
+  package:
+    name: 打包交付物
+    needs: [cxx, python]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: 构建并打包
+        run: bash scripts/package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lightcpp-delivery
+          path: dist/*.tar.gz

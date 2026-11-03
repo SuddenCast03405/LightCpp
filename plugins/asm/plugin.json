@@ -1,0 +1,39 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "asm",
+  "name": "Assembly Support",
+  "nameZh": "汇编支持",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "language",
+  "description": "为 x86 系与 Arm 系汇编提供高亮与编译支持；其他架构不在支持范围内。",
+  "capabilitySets": [
+    "lang.asm"
+  ],
+  "activation": [
+    "onLanguage:asm"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "asm",
+        "extensions": [
+          ".asm",
+          ".s",
+          ".S"
+        ],
+        "architectures": [
+          "x86",
+          "x86_64",
+          "arm",
+          "arm64"
+        ]
+      }
+    ],
+    "limitations": "非 x86 / Arm 架构不提供汇编高亮与编译"
+  },
+  "tags": [
+    "optional"
+  ]
+}

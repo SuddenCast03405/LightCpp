@@ -1,0 +1,38 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "gdb",
+  "name": "GDB",
+  "nameZh": "GDB",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "debugger",
+  "description": "Linux / MinGW 场景的调试器后端，支持 core 文件、远程调试与 pretty-printer。",
+  "dependencies": {
+    "cpp-base": "^0.1.0"
+  },
+  "capabilitySets": [
+    "debug.breakpoint",
+    "debug.control",
+    "debug.inspect",
+    "debug.attach",
+    "debug.symbols",
+    "debug.log"
+  ],
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "gdb",
+        "label": "GDB",
+        "platforms": [
+          "linux",
+          "win32"
+        ]
+      }
+    ]
+  },
+  "platforms": [
+    "linux",
+    "win32"
+  ]
+}

@@ -1,0 +1,25 @@
+name: validate
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 校验插件清单、依赖与功能覆盖
+        run: python tools/lightcpp_pm.py validate --strict
+
+      - name: 生成文档与清单保持一致
+        run: python tools/lightcpp_pm.py docs --check
+
+      - name: 单元测试
+        run: python -m unittest discover -s tests -v
