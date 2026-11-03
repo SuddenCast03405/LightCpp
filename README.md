@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # LightC++ — Lightweight C/C++ IDE
 
 **Code identifier:** `LightCpp` · **Display name:** LightC++ · **Binary:** `lightcpp`
@@ -201,3 +202,6 @@ src/LightCppApp/             # Qt Widgets application (native host executable)
 tests/LightCpp*Tests/        # GTest suites, run via CTest
 CMakePresets.json            # MSYS2 and native host build/test presets
 ```
+=======
+# LightCpp
+>>>>>>> origin/check/feature-audit-2026-11-01
