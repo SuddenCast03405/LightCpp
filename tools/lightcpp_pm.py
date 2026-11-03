@@ -42,6 +42,21 @@ LAYER_LABELS = {
 KINDS = ["plugin", "pack"]
 PLATFORMS = ["linux", "darwin", "win32"]
 REQUIRED_FIELDS = ["id", "name", "nameZh", "version", "publisher", "kind", "layer", "description"]
+OPTIONAL_FIELDS = ["platforms", "engines", "dependencies", "recommends", "capabilitySets",
+                   "activation", "contributes", "tags"]
+# contributes 下各键的期望形状，用于类型规整
+CONTRIBUTE_SHAPES = {
+    "commands": "list", "languages": "list", "fileAssociations": "list",
+    "buildSystems": "list", "debuggers": "list", "toolchain": "list",
+    "compilers": "list", "settings": "list", "knownIssues": "list",
+    "packageManager": "object", "testFramework": "object", "buildTaskEngine": "object",
+    "debugSupport": "object", "scm": "object", "lsp": "object",
+}
+# 每层允许的成员；None 表示不限制。防止插件改个字段就冒充核心层。
+LAYER_MEMBERS = {
+    "core": {"cpp-base"},
+    "build-framework": {"build-core"},
+}
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -57,8 +72,15 @@ def pad(text: str, width: int) -> str:
     return text + " " * max(0, width - dwidth(text))
 
 
+def escape_cell(text) -> str:
+    """Markdown 表格单元转义：| 会拆列，换行会断开表格。"""
+    return str(text).replace("|", "\\|").replace("\n", " ")
+
+
 def render_table(headers, rows) -> str:
-    widths = [dwidth(h) for h in headers]
+    headers = [escape_cell(h) for h in headers]
+    rows = [[escape_cell(c) for c in row] for row in rows]
+    widths = [max(dwidth(h), 3) for h in headers]
     for row in rows:
         for i, cell in enumerate(row):
             widths[i] = max(widths[i], dwidth(cell))
@@ -69,7 +91,92 @@ def render_table(headers, rows) -> str:
     return "\n".join(out)
 
 
+def render_long_table(headers, rows) -> str:
+    """宽表用：先整体转义，再交给 render_table 排版。"""
+    return render_table(headers, rows)
+
+
 # --------------------------------------------------------------- 数据加载
+class Normalized:
+    """规整结果：data 为可安全消费的字典，bad 为类型错误说明。"""
+
+    __slots__ = ("data", "bad")
+
+    def __init__(self, data: dict, bad: list[str]):
+        self.data = data
+        self.bad = bad
+
+
+def normalize_plugin(raw: dict) -> Normalized:
+    """把插件清单规整成稳定形状。
+
+    校验器本身不能因为"清单写错"而崩溃——那正是它要报告的情况。
+    所有"应为对象/数组/字符串"的字段在这里统一纠正，并把原始类型错误记录下来，
+    由 validate 转成 E001 输出。
+    """
+    data = dict(raw)
+    bad: list[str] = []
+
+    for key in ("dependencies", "recommends"):
+        value = data.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            bad.append(f"{key} 必须是对象，实际是 {type(value).__name__}")
+            data[key] = {}
+            continue
+        cleaned = {}
+        for dep, spec in value.items():
+            if key == "dependencies":
+                if not isinstance(spec, str):
+                    bad.append(f"{key}.{dep} 的版本约束必须是字符串")
+                    spec = "*"
+            elif not isinstance(spec, dict):
+                bad.append(f"{key}.{dep} 必须是对象")
+                spec = {"version": "*"}
+            cleaned[dep] = spec
+        data[key] = cleaned
+
+    for key in ("capabilitySets", "activation", "platforms", "tags"):
+        value = data.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            bad.append(f"{key} 必须是数组，实际是字符串（是否少写了方括号？）")
+            data[key] = [value]
+        elif not isinstance(value, list):
+            bad.append(f"{key} 必须是数组，实际是 {type(value).__name__}")
+            data[key] = []
+
+    for key in ("id", "name", "nameZh", "version", "publisher", "kind", "layer", "description"):
+        if key in data and not isinstance(data[key], str):
+            bad.append(f"{key} 必须是字符串，实际是 {type(data[key]).__name__}")
+            data[key] = str(data[key])
+
+    contributes = data.get("contributes")
+    if contributes is not None and not isinstance(contributes, dict):
+        bad.append("contributes 必须是对象")
+        data["contributes"] = {}
+    elif isinstance(contributes, dict):
+        fixed = dict(contributes)
+        for key, shape in CONTRIBUTE_SHAPES.items():
+            if key not in fixed:
+                continue
+            value = fixed[key]
+            if shape == "list" and isinstance(value, str):
+                bad.append(f"contributes.{key} 必须是数组，实际是字符串（是否少写了方括号？）")
+                fixed[key] = [value]
+            elif shape == "list" and not isinstance(value, list):
+                bad.append(f"contributes.{key} 必须是数组")
+                fixed[key] = []
+            elif shape == "object" and not isinstance(value, dict):
+                bad.append(f"contributes.{key} 必须是对象")
+                fixed[key] = {}
+        data["contributes"] = fixed
+
+    return Normalized(data, bad)
+
+
 class Repo:
     def __init__(self, root: Path = ROOT):
         self.root = Path(root)
@@ -77,22 +184,66 @@ class Repo:
         self.catalog: dict = {}
         self.invariants: list[dict] = []
         self.load_errors: list[str] = []
+        self.type_errors: dict[str, list[str]] = {}
         self._load()
 
     def _load(self):
         for path in sorted((self.root / "plugins").glob("*/plugin.json")):
+            rel = path.relative_to(self.root)
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:  # pragma: no cover
-                self.load_errors.append(f"{path.relative_to(self.root)}: JSON 解析失败 {exc}")
+            except json.JSONDecodeError as exc:
+                self.load_errors.append(f"{rel}: JSON 解析失败 {exc}")
                 continue
-            data["_dir"] = path.parent.name
-            data["_path"] = path
-            self.plugins[data.get("id", path.parent.name)] = data
-        catalog_path = self.root / "catalog" / "features.json"
-        self.catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+            except OSError as exc:
+                self.load_errors.append(f"{rel}: 无法读取 {exc}")
+                continue
+            if not isinstance(data, dict):
+                self.load_errors.append(f"{rel}: 顶层必须是 JSON 对象")
+                continue
+            n = normalize_plugin(data)
+            # 用副本拼接，避免 extend 自引用（列表在迭代中被追加 -> 无限增长直到 OOM）
+            issues = [f"{rel}: {m}" for m in n.bad]
+            self.type_errors[path.parent.name] = issues
+            plugin = n.data
+            plugin["_dir"] = path.parent.name
+            plugin["_path"] = path
+            pid = plugin.get("id") if isinstance(plugin.get("id"), str) else path.parent.name
+            if pid in self.plugins:
+                self.load_errors.append(
+                    f"{rel}: 与 plugins/{self.plugins[pid]['_dir']} 重复声明了同一个 id {pid}")
+                continue
+            self.plugins[pid] = plugin
+        self.catalog = self._load_catalog(self.root / "catalog" / "features.json")
         inv_path = self.root / "catalog" / "invariants.json"
-        self.invariants = json.loads(inv_path.read_text(encoding="utf-8")).get("rules", [])
+        raw_inv = json.loads(inv_path.read_text(encoding="utf-8"))
+        rules = raw_inv.get("rules", []) if isinstance(raw_inv, dict) else []
+        self.invariants = [r for r in rules if isinstance(r, dict)]
+
+    def _load_catalog(self, path: Path) -> dict:
+        """容错加载：结构不对时退化成空目录并记录错误，避免整个 CLI 崩掉。"""
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            self.load_errors.append(f"{path.name}: 无法解析 {exc}")
+            return {"domains": [], "sets": []}
+        catalog = raw if isinstance(raw, dict) else {}
+        domains = [d for d in catalog.get("domains", []) if isinstance(d, dict) and "id" in d]
+        sets = [s for s in catalog.get("sets", []) if isinstance(s, dict) and "id" in s]
+        for s in sets:
+            feats = [f for f in s.get("features", []) if isinstance(f, dict) and "id" in f]
+            if len(feats) != len(s.get("features", [])):
+                self.load_errors.append(f"功能集 {s['id']}: 存在缺少 id 的功能条目")
+            s["features"] = feats
+            if not isinstance(s.get("plugins", []), list):
+                self.load_errors.append(f"功能集 {s['id']}: plugins 必须是数组")
+                s["plugins"] = []
+            for f in feats:
+                for key in ("plugins", "except"):
+                    if key in f and not isinstance(f[key], list):
+                        self.load_errors.append(f"功能 {f['id']}: {key} 必须是数组")
+                        f.pop(key)
+        return {"domains": domains, "sets": sets}
 
     # -- 查询 ---------------------------------------------------------
     def by_layer(self, layer: str) -> list[dict]:
@@ -116,7 +267,10 @@ class Repo:
 def parse_version(text: str) -> tuple[int, int, int]:
     if not VERSION_RE.match(text or ""):
         raise ValueError(f"非法版本号: {text!r}")
-    return tuple(int(x) for x in text.split("."))  # type: ignore[return-value]
+    parts = tuple(int(x) for x in text.split("."))
+    if any(p > 65535 for p in parts):
+        raise ValueError(f"版本号段超出范围 (0-65535): {text!r}")
+    return parts  # type: ignore[return-value]
 
 
 def satisfies(version: str, constraint: str) -> bool:
@@ -154,6 +308,14 @@ def validate(repo: Repo, strict: bool = False) -> list[tuple[str, str, str]]:
         for field in REQUIRED_FIELDS:
             if not p.get(field):
                 err("E001", f"{where}: 缺少必填字段 {field}")
+        for msg in repo.type_errors.get(where, []):
+            err("E001", f"{where}: 字段类型错误 —— {msg}")
+        known = set(REQUIRED_FIELDS) | set(OPTIONAL_FIELDS) | {"$schema"}
+        for key in p:
+            if key not in known and not key.startswith("_"):
+                err("E026", f"{where}: 未知字段 {key}（拼写错误？）")
+        if p.get("description") and len(p["description"]) < 8:
+            err("E027", f"{where}: description 至少 8 个字符")
         if p.get("id") != where:
             err("E002", f"{where}: id ({p.get('id')}) 与目录名不一致")
         if p.get("id") and not ID_RE.match(p["id"]):
@@ -166,6 +328,9 @@ def validate(repo: Repo, strict: bool = False) -> list[tuple[str, str, str]]:
             err("E006", f"{where}: 扩展包的 layer 必须为 pack")
         if p.get("kind") == "plugin" and p.get("layer") == "pack":
             err("E007", f"{where}: 非扩展包不能使用 pack 层级")
+        allowed = LAYER_MEMBERS.get(p.get("layer"))
+        if allowed is not None and p.get("id") not in allowed:
+            err("E028", f"{where}: {p.get('layer')} 层只允许 {sorted(allowed)}")
         if p.get("version") and not VERSION_RE.match(p["version"]):
             err("E008", f"{where}: version 需为 x.y.z")
         for plat in p.get("platforms", []):
@@ -223,8 +388,24 @@ def validate(repo: Repo, strict: bool = False) -> list[tuple[str, str, str]]:
     for sid in catalog_sets:
         if sid not in used_sets:
             err("E021", f"功能集 {sid} 没有任何插件声明")
+
+    domain_ids = {d["id"] for d in repo.catalog["domains"]}
+    seen_sets: dict[str, int] = defaultdict(int)
     for s in repo.catalog["sets"]:
+        seen_sets[s["id"]] += 1
+    for sid, count in seen_sets.items():
+        if count > 1:
+            err("E029", f"功能集 id {sid} 重复出现 {count} 次（复制粘贴？）")
+
+    for s in repo.catalog["sets"]:
+        if s.get("domain") not in domain_ids:
+            err("E030", f"功能集 {s['id']}: 未知功能域 {s.get('domain')!r}")
+        if not s["features"]:
+            err("E031", f"功能集 {s['id']} 没有任何功能")
         for f in s["features"]:
+            for name in f.get("except", []):
+                if name not in repo.plugins:
+                    err("E032", f"功能 {f['id']}: except 指向不存在的插件 {name}")
             for owner in repo.feature_owners(s, f):
                 if owner not in repo.plugins:
                     err("E022", f"功能 {f['id']} 归属的插件不存在: {owner}")
@@ -438,7 +619,10 @@ def cmd_info(repo: Repo, args) -> int:
         print("  功能集: " + ", ".join(p["capabilitySets"]))
         catalog_sets = repo.sets()
         for sid in p["capabilitySets"]:
-            s = catalog_sets[sid]
+            s = catalog_sets.get(sid)
+            if s is None:
+                print(f"    - {sid}（未在 catalog 中定义）")
+                continue
             feats = [f["label"] for f in s["features"] if p["id"] in repo.feature_owners(s, f)]
             print(f"    - {s['label']}（{len(feats)} 条）")
     return 0

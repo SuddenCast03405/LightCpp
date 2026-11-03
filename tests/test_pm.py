@@ -214,5 +214,97 @@ class SyntheticRepoTests(unittest.TestCase):
         self.assertIn("E103", codes(pm.validate(repo)))
 
 
+class RobustnessTests(unittest.TestCase):
+    """校验器本身不能因为清单写错就崩溃 —— 那是它唯一的工作。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_dependencies_as_list_does_not_crash(self):
+        repo = make_repo(self.tmp, {"a": {}, "b": {"dependencies": ["a"]}})
+        problems = pm.validate(repo)          # 修复前抛 AttributeError
+        self.assertIn("E001", codes(problems))
+        self.assertIn("b", pm.resolve(repo, ["b"])[0])
+
+    def test_capability_sets_as_string_is_reported(self):
+        repo = make_repo(self.tmp, {"a": {"capabilitySets": "tool.pkg"}},
+                         sets=[{"id": "tool.pkg", "domain": "tool", "label": "集",
+                                "plugins": ["a"],
+                                "features": [{"id": "f1", "label": "功能"}]}])
+        self.assertIn("E001", codes(pm.validate(repo)))
+        self.assertEqual(repo.plugins["a"]["capabilitySets"], ["tool.pkg"])
+
+    def test_platforms_as_string_does_not_emit_per_char_errors(self):
+        repo = make_repo(self.tmp, {"a": {"platforms": "linux"}})
+        codes_ = codes(pm.validate(repo))
+        self.assertIn("E001", codes_)
+        self.assertNotIn("E009", codes_)
+
+    def test_contributes_commands_as_string(self):
+        repo = make_repo(self.tmp, {"a": {"contributes": {"commands": "a.run"}}})
+        self.assertIn("E001", codes(pm.validate(repo)))
+
+    def test_unknown_field_is_rejected(self):
+        repo = make_repo(self.tmp, {"a": {"dependecies": {"b": "*"}}, "b": {}})
+        self.assertIn("E026", codes(pm.validate(repo)))
+
+    def test_short_description_is_rejected(self):
+        repo = make_repo(self.tmp, {"a": {"description": "太短"}})
+        self.assertIn("E027", codes(pm.validate(repo)))
+
+    def test_layer_membership_is_enforced(self):
+        repo = make_repo(self.tmp, {"a": {"layer": "core"}})
+        self.assertIn("E028", codes(pm.validate(repo)))
+
+    def test_duplicate_plugin_id(self):
+        make_repo(self.tmp, {"a": {}})
+        other = self.tmp / "plugins" / "a-copy"
+        other.mkdir()
+        (other / "plugin.json").write_text(
+            json.dumps({"id": "a", "name": "a", "nameZh": "a", "version": "0.1.0",
+                        "publisher": "t", "kind": "plugin", "layer": "tooling",
+                        "description": "测试用插件，说明足够长。"}, ensure_ascii=False))
+        repo = pm.Repo(self.tmp)
+        self.assertTrue(any("重复声明" in m for m in repo.load_errors))
+
+    def test_catalog_structure_errors(self):
+        repo = make_repo(self.tmp, {"a": {"capabilitySets": ["s"]}}, sets=[{
+            "id": "s", "domain": "nope", "label": "集", "plugins": ["a"],
+            "features": [{"id": "f1", "label": "功能", "except": ["ghost"]}],
+        }])
+        codes_ = codes(pm.validate(repo))
+        self.assertIn("E030", codes_)   # 未知 domain
+        self.assertIn("E032", codes_)   # except 指向不存在插件
+
+    def test_duplicate_set_id(self):
+        repo = make_repo(self.tmp, {"a": {"capabilitySets": ["s"]}}, sets=[
+            {"id": "s", "domain": "tool", "label": "集", "plugins": ["a"],
+             "features": [{"id": "f1", "label": "功能"}]},
+            {"id": "s", "domain": "tool", "label": "集2", "plugins": ["a"],
+             "features": [{"id": "f2", "label": "功能2"}]},
+        ])
+        self.assertIn("E029", codes(pm.validate(repo)))
+
+    def test_empty_set(self):
+        repo = make_repo(self.tmp, {"a": {"capabilitySets": ["s"]}}, sets=[
+            {"id": "s", "domain": "tool", "label": "集", "plugins": ["a"], "features": []},
+        ])
+        self.assertIn("E031", codes(pm.validate(repo)))
+
+    def test_table_escapes_pipe_and_newline(self):
+        table = pm.render_table(["a"], [["x|y"], ["m\nn"]])
+        self.assertIn(r"x\|y", table)
+        # 换行被压平成空格，行数 = 表头 + 分隔行 + 2 行数据
+        self.assertEqual(len(table.splitlines()), 4)
+
+    def test_version_segment_overflow(self):
+        with self.assertRaises(ValueError):
+            pm.satisfies("1.0.0", "~99999.0.0")
+
+
 if __name__ == "__main__":
     unittest.main()
