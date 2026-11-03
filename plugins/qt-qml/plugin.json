@@ -1,0 +1,28 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "qt-qml",
+  "name": "Qt QML",
+  "nameZh": "Qt QML",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "language",
+  "description": "QML / JavaScript 语言支持与 Qt Quick 诊断。",
+  "dependencies": {
+    "cpp-base": "^0.1.0"
+  },
+  "capabilitySets": [
+    "lang.qml"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "qml",
+        "extensions": [
+          ".qml",
+          ".qmltypes"
+        ]
+      }
+    ]
+  }
+}

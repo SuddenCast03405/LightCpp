@@ -1,0 +1,29 @@
+From ace81c1c8ab5c9dfb9607f211d5d07bed1c618cb Mon Sep 17 00:00:00 2001
+From: LightCpp Bot <bot@lightcpp.local>
+Date: Mon, 2 Nov 2026 22:07:03 +0800
+Subject: [PATCH 5/5] =?UTF-8?q?docs:=20=E6=9B=B4=E6=96=B0=E7=94=A8?=
+ =?UTF-8?q?=E4=BE=8B=E6=95=B0=E9=87=8F?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ README.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/README.md b/README.md
+index 556eb33..6f8aa46 100644
+--- a/README.md
++++ b/README.md
+@@ -19,7 +19,7 @@ python tools/lightcpp_pm.py graph --format mermaid        # 输出分层依赖
+ python tools/lightcpp_pm.py coverage                      # 功能覆盖统计
+ python tools/lightcpp_pm.py engines                       # 互斥引擎组（clangd / ccls）
+ python tools/lightcpp_pm.py docs --check                  # 检查生成文档是否过期
+-python -m unittest discover -s tests -v                   # 24 个用例
++python -m unittest discover -s tests -v                   # 25 个用例
+ ```
+ 
+ `resolve` 的典型输出：
+-- 
+2.43.0
+

@@ -1,0 +1,30 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "devcpp",
+  "name": "Dev-C++ Project",
+  "nameZh": "Dev-C++ Project",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "解析 .dev 工程文件并构建；额外强依赖 Make & Makefile 插件。",
+  "dependencies": {
+    "cpp-base": "^0.1.0",
+    "build-core": "^0.1.0",
+    "make": "^0.1.0"
+  },
+  "contributes": {
+    "buildSystems": [
+      "devcpp"
+    ],
+    "fileAssociations": [
+      {
+        "pattern": "*.dev",
+        "language": "devcpp"
+      }
+    ]
+  },
+  "platforms": [
+    "win32"
+  ]
+}

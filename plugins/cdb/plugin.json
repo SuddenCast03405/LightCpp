@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "cdb",
+  "name": "Windows Debugger (CDB / WinDbg)",
+  "nameZh": "Windows Debugger (CDB / WinDbg)",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "debugger",
+  "description": "Windows 原生调试后端，基于 CDB / WinDbg 引擎，使用 natvis 可视化类型。",
+  "dependencies": {
+    "cpp-base": "^0.1.0"
+  },
+  "capabilitySets": [
+    "debug.breakpoint",
+    "debug.control",
+    "debug.inspect",
+    "debug.attach",
+    "debug.symbols",
+    "debug.log"
+  ],
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "cdb",
+        "label": "Windows Debugger (CDB / WinDbg)",
+        "platforms": [
+          "win32"
+        ]
+      }
+    ]
+  },
+  "platforms": [
+    "win32"
+  ]
+}

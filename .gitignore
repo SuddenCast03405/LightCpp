@@ -34,3 +34,73 @@ Thumbs.db
 .DS_Store
 
 .tmp.txt
+
+# ---------------------------------------------------------------------------
+# Merged from LightCpp-交付包-2026-11-03.zip (plugin-ecosystem delivery).
+# Union of the delivery package's ignore rules with the rules above; nothing
+# above was removed, so the third_party/ and .workbuddy/ entries still apply.
+# ---------------------------------------------------------------------------
+
+# Prerequisites
+*.d
+
+# Compiled object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled headers
+*.gch
+*.pch
+
+# Linker / debug artifacts
+*.ilk
+*.pdb
+*.dwo
+
+# Compiled libraries
+*.so
+*.dylib
+*.dll
+*.so.*
+*.lai
+*.la
+*.lib
+
+# Compiled executables
+*.exe
+*.out
+*.app
+
+# More build directories — anchored to the repo root so that plugin
+# directories such as plugins/build-core/ are not swallowed.
+/Build/
+/build-*/
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*.swp
+
+# vcpkg
+vcpkg_installed/
+
+# Test output & caches
+/Testing/
+/.cache/
+
+# Python (tools/lightcpp_pm.py, tests/test_pm.py)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/

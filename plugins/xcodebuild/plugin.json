@@ -1,0 +1,33 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "xcodebuild",
+  "name": "xcodebuild",
+  "nameZh": "xcodebuild",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "解析 Xcode 工程并调用 xcodebuild 构建，仅 macOS。",
+  "dependencies": {
+    "cpp-base": "^0.1.0",
+    "build-core": "^0.1.0"
+  },
+  "contributes": {
+    "buildSystems": [
+      "xcodebuild"
+    ],
+    "fileAssociations": [
+      {
+        "pattern": "project.pbxproj",
+        "language": "xcode"
+      },
+      {
+        "pattern": "*.xcodeproj",
+        "language": "xcode"
+      }
+    ]
+  },
+  "platforms": [
+    "darwin"
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "make",
+  "name": "Make",
+  "nameZh": "Make & Makefile",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "解析传统 Makefile 并执行构建；GNU 扩展包与 Dev-C++ 项目的必备依赖。",
+  "dependencies": {
+    "cpp-base": "^0.1.0",
+    "build-core": "^0.1.0"
+  },
+  "capabilitySets": [
+    "lang.buildfile"
+  ],
+  "contributes": {
+    "buildSystems": [
+      "make"
+    ],
+    "fileAssociations": [
+      {
+        "pattern": "Makefile",
+        "language": "makefile"
+      },
+      {
+        "pattern": "makefile",
+        "language": "makefile"
+      },
+      {
+        "pattern": "GNUmakefile",
+        "language": "makefile"
+      },
+      {
+        "pattern": "*.mk",
+        "language": "makefile"
+      }
+    ],
+    "commands": [
+      {
+        "id": "make.build",
+        "title": "构建 (make)"
+      },
+      {
+        "id": "make.clean",
+        "title": "清理 (make)"
+      }
+    ]
+  },
+  "tags": [
+    "gnu"
+  ]
+}

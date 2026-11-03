@@ -1,0 +1,29 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "qt-ui",
+  "name": "Qt UI",
+  "nameZh": "Qt UI",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "language",
+  "description": ".ui 设计文件预览与 .qrc 资源管理。",
+  "dependencies": {
+    "cpp-base": "^0.1.0"
+  },
+  "capabilitySets": [
+    "lang.ui"
+  ],
+  "contributes": {
+    "fileAssociations": [
+      {
+        "pattern": "*.ui",
+        "language": "xml"
+      },
+      {
+        "pattern": "*.qrc",
+        "language": "xml"
+      }
+    ]
+  }
+}

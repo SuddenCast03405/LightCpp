@@ -1,0 +1,22 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "qt-cpp-core",
+  "name": "Qt C++ Core",
+  "nameZh": "Qt C++ Core",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "language",
+  "description": "Qt C++ 项目核心支持，内含 QMake 构建能力。",
+  "dependencies": {
+    "cpp-base": "^0.1.0",
+    "qmake": "^0.1.0",
+    "build-core": "^0.1.0"
+  },
+  "capabilitySets": [
+    "qt.build"
+  ],
+  "activation": [
+    "workspaceContains:*.pro"
+  ]
+}

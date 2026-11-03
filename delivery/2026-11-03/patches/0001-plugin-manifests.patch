@@ -1,0 +1,3571 @@
+From c57fb7853d829b7c50d49f05096934514a93a4e8 Mon Sep 17 00:00:00 2001
+From: LightCpp Bot <bot@lightcpp.local>
+Date: Mon, 2 Nov 2026 22:02:25 +0800
+Subject: [PATCH 1/5] =?UTF-8?q?feat(plugins):=20=E6=8C=89=E8=A7=84?=
+ =?UTF-8?q?=E5=88=92=E8=90=BD=E5=9C=B0=2047=20=E4=B8=AA=E7=BB=84=E4=BB=B6?=
+ =?UTF-8?q?=E6=B8=85=E5=8D=95=E4=B8=8E=20189=20=E6=9D=A1=E5=8A=9F=E8=83=BD?=
+ =?UTF-8?q?=E7=9B=AE=E5=BD=95?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- plugins/<id>/plugin.json：42 个插件 + 5 个扩展包，含层级、强依赖、推荐/自动安装、功能集与贡献点
+- catalog/features.json：12 个功能域、40 个功能集、189 条功能，逐条标注归属插件与状态
+- catalog/invariants.json：把规划中的硬条款（Dev-C++ 强依赖 Make、CMake/Meson 连带 Ninja、
+  扩展包成员固定、clangd/ccls 互斥）固化为可执行的不变量
+- schemas/plugin.schema.json：插件清单 JSON Schema，扩展包禁止声明业务贡献点
+---
+ catalog/features.json                  | 1504 ++++++++++++++++++++++++
+ catalog/invariants.json                |   89 ++
+ plugins/asm/plugin.json                |   39 +
+ plugins/bazel/plugin.json              |   41 +
+ plugins/boost-test/plugin.json         |   23 +
+ plugins/catch2/plugin.json             |   23 +
+ plugins/ccls/plugin.json               |   45 +
+ plugins/cdb/plugin.json                |   36 +
+ plugins/clang-core/plugin.json         |   93 ++
+ plugins/cmake/plugin.json              |   74 ++
+ plugins/compile-commands/plugin.json   |   32 +
+ plugins/cpp-base/plugin.json           |   69 ++
+ plugins/cpp-extension-pack/plugin.json |   29 +
+ plugins/ctest/plugin.json              |   23 +
+ plugins/custom-command/plugin.json     |   26 +
+ plugins/devcpp/plugin.json             |   30 +
+ plugins/doc-preview/plugin.json        |   14 +
+ plugins/docs-core/plugin.json          |   14 +
+ plugins/gdb/plugin.json                |   38 +
+ plugins/git/plugin.json                |   27 +
+ plugins/gnu-pack/plugin.json           |   20 +
+ plugins/gtest/plugin.json              |   23 +
+ plugins/hex-viewer/plugin.json         |   14 +
+ plugins/lldb/plugin.json               |   40 +
+ plugins/llvm-pack/plugin.json          |   21 +
+ plugins/log-viewer/plugin.json         |   14 +
+ plugins/make/plugin.json               |   54 +
+ plugins/media-preview/plugin.json      |   30 +
+ plugins/meson/plugin.json              |   50 +
+ plugins/msvc-pack/plugin.json          |   21 +
+ plugins/ninja/plugin.json              |   36 +
+ plugins/pkg-conan/plugin.json          |   23 +
+ plugins/pkg-hunter/plugin.json         |   24 +
+ plugins/pkg-native/plugin.json         |   36 +
+ plugins/pkg-vcpkg/plugin.json          |   23 +
+ plugins/qmake/plugin.json              |   42 +
+ plugins/qt-cmake/plugin.json           |   19 +
+ plugins/qt-cpp-core/plugin.json        |   22 +
+ plugins/qt-pack/plugin.json            |   21 +
+ plugins/qt-qml/plugin.json             |   28 +
+ plugins/qt-ui/plugin.json              |   29 +
+ plugins/serial-terminal/plugin.json    |   14 +
+ plugins/terminal/plugin.json           |   36 +
+ plugins/test-core/plugin.json          |   20 +
+ plugins/vs-debugger/plugin.json        |   43 +
+ plugins/vs-project/plugin.json         |   37 +
+ plugins/wsl/plugin.json                |   28 +
+ plugins/xcodebuild/plugin.json         |   33 +
+ schemas/plugin.schema.json             |   87 ++
+ 49 files changed, 3157 insertions(+)
+ create mode 100644 catalog/features.json
+ create mode 100644 catalog/invariants.json
+ create mode 100644 plugins/asm/plugin.json
+ create mode 100644 plugins/bazel/plugin.json
+ create mode 100644 plugins/boost-test/plugin.json
+ create mode 100644 plugins/catch2/plugin.json
+ create mode 100644 plugins/ccls/plugin.json
+ create mode 100644 plugins/cdb/plugin.json
+ create mode 100644 plugins/clang-core/plugin.json
+ create mode 100644 plugins/cmake/plugin.json
+ create mode 100644 plugins/compile-commands/plugin.json
+ create mode 100644 plugins/cpp-base/plugin.json
+ create mode 100644 plugins/cpp-extension-pack/plugin.json
+ create mode 100644 plugins/ctest/plugin.json
+ create mode 100644 plugins/custom-command/plugin.json
+ create mode 100644 plugins/devcpp/plugin.json
+ create mode 100644 plugins/doc-preview/plugin.json
+ create mode 100644 plugins/docs-core/plugin.json
+ create mode 100644 plugins/gdb/plugin.json
+ create mode 100644 plugins/git/plugin.json
+ create mode 100644 plugins/gnu-pack/plugin.json
+ create mode 100644 plugins/gtest/plugin.json
+ create mode 100644 plugins/hex-viewer/plugin.json
+ create mode 100644 plugins/lldb/plugin.json
+ create mode 100644 plugins/llvm-pack/plugin.json
+ create mode 100644 plugins/log-viewer/plugin.json
+ create mode 100644 plugins/make/plugin.json
+ create mode 100644 plugins/media-preview/plugin.json
+ create mode 100644 plugins/meson/plugin.json
+ create mode 100644 plugins/msvc-pack/plugin.json
+ create mode 100644 plugins/ninja/plugin.json
+ create mode 100644 plugins/pkg-conan/plugin.json
+ create mode 100644 plugins/pkg-hunter/plugin.json
+ create mode 100644 plugins/pkg-native/plugin.json
+ create mode 100644 plugins/pkg-vcpkg/plugin.json
+ create mode 100644 plugins/qmake/plugin.json
+ create mode 100644 plugins/qt-cmake/plugin.json
+ create mode 100644 plugins/qt-cpp-core/plugin.json
+ create mode 100644 plugins/qt-pack/plugin.json
+ create mode 100644 plugins/qt-qml/plugin.json
+ create mode 100644 plugins/qt-ui/plugin.json
+ create mode 100644 plugins/serial-terminal/plugin.json
+ create mode 100644 plugins/terminal/plugin.json
+ create mode 100644 plugins/test-core/plugin.json
+ create mode 100644 plugins/vs-debugger/plugin.json
+ create mode 100644 plugins/vs-project/plugin.json
+ create mode 100644 plugins/wsl/plugin.json
+ create mode 100644 plugins/xcodebuild/plugin.json
+ create mode 100644 schemas/plugin.schema.json
+
+diff --git a/catalog/features.json b/catalog/features.json
+new file mode 100644
+index 0000000..3c6cdc7
+--- /dev/null
++++ b/catalog/features.json
+@@ -0,0 +1,1504 @@
++{
++  "schemaVersion": 1,
++  "source": "lightcpp.1.md",
++  "domains": [
++    {
++      "id": "lang",
++      "label": "语言与编辑器基础"
++    },
++    {
++      "id": "project",
++      "label": "项目与文件管理"
++    },
++    {
++      "id": "build",
++      "label": "构建配置与执行"
++    },
++    {
++      "id": "clang",
++      "label": "Clang 工具链集成"
++    },
++    {
++      "id": "debug",
++      "label": "调试器"
++    },
++    {
++      "id": "intel",
++      "label": "代码智能"
++    },
++    {
++      "id": "analysis",
++      "label": "静态分析与代码质量"
++    },
++    {
++      "id": "git",
++      "label": "版本控制"
++    },
++    {
++      "id": "tool",
++      "label": "终端与工具集成"
++    },
++    {
++      "id": "test",
++      "label": "测试"
++    },
++    {
++      "id": "doc",
++      "label": "文档与帮助"
++    },
++    {
++      "id": "qt",
++      "label": "Qt 生态"
++    }
++  ],
++  "sets": [
++    {
++      "id": "lang.cpp",
++      "domain": "lang",
++      "label": "C/C++ 语言基础",
++      "plugins": [
++        "cpp-base"
++      ],
++      "features": [
++        {
++          "id": "lang.cpp.highlight",
++          "label": "C/C++ 语法高亮",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "lang.asm",
++      "domain": "lang",
++      "label": "汇编支持（仅 x86 系与 Arm 系）",
++      "plugins": [
++        "asm"
++      ],
++      "features": [
++        {
++          "id": "lang.asm.highlight",
++          "label": "汇编语法高亮（x86 / Arm）",
++          "status": "required"
++        },
++        {
++          "id": "lang.asm.compile",
++          "label": "汇编文件编译与目标文件产出",
++          "status": "required"
++        },
++        {
++          "id": "lang.asm.limit",
++          "label": "非 x86/Arm 架构不提供汇编支持（规划约束）",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "lang.buildfile",
++      "domain": "lang",
++      "label": "构建描述文件高亮",
++      "plugins": [
++        "cmake",
++        "meson",
++        "make",
++        "ninja",
++        "bazel",
++        "qmake",
++        "clang-core"
++      ],
++      "features": [
++        {
++          "id": "lang.buildfile.highlight",
++          "label": "构建描述文件高亮（CMakeLists.txt / *.cmake / Makefile / *.ninja / meson.build / BUILD / .clangd / .clang-format）",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "lang.qml",
++      "domain": "qt",
++      "label": "QML 语言支持",
++      "plugins": [
++        "qt-qml"
++      ],
++      "features": [
++        {
++          "id": "lang.qml.highlight",
++          "label": "QML 语法高亮",
++          "status": "required"
++        },
++        {
++          "id": "lang.qml.diagnostics",
++          "label": "QML 诊断与补全",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "lang.ui",
++      "domain": "qt",
++      "label": "Qt Designer 资源",
++      "plugins": [
++        "qt-ui"
++      ],
++      "features": [
++        {
++          "id": "lang.ui.preview",
++          "label": ".ui 文件预览与编辑器",
++          "status": "required"
++        },
++        {
++          "id": "lang.ui.resource",
++          "label": ".qrc 资源预览",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "project.core",
++      "domain": "project",
++      "label": "项目与文件管理",
++      "plugins": [
++        "build-core"
++      ],
++      "features": [
++        {
++          "id": "project.create",
++          "label": "新建项目 / 打开项目 / 项目模板",
++          "status": "required"
++        },
++        {
++          "id": "project.tree",
++          "label": "项目树 / 文件树 / 目录监视",
++          "status": "required"
++        },
++        {
++          "id": "project.file.ops",
++          "label": "添加文件 / 删除文件 / 重命名文件",
++          "status": "required"
++        },
++        {
++          "id": "project.targets",
++          "label": "项目依赖关系 / 目标 (Target) 管理",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "build.config",
++      "domain": "build",
++      "label": "构建配置管理",
++      "plugins": [
++        "build-core"
++      ],
++      "features": [
++        {
++          "id": "build.config.configuration",
++          "label": "项目配置 / 多构建配置 (Debug / Release / RelWithDebInfo)",
++          "status": "required"
++        },
++        {
++          "id": "build.config.platform",
++          "label": "多目标平台支持",
++          "status": "required"
++        },
++        {
++          "id": "build.config.runtime",
++          "label": "环境变量 / 工作目录 / 命令行参数配置",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "build.toolchain",
++      "domain": "build",
++      "label": "工具链与编译参数管理",
++      "plugins": [
++        "build-core"
++      ],
++      "features": [
++        {
++          "id": "build.toolchain.cross",
++          "label": "交叉编译配置 / 交叉编译工具链配置",
++          "status": "required"
++        },
++        {
++          "id": "build.toolchain.detect",
++          "label": "工具链检测 / 编译器检测",
++          "status": "required"
++        },
++        {
++          "id": "build.toolchain.standard",
++          "label": "标准选择 (C / C++ Standard)",
++          "status": "required"
++        },
++        {
++          "id": "build.toolchain.defines",
++          "label": "宏定义管理",
++          "status": "required"
++        },
++        {
++          "id": "build.toolchain.includes",
++          "label": "Include 路径管理",
++          "status": "required"
++        },
++        {
++          "id": "build.toolchain.libs",
++          "label": "链接库管理",
++          "status": "required"
++        },
++        {
++          "id": "build.toolchain.flags",
++          "label": "编译选项管理",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "build.exec",
++      "domain": "build",
++      "label": "构建执行操作",
++      "plugins": [
++        "build-core"
++      ],
++      "features": [
++        {
++          "id": "build.exec.build",
++          "label": "本地构建",
++          "status": "required"
++        },
++        {
++          "id": "build.exec.compile",
++          "label": "编译",
++          "status": "required"
++        },
++        {
++          "id": "build.exec.rebuild",
++          "label": "重新编译",
++          "status": "required"
++        },
++        {
++          "id": "build.exec.clean",
++          "label": "清理",
++          "status": "required"
++        },
++        {
++          "id": "build.exec.install",
++          "label": "安装 (Install)",
++          "status": "required"
++        },
++        {
++          "id": "build.exec.package",
++          "label": "打包 (Package)",
++          "status": "required"
++        },
++        {
++          "id": "build.exec.target",
++          "label": "构建指定 target",
++          "status": "required"
++        },
++        {
++          "id": "build.exec.parallel",
++          "label": "并行构建",
++          "status": "required"
++        },
++        {
++          "id": "build.exec.incremental",
++          "label": "增量构建",
++          "status": "required"
++        },
++        {
++          "id": "build.exec.remote",
++          "label": "远程构建",
++          "status": "planned",
++          "note": "规划中 / 暂不支持，v0.1 不提供入口"
++        }
++      ]
++    },
++    {
++      "id": "build.diagnostics",
++      "domain": "build",
++      "label": "构建反馈与诊断",
++      "plugins": [
++        "build-core"
++      ],
++      "features": [
++        {
++          "id": "build.diagnostics.output",
++          "label": "构建输出窗口",
++          "status": "required"
++        },
++        {
++          "id": "build.diagnostics.log",
++          "label": "构建日志保存",
++          "status": "required"
++        },
++        {
++          "id": "build.diagnostics.error",
++          "label": "编译错误解析",
++          "status": "required"
++        },
++        {
++          "id": "build.diagnostics.warning",
++          "label": "编译警告解析",
++          "status": "required"
++        },
++        {
++          "id": "build.diagnostics.jump",
++          "label": "点击错误 / 警告跳转至对应文件及行号",
++          "status": "required"
++        },
++        {
++          "id": "build.diagnostics.commandline",
++          "label": "编译命令查看（具体执行的编译命令行）",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "build.advanced",
++      "domain": "build",
++      "label": "高级构建特性",
++      "plugins": [
++        "build-core"
++      ],
++      "features": [
++        {
++          "id": "build.advanced.cache",
++          "label": "构建缓存支持 / CCache 支持",
++          "status": "required"
++        },
++        {
++          "id": "build.advanced.compile_commands",
++          "label": "生成 / 管理编译数据库 (compile_commands.json)",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "clang.format",
++      "domain": "clang",
++      "label": "clang-format 策略",
++      "plugins": [
++        "clang-core"
++      ],
++      "features": [
++        {
++          "id": "clang.format.single",
++          "label": "单文件格式化优先调用 clangd 内置能力",
++          "status": "required"
++        },
++        {
++          "id": "clang.format.project",
++          "label": "多文件 / 项目级格式化调用独立 clang-format 可执行文件",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "clang.tidy",
++      "domain": "clang",
++      "label": "clang-tidy",
++      "plugins": [
++        "clang-core"
++      ],
++      "features": [
++        {
++          "id": "clang.tidy.realtime",
++          "label": "clang-tidy 实时检查（可关闭以保证大项目性能）",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "clang.discovery",
++      "domain": "clang",
++      "label": "配置自动发现",
++      "plugins": [
++        "clang-core"
++      ],
++      "features": [
++        {
++          "id": "clang.discovery.scan",
++          "label": "打开项目时扫描项目根目录及父目录的 .clang-format / .clang-tidy",
++          "status": "required"
++        },
++        {
++          "id": "clang.discovery.apply",
++          "label": "存在配置时自动应用规则，无需手动配置",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "clang.settings",
++      "domain": "clang",
++      "label": "Clang Core 设置页",
++      "plugins": [
++        "clang-core"
++      ],
++      "features": [
++        {
++          "id": "clang.settings.tidy",
++          "label": "开关 clang-tidy 实时检查",
++          "status": "required"
++        },
++        {
++          "id": "clang.settings.style",
++          "label": "默认 clang-format 风格（LLVM / Google / Chromium / Mozilla / WebKit）",
++          "status": "required"
++        },
++        {
++          "id": "clang.settings.path",
++          "label": "自定义 clangd / clang-tidy 可执行文件路径",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "debug.breakpoint",
++      "domain": "debug",
++      "label": "断点体系",
++      "plugins": [
++        "gdb",
++        "lldb",
++        "cdb",
++        "vs-debugger"
++      ],
++      "features": [
++        {
++          "id": "debug.bp.line",
++          "label": "断点",
++          "status": "required"
++        },
++        {
++          "id": "debug.bp.conditional",
++          "label": "条件断点",
++          "status": "required"
++        },
++        {
++          "id": "debug.bp.logpoint",
++          "label": "日志断点",
++          "status": "required",
++          "except": [
++            "cdb",
++            "vs-debugger"
++          ]
++        },
++        {
++          "id": "debug.bp.hitcount",
++          "label": "忽略次数断点",
++          "status": "required"
++        },
++        {
++          "id": "debug.bp.temporary",
++          "label": "临时断点",
++          "status": "required"
++        },
++        {
++          "id": "debug.bp.function",
++          "label": "函数断点",
++          "status": "required"
++        },
++        {
++          "id": "debug.bp.address",
++          "label": "地址断点",
++          "status": "required",
++          "except": [
++            "vs-debugger"
++          ]
++        },
++        {
++          "id": "debug.bp.memory",
++          "label": "内存断点",
++          "status": "required",
++          "except": [
++            "vs-debugger"
++          ]
++        }
++      ]
++    },
++    {
++      "id": "debug.control",
++      "domain": "debug",
++      "label": "执行控制",
++      "plugins": [
++        "gdb",
++        "lldb",
++        "cdb",
++        "vs-debugger"
++      ],
++      "features": [
++        {
++          "id": "debug.control.step_in",
++          "label": "单步进入",
++          "status": "required"
++        },
++        {
++          "id": "debug.control.step_over",
++          "label": "单步跳过",
++          "status": "required"
++        },
++        {
++          "id": "debug.control.step_out",
++          "label": "单步跳出",
++          "status": "required"
++        },
++        {
++          "id": "debug.control.continue",
++          "label": "继续运行",
++          "status": "required"
++        },
++        {
++          "id": "debug.control.pause",
++          "label": "暂停",
++          "status": "required"
++        },
++        {
++          "id": "debug.control.stop",
++          "label": "停止",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "debug.inspect",
++      "domain": "debug",
++      "label": "状态查看",
++      "plugins": [
++        "gdb",
++        "lldb",
++        "cdb",
++        "vs-debugger"
++      ],
++      "features": [
++        {
++          "id": "debug.view.locals",
++          "label": "局部变量查看",
++          "status": "required"
++        },
++        {
++          "id": "debug.view.watch",
++          "label": "监视变量",
++          "status": "required"
++        },
++        {
++          "id": "debug.view.evaluate",
++          "label": "表达式求值",
++          "status": "required"
++        },
++        {
++          "id": "debug.view.callstack",
++          "label": "调用栈",
++          "status": "required"
++        },
++        {
++          "id": "debug.view.threads",
++          "label": "线程列表",
++          "status": "required"
++        },
++        {
++          "id": "debug.view.registers",
++          "label": "寄存器视图",
++          "status": "required"
++        },
++        {
++          "id": "debug.view.memory",
++          "label": "内存视图",
++          "status": "required"
++        },
++        {
++          "id": "debug.view.disassembly",
++          "label": "反汇编视图",
++          "status": "required"
++        },
++        {
++          "id": "debug.view.console",
++          "label": "控制台输入输出",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "debug.attach",
++      "domain": "debug",
++      "label": "附加与载入",
++      "plugins": [
++        "gdb",
++        "lldb",
++        "cdb",
++        "vs-debugger"
++      ],
++      "features": [
++        {
++          "id": "debug.attach.process",
++          "label": "进程附加",
++          "status": "required"
++        },
++        {
++          "id": "debug.attach.core",
++          "label": "core 文件加载",
++          "status": "required"
++        },
++        {
++          "id": "debug.attach.remote",
++          "label": "远程调试",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "debug.symbols",
++      "domain": "debug",
++      "label": "符号与可视化",
++      "plugins": [
++        "gdb",
++        "lldb",
++        "cdb",
++        "vs-debugger"
++      ],
++      "features": [
++        {
++          "id": "debug.symbol.load",
++          "label": "符号加载",
++          "status": "required"
++        },
++        {
++          "id": "debug.symbol.sourcemap",
++          "label": "源码映射",
++          "status": "required"
++        },
++        {
++          "id": "debug.symbol.pretty",
++          "label": "pretty-printer",
++          "status": "required",
++          "plugins": [
++            "gdb",
++            "lldb"
++          ]
++        },
++        {
++          "id": "debug.symbol.stl",
++          "label": "STL 容器展开",
++          "status": "required",
++          "plugins": [
++            "gdb",
++            "lldb"
++          ]
++        },
++        {
++          "id": "debug.symbol.smartptr",
++          "label": "智能指针展开",
++          "status": "required",
++          "plugins": [
++            "gdb",
++            "lldb"
++          ]
++        },
++        {
++          "id": "debug.symbol.enum",
++          "label": "枚举显示",
++          "status": "required"
++        },
++        {
++          "id": "debug.symbol.natvis",
++          "label": "natvis 可视化器",
++          "status": "required",
++          "plugins": [
++            "cdb",
++            "vs-debugger"
++          ]
++        }
++      ]
++    },
++    {
++      "id": "debug.log",
++      "domain": "debug",
++      "label": "调试日志",
++      "plugins": [
++        "gdb",
++        "lldb",
++        "cdb",
++        "vs-debugger"
++      ],
++      "features": [
++        {
++          "id": "debug.log.window",
++          "label": "调试日志窗口",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "intel.core",
++      "domain": "intel",
++      "label": "代码智能基础能力",
++      "plugins": [
++        "clang-core",
++        "ccls"
++      ],
++      "features": [
++        {
++          "id": "intel.completion",
++          "label": "代码补全",
++          "status": "required"
++        },
++        {
++          "id": "intel.highlight.semantic",
++          "label": "语义高亮",
++          "status": "required"
++        },
++        {
++          "id": "intel.diagnostics",
++          "label": "诊断错误",
++          "status": "required"
++        },
++        {
++          "id": "intel.quickfix",
++          "label": "快速修复",
++          "status": "required"
++        },
++        {
++          "id": "intel.hover",
++          "label": "悬停提示",
++          "status": "required"
++        },
++        {
++          "id": "intel.signature",
++          "label": "函数签名提示",
++          "status": "required"
++        },
++        {
++          "id": "intel.goto.definition",
++          "label": "转到定义",
++          "status": "required"
++        },
++        {
++          "id": "intel.find.references",
++          "label": "查找引用",
++          "status": "required"
++        },
++        {
++          "id": "intel.symbol.search",
++          "label": "符号搜索",
++          "status": "required"
++        },
++        {
++          "id": "intel.rename",
++          "label": "重命名",
++          "status": "required"
++        },
++        {
++          "id": "intel.format",
++          "label": "代码格式化",
++          "status": "required"
++        },
++        {
++          "id": "intel.include.completion",
++          "label": "Include 补全",
++          "status": "required"
++        },
++        {
++          "id": "intel.include.sort",
++          "label": "Include 排序",
++          "status": "required"
++        },
++        {
++          "id": "intel.macro.expand",
++          "label": "宏展开",
++          "status": "required"
++        },
++        {
++          "id": "intel.type.hint",
++          "label": "类型推导提示",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "intel.nav",
++      "domain": "intel",
++      "label": "代码导航",
++      "plugins": [
++        "clang-core",
++        "ccls"
++      ],
++      "features": [
++        {
++          "id": "intel.nav.code",
++          "label": "代码导航",
++          "status": "required"
++        },
++        {
++          "id": "intel.nav.call.hierarchy",
++          "label": "调用层级",
++          "status": "required"
++        },
++        {
++          "id": "intel.nav.type.hierarchy",
++          "label": "类型层级",
++          "status": "required"
++        },
++        {
++          "id": "intel.nav.inheritance",
++          "label": "继承关系",
++          "status": "required"
++        },
++        {
++          "id": "intel.nav.class",
++          "label": "类视图",
++          "status": "required"
++        },
++        {
++          "id": "intel.nav.callgraph",
++          "label": "函数调用图",
++          "status": "required"
++        },
++        {
++          "id": "intel.nav.outline",
++          "label": "代码大纲",
++          "status": "required"
++        },
++        {
++          "id": "intel.nav.doc",
++          "label": "文档注释预览",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "analysis.engine",
++      "domain": "analysis",
++      "label": "静态分析引擎",
++      "plugins": [
++        "clang-core"
++      ],
++      "features": [
++        {
++          "id": "analysis.cppcheck",
++          "label": "Cppcheck",
++          "status": "required"
++        },
++        {
++          "id": "analysis.clang_sa",
++          "label": "Clang Static Analyzer",
++          "status": "required"
++        },
++        {
++          "id": "analysis.pvs",
++          "label": "PVS-Studio 集成",
++          "status": "required"
++        },
++        {
++          "id": "analysis.coverity",
++          "label": "Coverity 集成",
++          "status": "required"
++        },
++        {
++          "id": "analysis.compiler_warnings",
++          "label": "编译器警告分析",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "analysis.quality",
++      "domain": "analysis",
++      "label": "代码质量检查",
++      "plugins": [
++        "clang-core"
++      ],
++      "features": [
++        {
++          "id": "analysis.style",
++          "label": "代码规范检查",
++          "status": "required"
++        },
++        {
++          "id": "analysis.complexity",
++          "label": "复杂度分析",
++          "status": "required"
++        },
++        {
++          "id": "analysis.unused",
++          "label": "未使用变量检查",
++          "status": "required"
++        },
++        {
++          "id": "analysis.leak",
++          "label": "内存泄漏检查",
++          "status": "required"
++        },
++        {
++          "id": "analysis.nullptr",
++          "label": "空指针检查",
++          "status": "required"
++        },
++        {
++          "id": "analysis.bounds",
++          "label": "数组越界检查",
++          "status": "required"
++        },
++        {
++          "id": "analysis.coding_standard",
++          "label": "编码规范检查",
++          "status": "required"
++        },
++        {
++          "id": "analysis.security",
++          "label": "安全漏洞检查",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "git.core",
++      "domain": "git",
++      "label": "仓库与分支操作",
++      "plugins": [
++        "git"
++      ],
++      "features": [
++        {
++          "id": "git.clone",
++          "label": "克隆仓库",
++          "status": "required"
++        },
++        {
++          "id": "git.open",
++          "label": "打开仓库",
++          "status": "required"
++        },
++        {
++          "id": "git.branch.manage",
++          "label": "分支管理",
++          "status": "required"
++        },
++        {
++          "id": "git.branch.checkout",
++          "label": "切换分支",
++          "status": "required"
++        },
++        {
++          "id": "git.branch.create",
++          "label": "创建分支",
++          "status": "required"
++        },
++        {
++          "id": "git.merge",
++          "label": "合并",
++          "status": "required"
++        },
++        {
++          "id": "git.rebase",
++          "label": "rebase",
++          "status": "required"
++        },
++        {
++          "id": "git.cherry_pick",
++          "label": "cherry-pick",
++          "status": "required"
++        },
++        {
++          "id": "git.stash",
++          "label": "stash",
++          "status": "required"
++        },
++        {
++          "id": "git.commit",
++          "label": "commit",
++          "status": "required"
++        },
++        {
++          "id": "git.push",
++          "label": "push",
++          "status": "required"
++        },
++        {
++          "id": "git.pull",
++          "label": "pull",
++          "status": "required"
++        },
++        {
++          "id": "git.fetch",
++          "label": "fetch",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "git.history",
++      "domain": "git",
++      "label": "历史与差异",
++      "plugins": [
++        "git"
++      ],
++      "features": [
++        {
++          "id": "git.history.log",
++          "label": "查看历史",
++          "status": "required"
++        },
++        {
++          "id": "git.history.blame",
++          "label": "查看 blame",
++          "status": "required"
++        },
++        {
++          "id": "git.history.diff",
++          "label": "查看 diff",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "git.advanced",
++      "domain": "git",
++      "label": "进阶操作",
++      "plugins": [
++        "git"
++      ],
++      "features": [
++        {
++          "id": "git.conflict",
++          "label": "解决冲突",
++          "status": "required"
++        },
++        {
++          "id": "git.submodule",
++          "label": "子模块支持",
++          "status": "required"
++        },
++        {
++          "id": "git.worktree",
++          "label": "worktree 支持",
++          "status": "required"
++        },
++        {
++          "id": "git.tag",
++          "label": "tag 管理",
++          "status": "required"
++        },
++        {
++          "id": "git.remote",
++          "label": "remote 管理",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "git.ui",
++      "domain": "git",
++      "label": "编辑器内呈现",
++      "plugins": [
++        "git"
++      ],
++      "features": [
++        {
++          "id": "git.status",
++          "label": "文件状态显示",
++          "status": "required"
++        },
++        {
++          "id": "git.inline",
++          "label": "行内修改标记",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "git.auth",
++      "domain": "git",
++      "label": "提交与认证",
++      "plugins": [
++        "git"
++      ],
++      "features": [
++        {
++          "id": "git.commit.template",
++          "label": "提交模板",
++          "status": "required"
++        },
++        {
++          "id": "git.commit.gpg",
++          "label": "GPG 签名",
++          "status": "required"
++        },
++        {
++          "id": "git.auth.ssh_https",
++          "label": "SSH / HTTPS 认证",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "tool.workbench",
++      "domain": "tool",
++      "label": "工作台集成",
++      "plugins": [
++        "terminal"
++      ],
++      "features": [
++        {
++          "id": "tool.terminal",
++          "label": "内置终端",
++          "status": "known-issue",
++          "note": "规划中标注「目前有问题」，v0.1 以外部终端兜底"
++        },
++        {
++          "id": "tool.palette",
++          "label": "命令面板",
++          "status": "required"
++        },
++        {
++          "id": "tool.external",
++          "label": "外部工具配置",
++          "status": "required"
++        },
++        {
++          "id": "tool.run",
++          "label": "运行程序",
++          "status": "required"
++        },
++        {
++          "id": "tool.launch",
++          "label": "调试程序（插件）",
++          "status": "required"
++        },
++        {
++          "id": "tool.shell",
++          "label": "Shell 集成",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "tool.pkg",
++      "domain": "tool",
++      "label": "包管理器集成",
++      "plugins": [
++        "pkg-vcpkg",
++        "pkg-conan",
++        "pkg-hunter",
++        "pkg-native"
++      ],
++      "features": [
++        {
++          "id": "tool.pkg.vcpkg",
++          "label": "vcpkg",
++          "status": "required",
++          "plugins": [
++            "pkg-vcpkg"
++          ]
++        },
++        {
++          "id": "tool.pkg.conan",
++          "label": "conan",
++          "status": "required",
++          "plugins": [
++            "pkg-conan"
++          ]
++        },
++        {
++          "id": "tool.pkg.hunter",
++          "label": "Hunter",
++          "status": "required",
++          "plugins": [
++            "pkg-hunter"
++          ]
++        },
++        {
++          "id": "tool.pkg.system",
++          "label": "apt / brew / winget",
++          "status": "required",
++          "plugins": [
++            "pkg-native"
++          ]
++        }
++      ]
++    },
++    {
++      "id": "tool.runtime",
++      "domain": "tool",
++      "label": "运行环境与外部工具",
++      "plugins": [
++        "wsl",
++        "serial-terminal",
++        "log-viewer",
++        "hex-viewer",
++        "media-preview"
++      ],
++      "features": [
++        {
++          "id": "tool.wsl",
++          "label": "WSL 集成（插件）",
++          "status": "required",
++          "plugins": [
++            "wsl"
++          ]
++        },
++        {
++          "id": "tool.serial",
++          "label": "串口终端",
++          "status": "required",
++          "plugins": [
++            "serial-terminal"
++          ]
++        },
++        {
++          "id": "tool.log",
++          "label": "日志查看器",
++          "status": "required",
++          "plugins": [
++            "log-viewer"
++          ]
++        },
++        {
++          "id": "tool.hex",
++          "label": "Hex 查看器",
++          "status": "required",
++          "plugins": [
++            "hex-viewer"
++          ]
++        },
++        {
++          "id": "tool.media",
++          "label": "图像 / 资源预览",
++          "status": "required",
++          "plugins": [
++            "media-preview"
++          ]
++        }
++      ]
++    },
++    {
++      "id": "test.core",
++      "domain": "test",
++      "label": "测试框架集成",
++      "plugins": [
++        "test-core"
++      ],
++      "features": [
++        {
++          "id": "test.unit.integration",
++          "label": "单元测试集成",
++          "status": "required"
++        },
++        {
++          "id": "test.explorer",
++          "label": "测试列表视图",
++          "status": "required"
++        },
++        {
++          "id": "test.run.single",
++          "label": "运行单个测试",
++          "status": "required"
++        },
++        {
++          "id": "test.run.all",
++          "label": "运行全部测试",
++          "status": "required"
++        },
++        {
++          "id": "test.failure.jump",
++          "label": "测试失败跳转",
++          "status": "required"
++        },
++        {
++          "id": "test.output.parse",
++          "label": "测试输出解析",
++          "status": "required"
++        },
++        {
++          "id": "test.timeout",
++          "label": "测试超时控制",
++          "status": "required"
++        },
++        {
++          "id": "test.log",
++          "label": "测试日志",
++          "status": "required"
++        },
++        {
++          "id": "test.rerun",
++          "label": "测试重跑",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "test.coverage",
++      "domain": "test",
++      "label": "覆盖率",
++      "plugins": [
++        "test-core"
++      ],
++      "features": [
++        {
++          "id": "test.coverage.report",
++          "label": "覆盖率统计",
++          "status": "required"
++        },
++        {
++          "id": "test.coverage.gcov_lcov",
++          "label": "gcov / lcov 集成",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "test.framework",
++      "domain": "test",
++      "label": "测试框架适配器",
++      "plugins": [
++        "gtest",
++        "catch2",
++        "boost-test",
++        "ctest"
++      ],
++      "features": [
++        {
++          "id": "test.fw.gtest",
++          "label": "GoogleTest 适配",
++          "status": "required",
++          "plugins": [
++            "gtest"
++          ]
++        },
++        {
++          "id": "test.fw.catch2",
++          "label": "Catch2 适配",
++          "status": "required",
++          "plugins": [
++            "catch2"
++          ]
++        },
++        {
++          "id": "test.fw.boost",
++          "label": "Boost.Test 适配",
++          "status": "required",
++          "plugins": [
++            "boost-test"
++          ]
++        },
++        {
++          "id": "test.fw.ctest",
++          "label": "CTest 适配",
++          "status": "required",
++          "plugins": [
++            "ctest"
++          ]
++        }
++      ]
++    },
++    {
++      "id": "doc.core",
++      "domain": "doc",
++      "label": "文档与帮助",
++      "plugins": [
++        "docs-core"
++      ],
++      "features": [
++        {
++          "id": "doc.quickhelp",
++          "label": "快速帮助",
++          "status": "required"
++        },
++        {
++          "id": "doc.api",
++          "label": "API 文档浏览",
++          "status": "required"
++        },
++        {
++          "id": "doc.doxygen",
++          "label": "Doxygen 注释解析",
++          "status": "required"
++        },
++        {
++          "id": "doc.stdlib",
++          "label": "C/C++ 标准文档",
++          "status": "required"
++        },
++        {
++          "id": "doc.thirdparty",
++          "label": "第三方库文档",
++          "status": "required"
++        },
++        {
++          "id": "doc.inline",
++          "label": "代码提示文档",
++          "status": "required"
++        },
++        {
++          "id": "doc.shortcuts",
++          "label": "快捷键帮助",
++          "status": "required"
++        },
++        {
++          "id": "doc.plugin",
++          "label": "插件文档",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "doc.preview",
++      "domain": "doc",
++      "label": "内容预览",
++      "plugins": [
++        "doc-preview"
++      ],
++      "features": [
++        {
++          "id": "doc.preview.markdown",
++          "label": "Markdown 预览",
++          "status": "required"
++        },
++        {
++          "id": "doc.preview.rst",
++          "label": "reStructuredText 预览",
++          "status": "required"
++        },
++        {
++          "id": "doc.preview.browser",
++          "label": "内置浏览器",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "qt.build",
++      "domain": "qt",
++      "label": "Qt 项目与构建",
++      "plugins": [
++        "qt-cpp-core"
++      ],
++      "features": [
++        {
++          "id": "qt.project",
++          "label": "Qt 项目识别与 .pro / .pri 解析",
++          "status": "required"
++        },
++        {
++          "id": "qt.qmake.build",
++          "label": "基于 qmake 的 Qt 项目构建",
++          "status": "required"
++        }
++      ]
++    },
++    {
++      "id": "qt.cmake",
++      "domain": "qt",
++      "label": "Qt CMake 集成",
++      "plugins": [
++        "qt-cmake"
++      ],
++      "features": [
++        {
++          "id": "qt.cmake.integration",
++          "label": "Qt CMake 目标识别与构建（前置 CMake 插件）",
++          "status": "required"
++        }
++      ]
++    }
++  ]
++}
+diff --git a/catalog/invariants.json b/catalog/invariants.json
+new file mode 100644
+index 0000000..4ca0449
+--- /dev/null
++++ b/catalog/invariants.json
+@@ -0,0 +1,89 @@
++{
++  "schemaVersion": 1,
++  "rules": [
++    {
++      "id": "devcpp-requires-make",
++      "type": "dependency",
++      "plugin": "devcpp",
++      "on": [
++        "make"
++      ],
++      "description": "Dev-C++ Project 额外强依赖 Make & Makefile 插件"
++    },
++    {
++      "id": "cmake-pulls-ninja",
++      "type": "autoInstall",
++      "plugin": "cmake",
++      "target": "ninja",
++      "description": "安装 CMake 时 Ninja 自动连带安装"
++    },
++    {
++      "id": "meson-pulls-ninja",
++      "type": "autoInstall",
++      "plugin": "meson",
++      "target": "ninja",
++      "description": "安装 Meson 时 Ninja 自动连带安装"
++    },
++    {
++      "id": "cpp-pack-members",
++      "type": "packMembers",
++      "pack": "cpp-extension-pack",
++      "members": [
++        "asm",
++        "bazel",
++        "build-core",
++        "clang-core",
++        "cmake",
++        "ccls",
++        "compile-commands",
++        "cpp-base",
++        "custom-command",
++        "make",
++        "meson",
++        "ninja"
++      ],
++      "description": "C/C++ 扩展包成员与规划一致（含 Ninja）"
++    },
++    {
++      "id": "qt-pack-members",
++      "type": "packMembers",
++      "pack": "qt-pack",
++      "members": [
++        "qt-cmake",
++        "qt-cpp-core",
++        "qt-qml",
++        "qt-ui"
++      ],
++      "description": "Qt C++ 扩展包成员与规划一致"
++    },
++    {
++      "id": "build-system-depends-core",
++      "type": "layerDependency",
++      "layer": "build-system",
++      "on": [
++        "build-core",
++        "cpp-base"
++      ],
++      "description": "所有构建系统插件强依赖 C/C++ 基础插件并由构建核心框架提供调度"
++    },
++    {
++      "id": "debugger-depends-base",
++      "type": "layerDependency",
++      "layer": "debugger",
++      "on": [
++        "cpp-base"
++      ],
++      "description": "所有调试器插件强依赖 C/C++ 基础插件"
++    },
++    {
++      "id": "lsp-engine-exclusive",
++      "type": "exclusiveGroup",
++      "group": "cpp-lsp",
++      "members": [
++        "clang-core",
++        "ccls"
++      ],
++      "description": "clangd 与 ccls 共存，但在同一项目中互斥启用"
++    }
++  ]
++}
+diff --git a/plugins/asm/plugin.json b/plugins/asm/plugin.json
+new file mode 100644
+index 0000000..0e08bdb
+--- /dev/null
++++ b/plugins/asm/plugin.json
+@@ -0,0 +1,39 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "asm",
++  "name": "Assembly Support",
++  "nameZh": "汇编支持",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "language",
++  "description": "为 x86 系与 Arm 系汇编提供高亮与编译支持；其他架构不在支持范围内。",
++  "capabilitySets": [
++    "lang.asm"
++  ],
++  "activation": [
++    "onLanguage:asm"
++  ],
++  "contributes": {
++    "languages": [
++      {
++        "id": "asm",
++        "extensions": [
++          ".asm",
++          ".s",
++          ".S"
++        ],
++        "architectures": [
++          "x86",
++          "x86_64",
++          "arm",
++          "arm64"
++        ]
++      }
++    ],
++    "limitations": "非 x86 / Arm 架构不提供汇编高亮与编译"
++  },
++  "tags": [
++    "optional"
++  ]
++}
+diff --git a/plugins/bazel/plugin.json b/plugins/bazel/plugin.json
+new file mode 100644
+index 0000000..86c2785
+--- /dev/null
++++ b/plugins/bazel/plugin.json
+@@ -0,0 +1,41 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "bazel",
++  "name": "Bazel",
++  "nameZh": "Bazel",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "解析 BUILD / WORKSPACE 文件并调用 Bazel 构建。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "lang.buildfile"
++  ],
++  "contributes": {
++    "buildSystems": [
++      "bazel"
++    ],
++    "fileAssociations": [
++      {
++        "pattern": "BUILD",
++        "language": "starlark"
++      },
++      {
++        "pattern": "BUILD.bazel",
++        "language": "starlark"
++      },
++      {
++        "pattern": "WORKSPACE",
++        "language": "starlark"
++      },
++      {
++        "pattern": "*.bzl",
++        "language": "starlark"
++      }
++    ]
++  }
++}
+diff --git a/plugins/boost-test/plugin.json b/plugins/boost-test/plugin.json
+new file mode 100644
+index 0000000..00515db
+--- /dev/null
++++ b/plugins/boost-test/plugin.json
+@@ -0,0 +1,23 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "boost-test",
++  "name": "Boost.Test",
++  "nameZh": "Boost.Test",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "Boost.Test 适配器：解析 boost 单元测试输出。",
++  "dependencies": {
++    "test-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "test.framework"
++  ],
++  "contributes": {
++    "testFramework": {
++      "id": "boost-test",
++      "label": "Boost.Test"
++    }
++  }
++}
+diff --git a/plugins/catch2/plugin.json b/plugins/catch2/plugin.json
+new file mode 100644
+index 0000000..6ec0e1d
+--- /dev/null
++++ b/plugins/catch2/plugin.json
+@@ -0,0 +1,23 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "catch2",
++  "name": "Catch2",
++  "nameZh": "Catch2",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "Catch2 适配器：按标签过滤、解析断言失败位置。",
++  "dependencies": {
++    "test-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "test.framework"
++  ],
++  "contributes": {
++    "testFramework": {
++      "id": "catch2",
++      "label": "Catch2"
++    }
++  }
++}
+diff --git a/plugins/ccls/plugin.json b/plugins/ccls/plugin.json
+new file mode 100644
+index 0000000..7017e4f
+--- /dev/null
++++ b/plugins/ccls/plugin.json
+@@ -0,0 +1,45 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "ccls",
++  "name": "ccls",
++  "nameZh": "ccls",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "language",
++  "description": "另一套 C/C++ LSP 实现，与 clangd 共存，用户可在设置中选择其一作为当前项目的 LSP 引擎。",
++  "dependencies": {
++    "cpp-base": "^0.1.0"
++  },
++  "capabilitySets": [
++    "intel.core",
++    "intel.nav"
++  ],
++  "activation": [
++    "onLanguage:cpp",
++    "workspaceContains:.ccls"
++  ],
++  "contributes": {
++    "lsp": {
++      "engine": "ccls",
++      "executable": "ccls",
++      "exclusiveGroup": "cpp-lsp",
++      "languageScope": [
++        "c",
++        "cpp"
++      ]
++    },
++    "settings": [
++      {
++        "key": "lightcpp.lsp.engine",
++        "type": "string",
++        "default": "clangd",
++        "enum": [
++          "clangd",
++          "ccls"
++        ],
++        "description": "当前项目使用的 C/C++ LSP 引擎"
++      }
++    ]
++  }
++}
+diff --git a/plugins/cdb/plugin.json b/plugins/cdb/plugin.json
+new file mode 100644
+index 0000000..e856c33
+--- /dev/null
++++ b/plugins/cdb/plugin.json
+@@ -0,0 +1,36 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "cdb",
++  "name": "Windows Debugger (CDB / WinDbg)",
++  "nameZh": "Windows Debugger (CDB / WinDbg)",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "debugger",
++  "description": "Windows 原生调试后端，基于 CDB / WinDbg 引擎，使用 natvis 可视化类型。",
++  "dependencies": {
++    "cpp-base": "^0.1.0"
++  },
++  "capabilitySets": [
++    "debug.breakpoint",
++    "debug.control",
++    "debug.inspect",
++    "debug.attach",
++    "debug.symbols",
++    "debug.log"
++  ],
++  "contributes": {
++    "debuggers": [
++      {
++        "type": "cdb",
++        "label": "Windows Debugger (CDB / WinDbg)",
++        "platforms": [
++          "win32"
++        ]
++      }
++    ]
++  },
++  "platforms": [
++    "win32"
++  ]
++}
+diff --git a/plugins/clang-core/plugin.json b/plugins/clang-core/plugin.json
+new file mode 100644
+index 0000000..a463650
+--- /dev/null
++++ b/plugins/clang-core/plugin.json
+@@ -0,0 +1,93 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "clang-core",
++  "name": "Clang Core",
++  "nameZh": "Clang Core",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "language",
++  "description": "基于 clangd 的 LSP 引擎，内置 clang-format 与 clang-tidy。单文件格式化优先调用 clangd 内置能力，多文件 / 项目级格式化调用独立 clang-format；打开项目时自动发现 .clang-format / .clang-tidy 并提供轻量设置页。",
++  "dependencies": {
++    "cpp-base": "^0.1.0"
++  },
++  "capabilitySets": [
++    "lang.buildfile",
++    "clang.format",
++    "clang.tidy",
++    "clang.discovery",
++    "clang.settings",
++    "intel.core",
++    "intel.nav",
++    "analysis.engine",
++    "analysis.quality"
++  ],
++  "activation": [
++    "onLanguage:cpp",
++    "workspaceContains:.clangd",
++    "workspaceContains:.clang-format"
++  ],
++  "contributes": {
++    "lsp": {
++      "engine": "clangd",
++      "executable": "clangd",
++      "exclusiveGroup": "cpp-lsp",
++      "languageScope": [
++        "c",
++        "cpp"
++      ]
++    },
++    "toolchain": [
++      "clang-format",
++      "clang-tidy",
++      "clang"
++    ],
++    "commands": [
++      {
++        "id": "clangCore.formatDocument",
++        "title": "格式化当前文件（clangd）"
++      },
++      {
++        "id": "clangCore.formatWorkspace",
++        "title": "格式化整个项目（clang-format）"
++      },
++      {
++        "id": "clangCore.tidy.toggle",
++        "title": "切换 clang-tidy 实时检查"
++      }
++    ],
++    "settings": [
++      {
++        "key": "lightcpp.clangCore.tidy.enable",
++        "type": "boolean",
++        "default": false,
++        "description": "开启 clang-tidy 实时检查（大型项目建议关闭）"
++      },
++      {
++        "key": "lightcpp.clangCore.format.style",
++        "type": "string",
++        "default": "LLVM",
++        "enum": [
++          "LLVM",
++          "Google",
++          "Chromium",
++          "Mozilla",
++          "WebKit"
++        ],
++        "description": "无 .clang-format 时使用的回退风格"
++      },
++      {
++        "key": "lightcpp.clangCore.executable.clangd",
++        "type": "string",
++        "default": "",
++        "description": "自定义 clangd 路径（留空则查 PATH）"
++      },
++      {
++        "key": "lightcpp.clangCore.executable.clangTidy",
++        "type": "string",
++        "default": "",
++        "description": "自定义 clang-tidy 路径（留空则查 PATH）"
++      }
++    ]
++  }
++}
+diff --git a/plugins/cmake/plugin.json b/plugins/cmake/plugin.json
+new file mode 100644
+index 0000000..fc124ca
+--- /dev/null
++++ b/plugins/cmake/plugin.json
+@@ -0,0 +1,74 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "cmake",
++  "name": "CMake",
++  "nameZh": "CMake",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "解析 CMakeLists.txt 完成配置与构建；安装时自动连带安装 Ninja 作为默认生成器。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "lang.buildfile"
++  ],
++  "contributes": {
++    "buildSystems": [
++      "cmake"
++    ],
++    "languages": [
++      {
++        "id": "cmake",
++        "extensions": [
++          ".cmake"
++        ]
++      }
++    ],
++    "fileAssociations": [
++      {
++        "pattern": "CMakeLists.txt",
++        "language": "cmake"
++      },
++      {
++        "pattern": "*.cmake",
++        "language": "cmake"
++      }
++    ],
++    "commands": [
++      {
++        "id": "cmake.configure",
++        "title": "配置 (CMake)"
++      },
++      {
++        "id": "cmake.build",
++        "title": "构建 (CMake)"
++      },
++      {
++        "id": "cmake.clean",
++        "title": "清理 (CMake)"
++      },
++      {
++        "id": "cmake.install",
++        "title": "安装 (CMake)"
++      }
++    ],
++    "settings": [
++      {
++        "key": "lightcpp.cmake.generator",
++        "type": "string",
++        "default": "Ninja",
++        "description": "CMake 生成器"
++      }
++    ]
++  },
++  "recommends": {
++    "ninja": {
++      "version": "^0.1.0",
++      "autoInstall": true,
++      "reason": "CMake 默认生成器，安装 CMake 时自动连带安装"
++    }
++  }
++}
+diff --git a/plugins/compile-commands/plugin.json b/plugins/compile-commands/plugin.json
+new file mode 100644
+index 0000000..abff124
+--- /dev/null
++++ b/plugins/compile-commands/plugin.json
+@@ -0,0 +1,32 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "compile-commands",
++  "name": "compile_commands.json Import",
++  "nameZh": "compile_commands.json 导入",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "选择一个现成的 compile_commands.json，以「无构建系统」方式打开、配置并索引 C/C++ 项目。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0"
++  },
++  "contributes": {
++    "buildSystems": [
++      "compile-commands"
++    ],
++    "fileAssociations": [
++      {
++        "pattern": "compile_commands.json",
++        "language": "json"
++      }
++    ],
++    "commands": [
++      {
++        "id": "compileCommands.import",
++        "title": "导入 compile_commands.json"
++      }
++    ]
++  }
++}
+diff --git a/plugins/cpp-base/plugin.json b/plugins/cpp-base/plugin.json
+new file mode 100644
+index 0000000..9e88295
+--- /dev/null
++++ b/plugins/cpp-base/plugin.json
+@@ -0,0 +1,69 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "cpp-base",
++  "name": "C/C++ Base",
++  "nameZh": "C/C++ 基础",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "core",
++  "description": "整个 C/C++ 插件生态的最底层强依赖：语法高亮、基础编译器支持（libclang / gcc / llvm / msvc 含 clang-cl）；仅当安装调试器插件时提供调试底层能力。",
++  "capabilitySets": [
++    "lang.cpp"
++  ],
++  "activation": [
++    "onLanguage:cpp",
++    "onLanguage:c"
++  ],
++  "contributes": {
++    "compilers": [
++      {
++        "id": "libclang",
++        "label": "libclang",
++        "kind": "library"
++      },
++      {
++        "id": "gcc",
++        "label": "GCC",
++        "kind": "toolchain"
++      },
++      {
++        "id": "llvm",
++        "label": "LLVM / Clang",
++        "kind": "toolchain"
++      },
++      {
++        "id": "msvc",
++        "label": "MSVC",
++        "kind": "toolchain",
++        "variants": [
++          "clang-cl"
++        ]
++      }
++    ],
++    "languages": [
++      {
++        "id": "cpp",
++        "extensions": [
++          ".cpp",
++          ".cc",
++          ".cxx",
++          ".hpp",
++          ".hh",
++          ".hxx",
++          ".h"
++        ]
++      },
++      {
++        "id": "c",
++        "extensions": [
++          ".c"
++        ]
++      }
++    ],
++    "debugSupport": {
++      "provider": "cpp-base",
++      "requiresDebuggerPlugin": true
++    }
++  }
++}
+diff --git a/plugins/cpp-extension-pack/plugin.json b/plugins/cpp-extension-pack/plugin.json
+new file mode 100644
+index 0000000..d28ba4e
+--- /dev/null
++++ b/plugins/cpp-extension-pack/plugin.json
+@@ -0,0 +1,29 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "cpp-extension-pack",
++  "name": "C/C++ Extension Pack",
++  "nameZh": "C/C++ 扩展包",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "pack",
++  "layer": "pack",
++  "description": "面向现代 C/C++ 开发的一键安装集合，本身无业务逻辑，仅声明依赖。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "clang-core": "^0.1.0",
++    "ccls": "^0.1.0",
++    "build-core": "^0.1.0",
++    "cmake": "^0.1.0",
++    "make": "^0.1.0",
++    "meson": "^0.1.0",
++    "bazel": "^0.1.0",
++    "ninja": "^0.1.0",
++    "compile-commands": "^0.1.0",
++    "custom-command": "^0.1.0",
++    "asm": "^0.1.0"
++  },
++  "activation": [],
++  "tags": [
++    "recommended"
++  ]
++}
+diff --git a/plugins/ctest/plugin.json b/plugins/ctest/plugin.json
+new file mode 100644
+index 0000000..b709e4d
+--- /dev/null
++++ b/plugins/ctest/plugin.json
+@@ -0,0 +1,23 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "ctest",
++  "name": "CTest",
++  "nameZh": "CTest",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "CTest 适配器：驱动 ctest -N 发现用例并解析测试结果。",
++  "dependencies": {
++    "test-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "test.framework"
++  ],
++  "contributes": {
++    "testFramework": {
++      "id": "ctest",
++      "label": "CTest"
++    }
++  }
++}
+diff --git a/plugins/custom-command/plugin.json b/plugins/custom-command/plugin.json
+new file mode 100644
+index 0000000..b5e1be4
+--- /dev/null
++++ b/plugins/custom-command/plugin.json
+@@ -0,0 +1,26 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "custom-command",
++  "name": "Custom Command",
++  "nameZh": "自定义命令",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "脱离标准构建系统，自定义编译/构建的 Shell 或批处理命令。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0"
++  },
++  "contributes": {
++    "buildSystems": [
++      "custom"
++    ],
++    "commands": [
++      {
++        "id": "customCommand.run",
++        "title": "运行自定义构建命令"
++      }
++    ]
++  }
++}
+diff --git a/plugins/devcpp/plugin.json b/plugins/devcpp/plugin.json
+new file mode 100644
+index 0000000..2c92466
+--- /dev/null
++++ b/plugins/devcpp/plugin.json
+@@ -0,0 +1,30 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "devcpp",
++  "name": "Dev-C++ Project",
++  "nameZh": "Dev-C++ Project",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "解析 .dev 工程文件并构建；额外强依赖 Make & Makefile 插件。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0",
++    "make": "^0.1.0"
++  },
++  "contributes": {
++    "buildSystems": [
++      "devcpp"
++    ],
++    "fileAssociations": [
++      {
++        "pattern": "*.dev",
++        "language": "devcpp"
++      }
++    ]
++  },
++  "platforms": [
++    "win32"
++  ]
++}
+diff --git a/plugins/doc-preview/plugin.json b/plugins/doc-preview/plugin.json
+new file mode 100644
+index 0000000..12a9b4f
+--- /dev/null
++++ b/plugins/doc-preview/plugin.json
+@@ -0,0 +1,14 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "doc-preview",
++  "name": "Document Preview",
++  "nameZh": "文档预览",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "Markdown / reStructuredText 实时预览与内置浏览器。",
++  "capabilitySets": [
++    "doc.preview"
++  ]
++}
+diff --git a/plugins/docs-core/plugin.json b/plugins/docs-core/plugin.json
+new file mode 100644
+index 0000000..12dd51a
+--- /dev/null
++++ b/plugins/docs-core/plugin.json
+@@ -0,0 +1,14 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "docs-core",
++  "name": "Docs & Help",
++  "nameZh": "文档与帮助",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "快速帮助、快捷键、插件文档、C/C++ 标准与第三方库文档、Doxygen 注释解析与 API 浏览。",
++  "capabilitySets": [
++    "doc.core"
++  ]
++}
+diff --git a/plugins/gdb/plugin.json b/plugins/gdb/plugin.json
+new file mode 100644
+index 0000000..f96b67d
+--- /dev/null
++++ b/plugins/gdb/plugin.json
+@@ -0,0 +1,38 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "gdb",
++  "name": "GDB",
++  "nameZh": "GDB",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "debugger",
++  "description": "Linux / MinGW 场景的调试器后端，支持 core 文件、远程调试与 pretty-printer。",
++  "dependencies": {
++    "cpp-base": "^0.1.0"
++  },
++  "capabilitySets": [
++    "debug.breakpoint",
++    "debug.control",
++    "debug.inspect",
++    "debug.attach",
++    "debug.symbols",
++    "debug.log"
++  ],
++  "contributes": {
++    "debuggers": [
++      {
++        "type": "gdb",
++        "label": "GDB",
++        "platforms": [
++          "linux",
++          "win32"
++        ]
++      }
++    ]
++  },
++  "platforms": [
++    "linux",
++    "win32"
++  ]
++}
+diff --git a/plugins/git/plugin.json b/plugins/git/plugin.json
+new file mode 100644
+index 0000000..74b4c46
+--- /dev/null
++++ b/plugins/git/plugin.json
+@@ -0,0 +1,27 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "git",
++  "name": "Git",
++  "nameZh": "Git",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "完整的 Git 集成：克隆/打开仓库、分支与历史、合并与变基、冲突解决、子模块与 worktree、签名与认证。",
++  "capabilitySets": [
++    "git.core",
++    "git.history",
++    "git.advanced",
++    "git.ui",
++    "git.auth"
++  ],
++  "activation": [
++    "workspaceContains:.git"
++  ],
++  "contributes": {
++    "scm": {
++      "id": "git",
++      "label": "Git"
++    }
++  }
++}
+diff --git a/plugins/gnu-pack/plugin.json b/plugins/gnu-pack/plugin.json
+new file mode 100644
+index 0000000..832cc5c
+--- /dev/null
++++ b/plugins/gnu-pack/plugin.json
+@@ -0,0 +1,20 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "gnu-pack",
++  "name": "GNU GCC Extension Pack",
++  "nameZh": "GNU 拓展包",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "pack",
++  "layer": "pack",
++  "description": "GNU 工具链组合：C/C++ Core + Make + GDB。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "make": "^0.1.0",
++    "gdb": "^0.1.0"
++  },
++  "activation": [],
++  "tags": [
++    "recommended"
++  ]
++}
+diff --git a/plugins/gtest/plugin.json b/plugins/gtest/plugin.json
+new file mode 100644
+index 0000000..f83ccca
+--- /dev/null
++++ b/plugins/gtest/plugin.json
+@@ -0,0 +1,23 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "gtest",
++  "name": "GoogleTest",
++  "nameZh": "GoogleTest",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "GoogleTest 适配器：发现 TEST/TEST_F 用例并解析 gtest 输出。",
++  "dependencies": {
++    "test-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "test.framework"
++  ],
++  "contributes": {
++    "testFramework": {
++      "id": "gtest",
++      "label": "GoogleTest"
++    }
++  }
++}
+diff --git a/plugins/hex-viewer/plugin.json b/plugins/hex-viewer/plugin.json
+new file mode 100644
+index 0000000..f043216
+--- /dev/null
++++ b/plugins/hex-viewer/plugin.json
+@@ -0,0 +1,14 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "hex-viewer",
++  "name": "Hex Viewer",
++  "nameZh": "Hex 查看器",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "二进制文件的十六进制查看与编辑。",
++  "capabilitySets": [
++    "tool.runtime"
++  ]
++}
+diff --git a/plugins/lldb/plugin.json b/plugins/lldb/plugin.json
+new file mode 100644
+index 0000000..fbc03dc
+--- /dev/null
++++ b/plugins/lldb/plugin.json
+@@ -0,0 +1,40 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "lldb",
++  "name": "LLDB",
++  "nameZh": "LLDB",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "debugger",
++  "description": "LLVM 生态调试器后端，支持 core 文件、远程调试与 pretty-printer。",
++  "dependencies": {
++    "cpp-base": "^0.1.0"
++  },
++  "capabilitySets": [
++    "debug.breakpoint",
++    "debug.control",
++    "debug.inspect",
++    "debug.attach",
++    "debug.symbols",
++    "debug.log"
++  ],
++  "contributes": {
++    "debuggers": [
++      {
++        "type": "lldb",
++        "label": "LLDB",
++        "platforms": [
++          "linux",
++          "darwin",
++          "win32"
++        ]
++      }
++    ]
++  },
++  "platforms": [
++    "linux",
++    "darwin",
++    "win32"
++  ]
++}
+diff --git a/plugins/llvm-pack/plugin.json b/plugins/llvm-pack/plugin.json
+new file mode 100644
+index 0000000..e89f4c6
+--- /dev/null
++++ b/plugins/llvm-pack/plugin.json
+@@ -0,0 +1,21 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "llvm-pack",
++  "name": "LLVM Extension Pack",
++  "nameZh": "LLVM 拓展包",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "pack",
++  "layer": "pack",
++  "description": "LLVM 工具链组合：C/C++ Base + Clang Core + Make + LLDB。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "clang-core": "^0.1.0",
++    "make": "^0.1.0",
++    "lldb": "^0.1.0"
++  },
++  "activation": [],
++  "tags": [
++    "recommended"
++  ]
++}
+diff --git a/plugins/log-viewer/plugin.json b/plugins/log-viewer/plugin.json
+new file mode 100644
+index 0000000..a1b74a8
+--- /dev/null
++++ b/plugins/log-viewer/plugin.json
+@@ -0,0 +1,14 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "log-viewer",
++  "name": "Log Viewer",
++  "nameZh": "日志查看器",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "结构化日志查看、过滤与跟随（tail -f）。",
++  "capabilitySets": [
++    "tool.runtime"
++  ]
++}
+diff --git a/plugins/make/plugin.json b/plugins/make/plugin.json
+new file mode 100644
+index 0000000..de98cc1
+--- /dev/null
++++ b/plugins/make/plugin.json
+@@ -0,0 +1,54 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "make",
++  "name": "Make",
++  "nameZh": "Make & Makefile",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "解析传统 Makefile 并执行构建；GNU 扩展包与 Dev-C++ 项目的必备依赖。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "lang.buildfile"
++  ],
++  "contributes": {
++    "buildSystems": [
++      "make"
++    ],
++    "fileAssociations": [
++      {
++        "pattern": "Makefile",
++        "language": "makefile"
++      },
++      {
++        "pattern": "makefile",
++        "language": "makefile"
++      },
++      {
++        "pattern": "GNUmakefile",
++        "language": "makefile"
++      },
++      {
++        "pattern": "*.mk",
++        "language": "makefile"
++      }
++    ],
++    "commands": [
++      {
++        "id": "make.build",
++        "title": "构建 (make)"
++      },
++      {
++        "id": "make.clean",
++        "title": "清理 (make)"
++      }
++    ]
++  },
++  "tags": [
++    "gnu"
++  ]
++}
+diff --git a/plugins/media-preview/plugin.json b/plugins/media-preview/plugin.json
+new file mode 100644
+index 0000000..0be0ff9
+--- /dev/null
++++ b/plugins/media-preview/plugin.json
+@@ -0,0 +1,30 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "media-preview",
++  "name": "Media Preview",
++  "nameZh": "图像 / 资源预览",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "在编辑器内预览图像、字体与常见资源文件。",
++  "capabilitySets": [
++    "tool.runtime"
++  ],
++  "contributes": {
++    "fileAssociations": [
++      {
++        "pattern": "*.png",
++        "viewer": "image"
++      },
++      {
++        "pattern": "*.svg",
++        "viewer": "image"
++      },
++      {
++        "pattern": "*.ttf",
++        "viewer": "font"
++      }
++    ]
++  }
++}
+diff --git a/plugins/meson/plugin.json b/plugins/meson/plugin.json
+new file mode 100644
+index 0000000..e4b6696
+--- /dev/null
++++ b/plugins/meson/plugin.json
+@@ -0,0 +1,50 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "meson",
++  "name": "Meson",
++  "nameZh": "Meson",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "解析 meson.build 完成配置与构建；安装时自动连带安装 Ninja 作为默认后端。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "lang.buildfile"
++  ],
++  "contributes": {
++    "buildSystems": [
++      "meson"
++    ],
++    "fileAssociations": [
++      {
++        "pattern": "meson.build",
++        "language": "meson"
++      },
++      {
++        "pattern": "meson_options.txt",
++        "language": "meson"
++      }
++    ],
++    "commands": [
++      {
++        "id": "meson.setup",
++        "title": "配置 (Meson)"
++      },
++      {
++        "id": "meson.build",
++        "title": "构建 (Meson)"
++      }
++    ]
++  },
++  "recommends": {
++    "ninja": {
++      "version": "^0.1.0",
++      "autoInstall": true,
++      "reason": "Meson 默认后端（ninja backend），安装 Meson 时自动连带安装"
++    }
++  }
++}
+diff --git a/plugins/msvc-pack/plugin.json b/plugins/msvc-pack/plugin.json
+new file mode 100644
+index 0000000..b35dea5
+--- /dev/null
++++ b/plugins/msvc-pack/plugin.json
+@@ -0,0 +1,21 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "msvc-pack",
++  "name": "Microsoft Windows Extension Pack",
++  "nameZh": "微软 Windows 系统开发拓展包",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "pack",
++  "layer": "pack",
++  "description": "Windows 原生开发组合：C/C++ Base + Visual Studio Project + CDB/WinDbg + Visual Studio Debugger。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "vs-project": "^0.1.0",
++    "cdb": "^0.1.0",
++    "vs-debugger": "^0.1.0"
++  },
++  "activation": [],
++  "tags": [
++    "recommended"
++  ]
++}
+diff --git a/plugins/ninja/plugin.json b/plugins/ninja/plugin.json
+new file mode 100644
+index 0000000..97288ef
+--- /dev/null
++++ b/plugins/ninja/plugin.json
+@@ -0,0 +1,36 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "ninja",
++  "name": "Ninja",
++  "nameZh": "Ninja",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "直接读取并构建已有的 build.ninja。CMake / Meson 安装时自动连带安装，扩展包安装时一并安装，并作为推荐后端被联动调用。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "lang.buildfile"
++  ],
++  "contributes": {
++    "buildSystems": [
++      "ninja"
++    ],
++    "fileAssociations": [
++      {
++        "pattern": "build.ninja",
++        "language": "ninja"
++      },
++      {
++        "pattern": "*.ninja",
++        "language": "ninja"
++      }
++    ]
++  },
++  "tags": [
++    "backend"
++  ]
++}
+diff --git a/plugins/pkg-conan/plugin.json b/plugins/pkg-conan/plugin.json
+new file mode 100644
+index 0000000..31dad18
+--- /dev/null
++++ b/plugins/pkg-conan/plugin.json
+@@ -0,0 +1,23 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "pkg-conan",
++  "name": "Conan Integration",
++  "nameZh": "Conan 集成",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "集成 Conan 2 的 profile 与依赖解析，生成构建系统可消费的配置。",
++  "dependencies": {
++    "build-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "tool.pkg"
++  ],
++  "contributes": {
++    "packageManager": {
++      "id": "conan",
++      "manifest": "conanfile.txt"
++    }
++  }
++}
+diff --git a/plugins/pkg-hunter/plugin.json b/plugins/pkg-hunter/plugin.json
+new file mode 100644
+index 0000000..a85d15f
+--- /dev/null
++++ b/plugins/pkg-hunter/plugin.json
+@@ -0,0 +1,24 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "pkg-hunter",
++  "name": "Hunter Integration",
++  "nameZh": "Hunter 集成",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "基于 CMake 的 Hunter 包管理集成。",
++  "dependencies": {
++    "build-core": "^0.1.0",
++    "cmake": "^0.1.0"
++  },
++  "capabilitySets": [
++    "tool.pkg"
++  ],
++  "contributes": {
++    "packageManager": {
++      "id": "hunter",
++      "manifest": "cmake/HunterGate.cmake"
++    }
++  }
++}
+diff --git a/plugins/pkg-native/plugin.json b/plugins/pkg-native/plugin.json
+new file mode 100644
+index 0000000..c1554fb
+--- /dev/null
++++ b/plugins/pkg-native/plugin.json
+@@ -0,0 +1,36 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "pkg-native",
++  "name": "System Package Managers",
++  "nameZh": "系统包管理器",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "对接 apt / brew / winget 的系统级依赖安装与检测。",
++  "dependencies": {
++    "build-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "tool.pkg"
++  ],
++  "contributes": {
++    "packageManager": {
++      "id": "native",
++      "backends": [
++        {
++          "os": "linux",
++          "tool": "apt"
++        },
++        {
++          "os": "darwin",
++          "tool": "brew"
++        },
++        {
++          "os": "win32",
++          "tool": "winget"
++        }
++      ]
++    }
++  }
++}
+diff --git a/plugins/pkg-vcpkg/plugin.json b/plugins/pkg-vcpkg/plugin.json
+new file mode 100644
+index 0000000..a88a1e1
+--- /dev/null
++++ b/plugins/pkg-vcpkg/plugin.json
+@@ -0,0 +1,23 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "pkg-vcpkg",
++  "name": "vcpkg Integration",
++  "nameZh": "vcpkg 集成",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "检测并驱动 vcpkg 清单模式，向构建系统注入工具链文件与依赖信息。",
++  "dependencies": {
++    "build-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "tool.pkg"
++  ],
++  "contributes": {
++    "packageManager": {
++      "id": "vcpkg",
++      "manifest": "vcpkg.json"
++    }
++  }
++}
+diff --git a/plugins/qmake/plugin.json b/plugins/qmake/plugin.json
+new file mode 100644
+index 0000000..08336ee
+--- /dev/null
++++ b/plugins/qmake/plugin.json
+@@ -0,0 +1,42 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "qmake",
++  "name": "Qt QMake",
++  "nameZh": "Qt QMake",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "解析 .pro / .pri 工程文件并驱动 qmake 构建，是 Qt C++ Core 的构建基础。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "lang.buildfile"
++  ],
++  "contributes": {
++    "buildSystems": [
++      "qmake"
++    ],
++    "languages": [
++      {
++        "id": "qmake",
++        "extensions": [
++          ".pro",
++          ".pri"
++        ]
++      }
++    ],
++    "fileAssociations": [
++      {
++        "pattern": "*.pro",
++        "language": "qmake"
++      },
++      {
++        "pattern": "*.pri",
++        "language": "qmake"
++      }
++    ]
++  }
++}
+diff --git a/plugins/qt-cmake/plugin.json b/plugins/qt-cmake/plugin.json
+new file mode 100644
+index 0000000..59c179a
+--- /dev/null
++++ b/plugins/qt-cmake/plugin.json
+@@ -0,0 +1,19 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "qt-cmake",
++  "name": "Qt CMake",
++  "nameZh": "Qt CMake",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "Qt 6 的 CMake 集成（qt_add_executable / qt_add_library 识别）。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0",
++    "cmake": "^0.1.0"
++  },
++  "capabilitySets": [
++    "qt.cmake"
++  ]
++}
+diff --git a/plugins/qt-cpp-core/plugin.json b/plugins/qt-cpp-core/plugin.json
+new file mode 100644
+index 0000000..07f1ccb
+--- /dev/null
++++ b/plugins/qt-cpp-core/plugin.json
+@@ -0,0 +1,22 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "qt-cpp-core",
++  "name": "Qt C++ Core",
++  "nameZh": "Qt C++ Core",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "language",
++  "description": "Qt C++ 项目核心支持，内含 QMake 构建能力。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "qmake": "^0.1.0",
++    "build-core": "^0.1.0"
++  },
++  "capabilitySets": [
++    "qt.build"
++  ],
++  "activation": [
++    "workspaceContains:*.pro"
++  ]
++}
+diff --git a/plugins/qt-pack/plugin.json b/plugins/qt-pack/plugin.json
+new file mode 100644
+index 0000000..46e7314
+--- /dev/null
++++ b/plugins/qt-pack/plugin.json
+@@ -0,0 +1,21 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "qt-pack",
++  "name": "Qt C++ Extension Pack",
++  "nameZh": "Qt C++ 扩展包",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "pack",
++  "layer": "pack",
++  "description": "Qt 生态组合，需用户按需手动安装（不包含在 C/C++ 扩展包内）。",
++  "dependencies": {
++    "qt-cpp-core": "^0.1.0",
++    "qt-cmake": "^0.1.0",
++    "qt-qml": "^0.1.0",
++    "qt-ui": "^0.1.0"
++  },
++  "activation": [],
++  "tags": [
++    "ecosystem"
++  ]
++}
+diff --git a/plugins/qt-qml/plugin.json b/plugins/qt-qml/plugin.json
+new file mode 100644
+index 0000000..444c280
+--- /dev/null
++++ b/plugins/qt-qml/plugin.json
+@@ -0,0 +1,28 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "qt-qml",
++  "name": "Qt QML",
++  "nameZh": "Qt QML",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "language",
++  "description": "QML / JavaScript 语言支持与 Qt Quick 诊断。",
++  "dependencies": {
++    "cpp-base": "^0.1.0"
++  },
++  "capabilitySets": [
++    "lang.qml"
++  ],
++  "contributes": {
++    "languages": [
++      {
++        "id": "qml",
++        "extensions": [
++          ".qml",
++          ".qmltypes"
++        ]
++      }
++    ]
++  }
++}
+diff --git a/plugins/qt-ui/plugin.json b/plugins/qt-ui/plugin.json
+new file mode 100644
+index 0000000..4366361
+--- /dev/null
++++ b/plugins/qt-ui/plugin.json
+@@ -0,0 +1,29 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "qt-ui",
++  "name": "Qt UI",
++  "nameZh": "Qt UI",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "language",
++  "description": ".ui 设计文件预览与 .qrc 资源管理。",
++  "dependencies": {
++    "cpp-base": "^0.1.0"
++  },
++  "capabilitySets": [
++    "lang.ui"
++  ],
++  "contributes": {
++    "fileAssociations": [
++      {
++        "pattern": "*.ui",
++        "language": "xml"
++      },
++      {
++        "pattern": "*.qrc",
++        "language": "xml"
++      }
++    ]
++  }
++}
+diff --git a/plugins/serial-terminal/plugin.json b/plugins/serial-terminal/plugin.json
+new file mode 100644
+index 0000000..39266e2
+--- /dev/null
++++ b/plugins/serial-terminal/plugin.json
+@@ -0,0 +1,14 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "serial-terminal",
++  "name": "Serial Terminal",
++  "nameZh": "串口终端",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "串口连接、收发与日志记录，面向嵌入式场景。",
++  "capabilitySets": [
++    "tool.runtime"
++  ]
++}
+diff --git a/plugins/terminal/plugin.json b/plugins/terminal/plugin.json
+new file mode 100644
+index 0000000..7c288de
+--- /dev/null
++++ b/plugins/terminal/plugin.json
+@@ -0,0 +1,36 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "terminal",
++  "name": "Terminal & Tools",
++  "nameZh": "终端与工具集成",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "命令面板、外部工具配置、运行/调试程序入口与 Shell 集成；内置终端在当前版本存在已知问题。",
++  "capabilitySets": [
++    "tool.workbench"
++  ],
++  "activation": [
++    "onStartup"
++  ],
++  "contributes": {
++    "commands": [
++      {
++        "id": "workbench.action.terminal.new",
++        "title": "新建终端"
++      },
++      {
++        "id": "workbench.action.tasks.run",
++        "title": "运行任务"
++      },
++      {
++        "id": "workbench.action.debug.start",
++        "title": "启动调试"
++      }
++    ],
++    "knownIssues": [
++      "内置终端目前有问题，v0.1 以外部终端 + Shell 集成为兜底"
++    ]
++  }
++}
+diff --git a/plugins/test-core/plugin.json b/plugins/test-core/plugin.json
+new file mode 100644
+index 0000000..5500dea
+--- /dev/null
++++ b/plugins/test-core/plugin.json
+@@ -0,0 +1,20 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "test-core",
++  "name": "Test Explorer Core",
++  "nameZh": "测试核心",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "测试列表视图、运行/重跑、超时控制、输出解析与覆盖率（gcov / lcov）的统一框架。",
++  "capabilitySets": [
++    "test.core",
++    "test.coverage"
++  ],
++  "contributes": {
++    "testExplorer": {
++      "frameworks": "testFrameworks"
++    }
++  }
++}
+diff --git a/plugins/vs-debugger/plugin.json b/plugins/vs-debugger/plugin.json
+new file mode 100644
+index 0000000..83324fc
+--- /dev/null
++++ b/plugins/vs-debugger/plugin.json
+@@ -0,0 +1,43 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "vs-debugger",
++  "name": "Visual Studio Debugger",
++  "nameZh": "Visual Studio Debugger",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "debugger",
++  "description": "复用 Visual Studio 调试引擎，适用于 MSVC 工具链；与 Visual Studio Project 插件配合最佳。",
++  "dependencies": {
++    "cpp-base": "^0.1.0"
++  },
++  "capabilitySets": [
++    "debug.breakpoint",
++    "debug.control",
++    "debug.inspect",
++    "debug.attach",
++    "debug.symbols",
++    "debug.log"
++  ],
++  "contributes": {
++    "debuggers": [
++      {
++        "type": "vs",
++        "label": "Visual Studio Debugger",
++        "platforms": [
++          "win32"
++        ]
++      }
++    ]
++  },
++  "platforms": [
++    "win32"
++  ],
++  "recommends": {
++    "vs-project": {
++      "version": "^0.1.0",
++      "autoInstall": false,
++      "reason": "MSVC 工程通常由 MSBuild 构建，建议同时安装"
++    }
++  }
++}
+diff --git a/plugins/vs-project/plugin.json b/plugins/vs-project/plugin.json
+new file mode 100644
+index 0000000..eb4a62d
+--- /dev/null
++++ b/plugins/vs-project/plugin.json
+@@ -0,0 +1,37 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "vs-project",
++  "name": "Visual Studio Project",
++  "nameZh": "Visual Studio Project",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "解析 .vcxproj / .sln 并通过 MSBuild 构建，支持 Windows 平台目标。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0"
++  },
++  "contributes": {
++    "buildSystems": [
++      "msbuild"
++    ],
++    "fileAssociations": [
++      {
++        "pattern": "*.sln",
++        "language": "msbuild"
++      },
++      {
++        "pattern": "*.vcxproj",
++        "language": "msbuild"
++      },
++      {
++        "pattern": "*.vcxproj.filters",
++        "language": "msbuild"
++      }
++    ]
++  },
++  "platforms": [
++    "win32"
++  ]
++}
+diff --git a/plugins/wsl/plugin.json b/plugins/wsl/plugin.json
+new file mode 100644
+index 0000000..de958b2
+--- /dev/null
++++ b/plugins/wsl/plugin.json
+@@ -0,0 +1,28 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "wsl",
++  "name": "WSL Integration",
++  "nameZh": "WSL 集成",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "tooling",
++  "description": "在 Windows 上以 WSL 发行版作为工具链与运行环境。",
++  "dependencies": {
++    "cpp-base": "^0.1.0"
++  },
++  "capabilitySets": [
++    "tool.runtime"
++  ],
++  "platforms": [
++    "win32"
++  ],
++  "contributes": {
++    "toolchainProviders": [
++      {
++        "id": "wsl",
++        "transport": "wsl.exe"
++      }
++    ]
++  }
++}
+diff --git a/plugins/xcodebuild/plugin.json b/plugins/xcodebuild/plugin.json
+new file mode 100644
+index 0000000..a478bb8
+--- /dev/null
++++ b/plugins/xcodebuild/plugin.json
+@@ -0,0 +1,33 @@
++{
++  "$schema": "../../schemas/plugin.schema.json",
++  "id": "xcodebuild",
++  "name": "xcodebuild",
++  "nameZh": "xcodebuild",
++  "version": "0.1.0",
++  "publisher": "lightcpp",
++  "kind": "plugin",
++  "layer": "build-system",
++  "description": "解析 Xcode 工程并调用 xcodebuild 构建，仅 macOS。",
++  "dependencies": {
++    "cpp-base": "^0.1.0",
++    "build-core": "^0.1.0"
++  },
++  "contributes": {
++    "buildSystems": [
++      "xcodebuild"
++    ],
++    "fileAssociations": [
++      {
++        "pattern": "project.pbxproj",
++        "language": "xcode"
++      },
++      {
++        "pattern": "*.xcodeproj",
++        "language": "xcode"
++      }
++    ]
++  },
++  "platforms": [
++    "darwin"
++  ]
++}
+diff --git a/schemas/plugin.schema.json b/schemas/plugin.schema.json
+new file mode 100644
+index 0000000..762f490
+--- /dev/null
++++ b/schemas/plugin.schema.json
+@@ -0,0 +1,87 @@
++{
++  "$schema": "http://json-schema.org/draft-07/schema#",
++  "$id": "https://lightcpp.dev/schemas/plugin.schema.json",
++  "title": "LightCpp 插件清单",
++  "description": "plugins/<id>/plugin.json 的结构定义。semantic 校验（依赖存在性、环、功能覆盖、计划不变量）由 tools/lightcpp_pm.py validate 完成。",
++  "type": "object",
++  "required": ["id", "name", "nameZh", "version", "publisher", "kind", "layer", "description"],
++  "additionalProperties": false,
++  "properties": {
++    "$schema": { "type": "string" },
++    "id": {
++      "type": "string",
++      "pattern": "^[a-z0-9][a-z0-9-]*$",
++      "description": "插件唯一标识，必须与所在目录名一致"
++    },
++    "name": { "type": "string", "minLength": 1 },
++    "nameZh": { "type": "string", "minLength": 1 },
++    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
++    "publisher": { "type": "string", "minLength": 1 },
++    "kind": { "enum": ["plugin", "pack"] },
++    "layer": {
++      "enum": ["core", "language", "build-framework", "build-system", "debugger", "tooling", "pack"]
++    },
++    "description": { "type": "string", "minLength": 8 },
++    "platforms": {
++      "type": "array",
++      "items": { "enum": ["linux", "darwin", "win32"] },
++      "uniqueItems": true
++    },
++    "engines": {
++      "type": "object",
++      "additionalProperties": { "type": "string" }
++    },
++    "dependencies": {
++      "type": "object",
++      "description": "硬依赖：缺失则无法安装。值为版本约束（* / x.y.z / ^x.y.z / ~x.y.z / >=x.y.z）",
++      "additionalProperties": { "type": "string" }
++    },
++    "recommends": {
++      "type": "object",
++      "description": "推荐依赖；autoInstall 为 true 时随本插件一并安装（如 CMake/Meson 连带 Ninja）",
++      "additionalProperties": {
++        "type": "object",
++        "required": ["version"],
++        "additionalProperties": false,
++        "properties": {
++          "version": { "type": "string" },
++          "reason": { "type": "string" },
++          "autoInstall": { "type": "boolean" }
++        }
++      }
++    },
++    "capabilitySets": {
++      "type": "array",
++      "description": "引用的功能集 ID，需在 catalog/features.json 中定义",
++      "items": { "type": "string" },
++      "uniqueItems": true
++    },
++    "activation": {
++      "type": "array",
++      "items": { "type": "string" },
++      "description": "激活事件，如 onLanguage:cpp / workspaceContains:CMakeLists.txt / onStartup"
++    },
++    "contributes": {
++      "type": "object",
++      "description": "对宿主的贡献点：languages / buildSystems / debuggers / lsp / commands / settings / scm 等，扩展包禁止声明"
++    },
++    "tags": {
++      "type": "array",
++      "items": { "type": "string" }
++    }
++  },
++  "allOf": [
++    {
++      "if": { "properties": { "kind": { "const": "pack" } }, "required": ["kind"] },
++      "then": {
++        "required": ["dependencies"],
++        "properties": {
++          "layer": { "const": "pack" },
++          "contributes": false,
++          "capabilitySets": false,
++          "activation": { "maxItems": 0 }
++        }
++      }
++    }
++  ]
++}
+-- 
+2.43.0
+

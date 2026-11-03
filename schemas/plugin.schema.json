@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://lightcpp.dev/schemas/plugin.schema.json",
+  "title": "LightCpp 插件清单",
+  "description": "plugins/<id>/plugin.json 的结构定义。semantic 校验（依赖存在性、环、功能覆盖、计划不变量）由 tools/lightcpp_pm.py validate 完成。",
+  "type": "object",
+  "required": ["id", "name", "nameZh", "version", "publisher", "kind", "layer", "description"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "插件唯一标识，必须与所在目录名一致"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "nameZh": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "publisher": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["plugin", "pack"] },
+    "layer": {
+      "enum": ["core", "language", "build-framework", "build-system", "debugger", "tooling", "pack"]
+    },
+    "description": { "type": "string", "minLength": 8 },
+    "platforms": {
+      "type": "array",
+      "items": { "enum": ["linux", "darwin", "win32"] },
+      "uniqueItems": true
+    },
+    "engines": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "dependencies": {
+      "type": "object",
+      "description": "硬依赖：缺失则无法安装。值为版本约束（* / x.y.z / ^x.y.z / ~x.y.z / >=x.y.z）",
+      "additionalProperties": { "type": "string" }
+    },
+    "recommends": {
+      "type": "object",
+      "description": "推荐依赖；autoInstall 为 true 时随本插件一并安装（如 CMake/Meson 连带 Ninja）",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["version"],
+        "additionalProperties": false,
+        "properties": {
+          "version": { "type": "string" },
+          "reason": { "type": "string" },
+          "autoInstall": { "type": "boolean" }
+        }
+      }
+    },
+    "capabilitySets": {
+      "type": "array",
+      "description": "引用的功能集 ID，需在 catalog/features.json 中定义",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "activation": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "激活事件，如 onLanguage:cpp / workspaceContains:CMakeLists.txt / onStartup"
+    },
+    "contributes": {
+      "type": "object",
+      "description": "对宿主的贡献点：languages / buildSystems / debuggers / lsp / commands / settings / scm 等，扩展包禁止声明"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "pack" } }, "required": ["kind"] },
+      "then": {
+        "required": ["dependencies"],
+        "properties": {
+          "layer": { "const": "pack" },
+          "contributes": false,
+          "capabilitySets": false,
+          "activation": { "maxItems": 0 }
+        }
+      }
+    }
+  ]
+}

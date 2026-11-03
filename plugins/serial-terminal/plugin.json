@@ -1,0 +1,14 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "serial-terminal",
+  "name": "Serial Terminal",
+  "nameZh": "串口终端",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "串口连接、收发与日志记录，面向嵌入式场景。",
+  "capabilitySets": [
+    "tool.runtime"
+  ]
+}

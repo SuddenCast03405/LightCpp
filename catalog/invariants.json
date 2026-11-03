@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "rules": [
+    {
+      "id": "devcpp-requires-make",
+      "type": "dependency",
+      "plugin": "devcpp",
+      "on": [
+        "make"
+      ],
+      "description": "Dev-C++ Project 额外强依赖 Make & Makefile 插件"
+    },
+    {
+      "id": "cmake-pulls-ninja",
+      "type": "autoInstall",
+      "plugin": "cmake",
+      "target": "ninja",
+      "description": "安装 CMake 时 Ninja 自动连带安装"
+    },
+    {
+      "id": "meson-pulls-ninja",
+      "type": "autoInstall",
+      "plugin": "meson",
+      "target": "ninja",
+      "description": "安装 Meson 时 Ninja 自动连带安装"
+    },
+    {
+      "id": "cpp-pack-members",
+      "type": "packMembers",
+      "pack": "cpp-extension-pack",
+      "members": [
+        "asm",
+        "bazel",
+        "build-core",
+        "clang-core",
+        "cmake",
+        "ccls",
+        "compile-commands",
+        "cpp-base",
+        "custom-command",
+        "make",
+        "meson",
+        "ninja"
+      ],
+      "description": "C/C++ 扩展包成员与规划一致（含 Ninja）"
+    },
+    {
+      "id": "qt-pack-members",
+      "type": "packMembers",
+      "pack": "qt-pack",
+      "members": [
+        "qt-cmake",
+        "qt-cpp-core",
+        "qt-qml",
+        "qt-ui"
+      ],
+      "description": "Qt C++ 扩展包成员与规划一致"
+    },
+    {
+      "id": "build-system-depends-core",
+      "type": "layerDependency",
+      "layer": "build-system",
+      "on": [
+        "build-core",
+        "cpp-base"
+      ],
+      "description": "所有构建系统插件强依赖 C/C++ 基础插件并由构建核心框架提供调度"
+    },
+    {
+      "id": "debugger-depends-base",
+      "type": "layerDependency",
+      "layer": "debugger",
+      "on": [
+        "cpp-base"
+      ],
+      "description": "所有调试器插件强依赖 C/C++ 基础插件"
+    },
+    {
+      "id": "lsp-engine-exclusive",
+      "type": "exclusiveGroup",
+      "group": "cpp-lsp",
+      "members": [
+        "clang-core",
+        "ccls"
+      ],
+      "description": "clangd 与 ccls 共存，但在同一项目中互斥启用"
+    }
+  ]
+}

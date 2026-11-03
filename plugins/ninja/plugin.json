@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "ninja",
+  "name": "Ninja",
+  "nameZh": "Ninja",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "直接读取并构建已有的 build.ninja。CMake / Meson 安装时自动连带安装，扩展包安装时一并安装，并作为推荐后端被联动调用。",
+  "dependencies": {
+    "cpp-base": "^0.1.0",
+    "build-core": "^0.1.0"
+  },
+  "capabilitySets": [
+    "lang.buildfile"
+  ],
+  "contributes": {
+    "buildSystems": [
+      "ninja"
+    ],
+    "fileAssociations": [
+      {
+        "pattern": "build.ninja",
+        "language": "ninja"
+      },
+      {
+        "pattern": "*.ninja",
+        "language": "ninja"
+      }
+    ]
+  },
+  "tags": [
+    "backend"
+  ]
+}

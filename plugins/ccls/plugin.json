@@ -1,0 +1,45 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "ccls",
+  "name": "ccls",
+  "nameZh": "ccls",
+  "version": "0.1.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "language",
+  "description": "另一套 C/C++ LSP 实现，与 clangd 共存，用户可在设置中选择其一作为当前项目的 LSP 引擎。",
+  "dependencies": {
+    "cpp-base": "^0.1.0"
+  },
+  "capabilitySets": [
+    "intel.core",
+    "intel.nav"
+  ],
+  "activation": [
+    "onLanguage:cpp",
+    "workspaceContains:.ccls"
+  ],
+  "contributes": {
+    "lsp": {
+      "engine": "ccls",
+      "executable": "ccls",
+      "exclusiveGroup": "cpp-lsp",
+      "languageScope": [
+        "c",
+        "cpp"
+      ]
+    },
+    "settings": [
+      {
+        "key": "lightcpp.lsp.engine",
+        "type": "string",
+        "default": "clangd",
+        "enum": [
+          "clangd",
+          "ccls"
+        ],
+        "description": "当前项目使用的 C/C++ LSP 引擎"
+      }
+    ]
+  }
+}
