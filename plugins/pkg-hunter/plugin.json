@@ -1,0 +1,24 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "pkg-hunter",
+  "name": "Hunter Integration",
+  "nameZh": "Hunter 集成",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "基于 CMake 的 Hunter 包管理集成。",
+  "dependencies": {
+    "build-core": "^0.2.0",
+    "cmake": "^0.2.0"
+  },
+  "capabilitySets": [
+    "tool.pkg"
+  ],
+  "contributes": {
+    "packageManager": {
+      "id": "hunter",
+      "manifest": "cmake/HunterGate.cmake"
+    }
+  }
+}

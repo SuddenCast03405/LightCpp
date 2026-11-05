@@ -1,0 +1,23 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "ctest",
+  "name": "CTest",
+  "nameZh": "CTest",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "CTest 适配器：驱动 ctest -N 发现用例并解析测试结果。",
+  "dependencies": {
+    "test-core": "^0.2.0"
+  },
+  "capabilitySets": [
+    "test.framework"
+  ],
+  "contributes": {
+    "testFramework": {
+      "id": "ctest",
+      "label": "CTest"
+    }
+  }
+}

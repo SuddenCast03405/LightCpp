@@ -1,0 +1,20 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "gnu-pack",
+  "name": "GNU GCC Extension Pack",
+  "nameZh": "GNU 拓展包",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "pack",
+  "layer": "pack",
+  "description": "GNU 工具链组合：C/C++ Core + Make + GDB。",
+  "dependencies": {
+    "cpp-base": "^0.2.0",
+    "make": "^0.2.0",
+    "gdb": "^0.2.0"
+  },
+  "activation": [],
+  "tags": [
+    "recommended"
+  ]
+}

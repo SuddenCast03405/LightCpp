@@ -1,0 +1,173 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "msys2-ucrt64",
+      "displayName": "MSYS2 UCRT64 (GCC)",
+      "description": "Configure with MSYS2 UCRT64 discovered from PATH and MINGW_PREFIX; no machine-specific drive.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/msys2-ucrt64",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_MAKE_PROGRAM": "ninja",
+        "CMAKE_PREFIX_PATH": "$env{MINGW_PREFIX}",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "msys2-ucrt64-coverage",
+      "displayName": "MSYS2 UCRT64 + coverage",
+      "inherits": "msys2-ucrt64",
+      "binaryDir": "${sourceDir}/build/msys2-ucrt64-coverage",
+      "cacheVariables": {
+        "LIGHTCPP_ENABLE_COVERAGE": "ON"
+      }
+    },
+    {
+      "name": "ci",
+      "displayName": "CI (MSYS2 UCRT64 shell)",
+      "description": "Same toolchain as msys2-ucrt64, but with no hard-coded install path: the compiler, ninja and Qt come from PATH, and CMAKE_PREFIX_PATH is passed by the caller (the CI workflow passes the MSYS2 UCRT64 prefix).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "LIGHTCPP_DEPLOY_QT": "OFF"
+      }
+    },
+    {
+      "name": "native",
+      "displayName": "Native host toolchain",
+      "description": "Use the host C/C++ compiler and Qt 6 installation on Linux or macOS.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/native",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "LIGHTCPP_DEPLOY_QT": "OFF"
+      }
+    },
+    {
+      "name": "msvc2022",
+      "displayName": "Visual Studio 2022 (MSVC x64)",
+      "description": "Native MSVC x64 build. Supply CMAKE_PREFIX_PATH for the Qt MSVC kit and LLVM_ROOT for clang-c/Index.h.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/msvc2022",
+      "cacheVariables": {
+        "LIGHTCPP_DEPLOY_QT": "OFF"
+      }
+    },
+    {
+      "name": "msvc2026",
+      "displayName": "Visual Studio 2026 (MSVC x64)",
+      "description": "Native MSVC x64 build with Visual Studio 2026. Supply CMAKE_PREFIX_PATH for the Qt MSVC kit and LLVM_ROOT for clang-c/Index.h.",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/msvc2026",
+      "cacheVariables": {
+        "LIGHTCPP_DEPLOY_QT": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "msys2-ucrt64",
+      "configurePreset": "msys2-ucrt64"
+    },
+    {
+      "name": "msys2-ucrt64-coverage",
+      "configurePreset": "msys2-ucrt64-coverage"
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci"
+    },
+    {
+      "name": "native",
+      "configurePreset": "native"
+    },
+    {
+      "name": "msvc2022",
+      "configurePreset": "msvc2022",
+      "configuration": "Debug"
+    },
+    {
+      "name": "msvc2026",
+      "configurePreset": "msvc2026",
+      "configuration": "Debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "msys2-ucrt64",
+      "configurePreset": "msys2-ucrt64",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "msys2-ucrt64-coverage",
+      "configurePreset": "msys2-ucrt64-coverage",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error",
+        "timeout": 180
+      }
+    },
+    {
+      "name": "native",
+      "configurePreset": "native",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error",
+        "timeout": 180
+      }
+    },
+    {
+      "name": "msvc2022",
+      "configurePreset": "msvc2022",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error",
+        "timeout": 180
+      }
+    },
+    {
+      "name": "msvc2026",
+      "configurePreset": "msvc2026",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 4,
+        "noTestsAction": "error",
+        "timeout": 180
+      }
+    }
+  ]
+}

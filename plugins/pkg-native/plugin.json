@@ -1,0 +1,36 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "pkg-native",
+  "name": "System Package Managers",
+  "nameZh": "系统包管理器",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "对接 apt / brew / winget 的系统级依赖安装与检测。",
+  "dependencies": {
+    "build-core": "^0.2.0"
+  },
+  "capabilitySets": [
+    "tool.pkg"
+  ],
+  "contributes": {
+    "packageManager": {
+      "id": "native",
+      "backends": [
+        {
+          "os": "linux",
+          "tool": "apt"
+        },
+        {
+          "os": "darwin",
+          "tool": "brew"
+        },
+        {
+          "os": "win32",
+          "tool": "winget"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,325 @@
+name: CI
+
+# Validate native MSVC, MSYS2 UCRT64, Linux and macOS builds. The two Windows
+# jobs deliberately use different compiler families: Visual Studio/MSVC and
+# MinGW GCC. POSIX jobs exercise the separate process backend and iconv.
+#
+# Scope: master only. main is a stub branch (README + LICENSE) and is not
+# built here.
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '**/*.md'
+      - '.chatgpt/**'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+  pull_request:
+    branches: [master]
+    paths-ignore:
+      - '**/*.md'
+      - '.chatgpt/**'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+  workflow_dispatch:
+    inputs:
+      full_validation:
+        description: 'Run the complete MSVC 2022/2026, Linux and macOS matrix'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: MSYS2 UCRT64 / Debug / ctest
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+
+      # update: true refreshes the package database first. Without it a stale
+      # mirror snapshot can make `pacman -S` resolve to a version that is no
+      # longer in the pool, which fails before a single line of C++ is built.
+      - name: Install toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-clang
+
+      - name: Report toolchain versions
+        run: |
+          g++ --version | head -n 1
+          cmake --version | head -n 1
+          ninja --version
+          qmake6 -query QT_VERSION || qmake -query QT_VERSION || true
+
+      # Lua 5.4.7 and LuaBridge3 are not committed (third_party/ is ignored by
+      # .gitignore); _fetch_deps.cmake is what vendors them. Configure fails
+      # with "third_party/lua-5.4.7/src/lapi.c not found" if this is skipped.
+      - name: Vendor third-party sources (Lua, LuaBridge3)
+        run: cmake -P _fetch_deps.cmake
+
+      # cygpath -m turns the MSYS2 prefix (/ucrt64) into the Windows form
+      # (C:/msys64/ucrt64) that the native cmake.exe understands. Passing it
+      # as an argument, not from the preset, keeps the preset free of
+      # machine-specific paths.
+      - name: Configure
+        run: cmake --preset ci -DCMAKE_PREFIX_PATH="$(cygpath -m "$MINGW_PREFIX")"
+
+      - name: Build
+        run: cmake --build --preset ci --parallel "$(nproc)"
+
+      # --no-tests=error (set in the preset) turns "the filter/preset matched
+      # nothing" into a failure instead of a green run over zero tests.
+      - name: CTest
+        run: ctest --preset ci
+
+      # 内核（core/）已经在顶层 CMakeLists.txt 里构建，CTest 的 cli_validate /
+      # cli_docs_check 两个用例会跑它们；这里再把严格模式的结果显式打印一遍，
+      # 失败时日志里能直接看到是哪个清单写错了，而不用翻 CTest 输出。
+      - name: 内核清单校验（严格模式）
+        run: |
+          build/ci/bin/lightcpp-pm validate --strict
+          build/ci/bin/lightcpp-pm docs --check
+
+      - name: Upload CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-windows
+          path: |
+            build/ci/Testing/Temporary/LastTest.log
+            build/ci/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  msvc-2022:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_validation }}
+    name: MSVC 2022 / Qt 6 / Debug / ctest
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+
+      - name: Install LLVM development headers
+        shell: pwsh
+        run: choco install llvm --yes --no-progress
+
+      - name: Install Qt 6 for MSVC 2022
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+
+      - name: Vendor third-party sources
+        shell: pwsh
+        run: cmake -P _fetch_deps.cmake
+
+      - name: Configure with Visual Studio 2022
+        shell: pwsh
+        run: >-
+          cmake --preset msvc2022
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+          -DLLVM_ROOT="C:/Program Files/LLVM"
+
+      - name: Build with MSVC
+        shell: pwsh
+        run: cmake --build --preset msvc2022 --parallel 2
+
+      - name: CTest with MSVC
+        shell: pwsh
+        run: ctest --preset msvc2022
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Upload MSVC CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-msvc
+          path: |
+            build/msvc2022/Testing/Temporary/LastTest.log
+            build/msvc2022/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  msvc-2026:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_validation }}
+    name: MSVC 2026 / Qt 6 / Debug / ctest
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+
+      - name: Install LLVM development headers
+        shell: pwsh
+        run: choco install llvm --yes --no-progress
+
+      - name: Install Qt 6 MSVC x64 kit
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+
+      - name: Vendor third-party sources
+        shell: pwsh
+        run: cmake -P _fetch_deps.cmake
+
+      - name: Configure with Visual Studio 2026
+        shell: pwsh
+        run: >-
+          cmake --preset msvc2026
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+          -DLLVM_ROOT="C:/Program Files/LLVM"
+
+      - name: Build with MSVC 2026
+        shell: pwsh
+        run: cmake --build --preset msvc2026 --parallel 2
+
+      - name: CTest with MSVC 2026
+        shell: pwsh
+        run: ctest --preset msvc2026
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Upload MSVC 2026 application artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LightCpp-MSVC2026-${{ github.sha }}
+          path: build/msvc2026/dist/**
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload MSVC 2026 CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-msvc2026
+          path: |
+            build/msvc2026/Testing/Temporary/LastTest.log
+            build/msvc2026/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  linux-native:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_validation }}
+    name: Linux / Qt 6 / native / ctest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+
+      - name: Install LLVM headers and build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build llvm-dev libclang-dev
+
+      - name: Vendor third-party sources
+        run: cmake -P _fetch_deps.cmake
+
+      - name: Configure
+        run: cmake --preset native
+
+      - name: Build
+        run: cmake --build --preset native --parallel 2
+
+      - name: CTest
+        run: ctest --preset native
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: C++ 与 Python 输出对拍
+        run: scripts/cli_parity.sh build/native/bin/lightcpp-pm
+
+      - name: Upload CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-linux
+          path: |
+            build/native/Testing/Temporary/LastTest.log
+            build/native/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  macos-native:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_validation }}
+    name: macOS / Qt 6 / native / ctest
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+
+      - name: Install Qt, LLVM and build tools
+        run: |
+          brew install qt@6 llvm cmake ninja
+          echo "$(brew --prefix qt@6)" >> "$GITHUB_PATH"
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Vendor third-party sources
+        run: cmake -P _fetch_deps.cmake
+
+      - name: Configure
+        run: |
+          LLVM_ROOT="$(brew --prefix llvm)"
+          QT_PREFIX="$(brew --prefix qt@6)"
+          cmake --preset native -DLLVM_ROOT="$LLVM_ROOT" \
+            -DCMAKE_PREFIX_PATH="$QT_PREFIX;$LLVM_ROOT"
+
+      - name: Build
+        run: cmake --build --preset native --parallel 2
+
+      - name: CTest
+        run: ctest --preset native
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: C++ 与 Python 输出对拍
+        run: scripts/cli_parity.sh build/native/bin/lightcpp-pm
+
+      - name: Upload CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-macos
+          path: |
+            build/native/Testing/Temporary/LastTest.log
+            build/native/Testing/Temporary/LastTestsFailed.log
+          if-no-files-found: ignore
+          retention-days: 14

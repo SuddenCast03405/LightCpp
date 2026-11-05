@@ -1,0 +1,6 @@
+{
+    "name": "RustProject",
+    "version": "1.0.0",
+    "publisher": "LightCpp",
+    "description": "Rust/Cargo support: reads Cargo.toml, builds the package or workspace with cargo and runs the produced binary."
+}

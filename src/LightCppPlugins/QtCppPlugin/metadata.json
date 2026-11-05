@@ -1,0 +1,6 @@
+{
+    "name": "QtCppProject",
+    "version": "1.0.0",
+    "publisher": "LightCpp",
+    "description": "Qt for C++ support: reads qmake .pro projects, generates a per-configuration shadow-build Makefile with qmake and builds it with make/nmake."
+}

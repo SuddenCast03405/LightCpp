@@ -1,0 +1,7 @@
+# Delivery patches under delivery/*/patches/ are applied with `git am`, which is
+# byte-exact about line endings. core.autocrlf=true would rewrite them to CRLF
+# on checkout and the patch would then fail to apply, so keep them untouched.
+*.patch -text
+
+# Same reasoning for the shell/CI descriptors: they are consumed by Linux runners.
+*.sh text eol=lf

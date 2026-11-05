@@ -1,69 +1,106 @@
-# Prerequisites
-*.d
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+build/
+/Build/
+/build-*/
+build/*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+Testing/
+/Testing/
+.cache/
+/.cache/
 
-# Compiled Object files
+# CMake re-generates these; committing them only creates merge noise.
+Makefile
+compile_commands.json
+
+# ---------------------------------------------------------------------------
+# Third-party sources
+# ---------------------------------------------------------------------------
+# GoogleTest is vendored *and committed* so configure works offline.
+# Lua and LuaBridge3 are fetched by _fetch_deps.cmake and must not be committed
+# (a 3 MiB source dump in every diff buries the review).
+third_party/*
+!third_party/googletest-1.14.0/
+!third_party/googletest-1.14.0/**
+
+# ---------------------------------------------------------------------------
+# Local tool artifacts
+# ---------------------------------------------------------------------------
+*.user
+.vs/
+.vscode/
+.idea/
+.workbuddy/
+
+# Local temp files used for build/test output capture
+_*.txt
+_*.py
+_*.cpp
+_*.exe
+_check.txt
+
+# Local scratch / runtime dirs
+_scratch*/
+_smk*/
+_sdlg*/
+_enc_smoke_dir/
+config/
+
+# Coverage artifacts
+coverage.info
+coverage_html/
+
+# Python (tools/lightcpp_pm.py, tests/test_pm.py)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# ---------------------------------------------------------------------------
+# Compiled artefacts
+# ---------------------------------------------------------------------------
+*.d
 *.slo
 *.lo
 *.o
 *.obj
-
-# Precompiled Headers
 *.gch
 *.pch
-
-# Linker files
 *.ilk
-
-# Debugger Files
 *.pdb
-
-# Compiled Dynamic libraries
+*.dwo
 *.so
+*.so.*
 *.dylib
 *.dll
-*.so.*
-
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
 *.a
+*.la
+*.lai
 *.lib
-
-# Executables
 *.exe
 *.out
 *.app
+*.mod
+*.smod
 
-# Build directories
-build/
-Build/
-build-*/
-
-# CMake generated files
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-install_manifest.txt
-compile_commands.json
-
-# Temporary files
+# ---------------------------------------------------------------------------
+# Temporary / OS files
+# ---------------------------------------------------------------------------
 *.tmp
 *.log
 *.bak
 *.swp
+.tmp.txt
+Thumbs.db
+.DS_Store
 
 # vcpkg
 vcpkg_installed/
 
-# debug information files
-*.dwo
-
-# test output & cache
-Testing/
-.cache/
+# Local session notes
+.chatgpt/

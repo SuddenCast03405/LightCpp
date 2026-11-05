@@ -1,0 +1,6 @@
+{
+    "name": "GoProject",
+    "version": "1.0.0",
+    "publisher": "LightCpp",
+    "description": "Go module support: reads go.mod, builds the main package with the go tool and runs the resulting binary."
+}

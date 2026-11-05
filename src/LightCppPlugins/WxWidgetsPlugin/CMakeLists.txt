@@ -1,0 +1,1 @@
+lightcpp_add_project_plugin(WxWidgetsPlugin WxWidgetsBackend.cpp)

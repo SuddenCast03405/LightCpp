@@ -1,0 +1,169 @@
+cmake_minimum_required(VERSION 3.24)
+
+project(LightCpp
+    VERSION 0.2.0
+    DESCRIPTION "LightC++ - Lightweight C/C++ IDE"
+    LANGUAGES C CXX)
+
+# ---------------------------------------------------------------------------
+# Global compile settings (C++20 baseline, strict warnings)
+# ---------------------------------------------------------------------------
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# ---------------------------------------------------------------------------
+# Product version, single source of truth
+# ---------------------------------------------------------------------------
+# The desktop IDE and the plugin-ecosystem kernel (core/) ship as one product
+# version. C++ code reads it through LIGHTCPP_VERSION_STRING instead of
+# hard-coding the number, so the About box, the CLI --version output and the
+# build tree can never drift apart again.
+add_compile_definitions(LIGHTCPP_VERSION_STRING="${PROJECT_VERSION}")
+
+# Warnings are exposed as a linkable INTERFACE target instead of global
+# compile options, so third-party sources fetched by CPM are not affected.
+add_library(LightCppWarnings INTERFACE)
+add_library(LightCpp::Warnings ALIAS LightCppWarnings)
+
+if(WIN32)
+    # windows.h defines min/max macros unless explicitly disabled. Those
+    # macros break std::numeric_limits<T>::max(), Qt's qMin/qMax and other
+    # standard-library calls throughout the project. Make the Windows SDK
+    # contract consistent for every first-party target, regardless of whether
+    # the compiler is MSVC or MinGW.
+    target_compile_definitions(LightCppWarnings INTERFACE NOMINMAX)
+endif()
+
+if(MSVC)
+    target_compile_options(LightCppWarnings INTERFACE /W4 /WX /permissive- /utf-8)
+else()
+    target_compile_options(LightCppWarnings INTERFACE -Wall -Wextra -Werror)
+endif()
+
+# ---------------------------------------------------------------------------
+# Dependencies (spec 2: Qt 6.5 Widgets is the UI shell; this module only
+# needs QtCore so far, which the MSYS2 toolchain provides)
+# ---------------------------------------------------------------------------
+find_package(Qt6 6.5 COMPONENTS Core Widgets Xml REQUIRED)
+
+# ---------------------------------------------------------------------------
+# CPM.cmake dependency management (spec 4.2: all third-party deps via CPM)
+# ---------------------------------------------------------------------------
+include(cmake/CPM.cmake)
+
+# ---------------------------------------------------------------------------
+# Coverage (spec 4.4: gcov/lcov, optional target LightCppCoverage)
+# ---------------------------------------------------------------------------
+option(LIGHTCPP_ENABLE_COVERAGE "Enable gcov instrumentation for coverage reports" OFF)
+
+# windeployqt after building `lightcpp`. On by default so a local Windows build
+# still produces a runnable dist/; CI turns it off (no test needs it, and the
+# step is the one part of the build that depends on a writable Qt install).
+option(LIGHTCPP_DEPLOY_QT "Deploy the Qt runtime next to lightcpp (Windows only)" ON)
+
+if(LIGHTCPP_ENABLE_COVERAGE)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        message(FATAL_ERROR "Coverage requires GCC or Clang (gcov-based).")
+    endif()
+    target_compile_options(LightCppWarnings INTERFACE --coverage -O0 -g)
+    target_link_options(LightCppWarnings INTERFACE --coverage)
+    find_program(LCOV_EXECUTABLE lcov)
+    find_program(GENHTML_EXECUTABLE genhtml)
+    if(LCOV_EXECUTABLE AND GENHTML_EXECUTABLE)
+        add_custom_target(LightCppCoverage
+            COMMAND ${LCOV_EXECUTABLE} --directory . --capture --output-file coverage.info
+            COMMAND ${LCOV_EXECUTABLE} --remove coverage.info '/usr/*' '*/_deps/*' --output-file coverage.info
+            COMMAND ${GENHTML_EXECUTABLE} coverage.info --output-directory coverage_html
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            COMMENT "Generating lcov coverage report in coverage_html/"
+            VERBATIM)
+    else()
+        message(STATUS "lcov/genhtml not found: LightCppCoverage target not registered.")
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# Testing (GTest via CPM, integrated with CTest)
+# ---------------------------------------------------------------------------
+enable_testing()
+include(CTest)
+
+if(BUILD_TESTING)
+    # googletest is managed by CPM. The source tree is vendored under
+    # third_party/ so the build is reproducible offline; set
+    # LIGHTCPP_GTEST_SOURCE to override it, or replace SOURCE_DIR with
+    # GITHUB_REPOSITORY/GIT_TAG to let CPM fetch it at configure time.
+    set(LIGHTCPP_GTEST_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest-1.14.0"
+        CACHE PATH "GoogleTest source tree used by CPM")
+
+    CPMAddPackage(
+        NAME googletest
+        SOURCE_DIR ${LIGHTCPP_GTEST_SOURCE}
+        VERSION 1.14.0
+        FORCE TRUE
+        OPTIONS
+            "INSTALL_GTEST OFF"
+            "BUILD_GMOCK ON"
+            "gtest_force_shared_crt ON"
+    )
+
+    if(NOT TARGET GTest::gtest_main)
+        message(FATAL_ERROR "GTest not available from ${LIGHTCPP_GTEST_SOURCE}")
+    endif()
+endif()
+
+# Select the process-tree backend once at the top level so the app
+# and its logic tests compile the exact same platform implementation.
+if(WIN32)
+    set(LIGHTCPP_PROCESS_TREE_PLATFORM_SOURCE
+        "${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessTreeWindows.cpp")
+elseif(APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(LIGHTCPP_PROCESS_TREE_PLATFORM_SOURCE
+        "${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/ProcessTreePosix.cpp")
+else()
+    message(FATAL_ERROR
+        "LightCpp supports Windows, Linux and macOS process backends; "
+        "unsupported platform: ${CMAKE_SYSTEM_NAME}")
+endif()
+
+# ---------------------------------------------------------------------------
+# Modules
+# ---------------------------------------------------------------------------
+add_subdirectory(src/LightCppCore)
+add_subdirectory(src/LightCppText)
+add_subdirectory(src/LightCppProject)
+add_subdirectory(src/LightCppTesting)
+add_subdirectory(src/LightCppWorkbench)
+add_subdirectory(src/LightCppSettings)
+add_subdirectory(src/LightCppPlugin)
+add_subdirectory(src/LightCppLua)
+add_subdirectory(src/LightCppApp)
+add_subdirectory(apps/LightCppEncodingCli)
+add_subdirectory(src/LightCppPlugins)
+
+# ---------------------------------------------------------------------------
+# Plugin-ecosystem kernel (core/)
+# ---------------------------------------------------------------------------
+# core/ describes itself in lightcpp.1.md terms (manifests, catalog, validator,
+# host) and is also usable on its own: `cmake -S core -B core/build`. Building
+# it here as well is what makes one configure+build+ctest cover the whole
+# product; without it the kernel was only reachable through a second, separate
+# CI workflow and `ctest` at the top level silently skipped its tests.
+option(LIGHTCPP_BUILD_KERNEL
+    "Build the plugin-ecosystem kernel (core/) and its tests in this tree" ON)
+if(LIGHTCPP_BUILD_KERNEL)
+    add_subdirectory(core)
+endif()
+
+if(BUILD_TESTING)
+    add_subdirectory(tests/LightCppCoreTests)
+    add_subdirectory(tests/LightCppTextTests)
+    add_subdirectory(tests/LightCppProjectTests)
+    add_subdirectory(tests/LightCppTestingTests)
+    add_subdirectory(tests/LightCppWorkbenchTests)
+    add_subdirectory(tests/LightCppSettingsTests)
+    add_subdirectory(tests/LightCppPluginTests)
+    add_subdirectory(tests/LightCppLuaTests)
+    add_subdirectory(tests/LightCppAppTests)
+endif()

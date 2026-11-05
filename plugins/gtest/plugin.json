@@ -1,0 +1,23 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "gtest",
+  "name": "GoogleTest",
+  "nameZh": "GoogleTest",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "GoogleTest 适配器：发现 TEST/TEST_F 用例并解析 gtest 输出。",
+  "dependencies": {
+    "test-core": "^0.2.0"
+  },
+  "capabilitySets": [
+    "test.framework"
+  ],
+  "contributes": {
+    "testFramework": {
+      "id": "gtest",
+      "label": "GoogleTest"
+    }
+  }
+}

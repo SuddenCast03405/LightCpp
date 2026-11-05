@@ -1,0 +1,14 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "doc-preview",
+  "name": "Document Preview",
+  "nameZh": "文档预览",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "Markdown / reStructuredText 实时预览与内置浏览器。",
+  "capabilitySets": [
+    "doc.preview"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "llvm-pack",
+  "name": "LLVM Extension Pack",
+  "nameZh": "LLVM 拓展包",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "pack",
+  "layer": "pack",
+  "description": "LLVM 工具链组合：C/C++ Base + Clang Core + Make + LLDB。",
+  "dependencies": {
+    "cpp-base": "^0.2.0",
+    "clang-core": "^0.2.0",
+    "make": "^0.2.0",
+    "lldb": "^0.2.0"
+  },
+  "activation": [],
+  "tags": [
+    "recommended"
+  ]
+}

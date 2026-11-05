@@ -1,0 +1,19 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "qt-cmake",
+  "name": "Qt CMake",
+  "nameZh": "Qt CMake",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "Qt 6 的 CMake 集成（qt_add_executable / qt_add_library 识别）。",
+  "dependencies": {
+    "cpp-base": "^0.2.0",
+    "build-core": "^0.2.0",
+    "cmake": "^0.2.0"
+  },
+  "capabilitySets": [
+    "qt.cmake"
+  ]
+}

@@ -1,0 +1,1 @@
+lightcpp_add_project_plugin(QtCppPlugin QtCppBackend.cpp)

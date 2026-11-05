@@ -1,0 +1,21 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "msvc-pack",
+  "name": "Microsoft Windows Extension Pack",
+  "nameZh": "微软 Windows 系统开发拓展包",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "pack",
+  "layer": "pack",
+  "description": "Windows 原生开发组合：C/C++ Base + Visual Studio Project + CDB/WinDbg + Visual Studio Debugger。",
+  "dependencies": {
+    "cpp-base": "^0.2.0",
+    "vs-project": "^0.2.0",
+    "cdb": "^0.2.0",
+    "vs-debugger": "^0.2.0"
+  },
+  "activation": [],
+  "tags": [
+    "recommended"
+  ]
+}

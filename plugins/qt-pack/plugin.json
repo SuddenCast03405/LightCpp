@@ -1,0 +1,21 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "qt-pack",
+  "name": "Qt C++ Extension Pack",
+  "nameZh": "Qt C++ 扩展包",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "pack",
+  "layer": "pack",
+  "description": "Qt 生态组合，需用户按需手动安装（不包含在 C/C++ 扩展包内）。",
+  "dependencies": {
+    "qt-cpp-core": "^0.2.0",
+    "qt-cmake": "^0.2.0",
+    "qt-qml": "^0.2.0",
+    "qt-ui": "^0.2.0"
+  },
+  "activation": [],
+  "tags": [
+    "ecosystem"
+  ]
+}

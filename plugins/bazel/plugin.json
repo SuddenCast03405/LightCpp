@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "bazel",
+  "name": "Bazel",
+  "nameZh": "Bazel",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "解析 BUILD / WORKSPACE 文件并调用 Bazel 构建。",
+  "dependencies": {
+    "cpp-base": "^0.2.0",
+    "build-core": "^0.2.0"
+  },
+  "capabilitySets": [
+    "lang.buildfile"
+  ],
+  "contributes": {
+    "buildSystems": [
+      "bazel"
+    ],
+    "fileAssociations": [
+      {
+        "pattern": "BUILD",
+        "language": "starlark"
+      },
+      {
+        "pattern": "BUILD.bazel",
+        "language": "starlark"
+      },
+      {
+        "pattern": "WORKSPACE",
+        "language": "starlark"
+      },
+      {
+        "pattern": "*.bzl",
+        "language": "starlark"
+      }
+    ]
+  }
+}

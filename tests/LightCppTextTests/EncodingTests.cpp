@@ -1,0 +1,817 @@
+// LightCppText tests - encoding detection & conversion.
+
+#include "LightCpp/Text/Converter.hpp"
+#include "LightCpp/Text/Encoding.hpp"
+
+#include <gtest/gtest.h>
+
+#include <QByteArray>
+#include <QString>
+#include <QStringEncoder>
+
+#ifdef _WIN32
+#include <windows.h>
+
+namespace {
+
+/// Fixture encoder: QString -> bytes via WideCharToMultiByte.
+QByteArray winEncode(const QString& text, UINT codePage)
+{
+    const int len = ::WideCharToMultiByte(codePage, 0,
+                                          reinterpret_cast<const wchar_t*>(text.utf16()),
+                                          text.size(), nullptr, 0, nullptr, nullptr);
+    QByteArray bytes(len, Qt::Uninitialized);
+    ::WideCharToMultiByte(codePage, 0,
+                          reinterpret_cast<const wchar_t*>(text.utf16()),
+                          text.size(), bytes.data(), len, nullptr, nullptr);
+    return bytes;
+}
+
+}  // namespace
+#endif  // _WIN32
+
+namespace {
+
+using LightCpp::Text::TextEncoding;
+
+QString utf8(const QByteArray& bytes)
+{
+    return QString::fromUtf8(bytes);
+}
+
+}  // namespace
+
+// --- BOM-based detection (always reliable) ------------------------------------
+
+TEST(EncodingDetect, Utf8WithBom)
+{
+    const QByteArray bytes = "\xEF\xBB\xBF" "你好，世界";
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, TextEncoding::Utf8);
+    EXPECT_TRUE(d.hadBom);
+    EXPECT_TRUE(d.reliable);
+    EXPECT_EQ(d.score, 1000);
+}
+
+TEST(EncodingDetect, Utf16LeWithBom)
+{
+    const QString text = "Hello 你好";
+    const QByteArray payload = QStringEncoder(QStringConverter::Utf16LE)(text);
+    QByteArray bytes = QByteArray::fromHex("FFFE");
+    bytes.append(payload);
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, TextEncoding::Utf16Le);
+    EXPECT_TRUE(d.hadBom);
+}
+
+TEST(EncodingDetect, Utf16BeWithBom)
+{
+    const QString text = "Hello 你好";
+    const QByteArray payload = QStringEncoder(QStringConverter::Utf16BE)(text);
+    QByteArray bytes = QByteArray::fromHex("FEFF");
+    bytes.append(payload);
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, TextEncoding::Utf16Be);
+    EXPECT_TRUE(d.hadBom);
+}
+
+TEST(EncodingDetect, Utf32LeWithBom)
+{
+    const QString text = "Hi 你";
+    const QByteArray payload = QStringEncoder(QStringConverter::Utf32LE)(text);
+    QByteArray bytes = QByteArray::fromHex("FFFE0000");
+    bytes.append(payload);
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, TextEncoding::Utf32Le);
+    EXPECT_TRUE(d.hadBom);
+}
+
+// --- UTF-8 / ASCII without BOM --------------------------------------------------
+
+TEST(EncodingDetect, Utf8NoBom)
+{
+    const auto d = LightCpp::Text::detectEncoding(QByteArray("你好，世界"));
+    EXPECT_EQ(d.encoding, TextEncoding::Utf8);
+    EXPECT_FALSE(d.hadBom);
+    EXPECT_TRUE(d.reliable);
+}
+
+TEST(EncodingDetect, AsciiIsUtf8)
+{
+    const auto d = LightCpp::Text::detectEncoding(QByteArray("int main() { return 0; }"));
+    EXPECT_EQ(d.encoding, TextEncoding::Utf8);
+    EXPECT_FALSE(d.hadBom);
+}
+
+TEST(EncodingDetect, EmptyInput)
+{
+    const auto d = LightCpp::Text::detectEncoding(QByteArray());
+    EXPECT_EQ(d.encoding, TextEncoding::Utf8);
+}
+
+// --- UTF-16 without BOM (alignment heuristic) -----------------------------------
+
+TEST(EncodingDetect, Utf16LeNoBom)
+{
+    const QString text = "ascii only text";
+    const QByteArray bytes = QStringEncoder(QStringConverter::Utf16LE)(text);
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, TextEncoding::Utf16Le);
+}
+
+// --- binary --------------------------------------------------------------------
+
+TEST(EncodingDetect, BinaryWithNuls)
+{
+    const auto d = LightCpp::Text::detectEncoding(
+        QByteArray("\x89PNG\r\n\x1A\n\x00\x00\x00\x0D", 16));
+    EXPECT_EQ(d.encoding, TextEncoding::Binary);
+}
+
+// --- local ANSI code page ------------------------------------------------------
+
+TEST(LocalAnsi, ReturnsValidEncoding)
+{
+    // The local ANSI encoding must be one of the supported legacy codecs
+    // (GBK on zh-CN, Shift-JIS on ja-JP, EUC-KR on ko-KR, Windows-1252
+    // on en-US). Sanity check that it is never Unknown or Binary.
+    const TextEncoding e = LightCpp::Text::localAnsiEncoding();
+    EXPECT_TRUE(e == TextEncoding::Utf8
+                || e == TextEncoding::Latin1
+                || e == TextEncoding::Gbk
+                || e == TextEncoding::Big5
+                || e == TextEncoding::ShiftJis
+                || e == TextEncoding::EucKr
+                || e == TextEncoding::Gb18030
+                || e == TextEncoding::Windows1252);
+}
+
+TEST(LocalAnsi, DisplayNameHasAnsiPrefix)
+{
+    // e.g. "ANSI (GBK)" on zh-CN, "ANSI (Shift-JIS)" on ja-JP.
+    const QString name = LightCpp::Text::localAnsiDisplayName();
+    EXPECT_TRUE(name.startsWith(QStringLiteral("ANSI (")));
+    EXPECT_TRUE(name.endsWith(u')'));
+}
+
+#ifdef _WIN32
+
+// On this build machine (zh-CN), GetACP() returns 936 -> GBK. The test
+// asserts the documented mapping from CP ID to TextEncoding.
+TEST(LocalAnsi, MatchesWindowsAcp)
+{
+    const UINT cp = ::GetACP();
+    const TextEncoding expected = [cp]() -> TextEncoding {
+        switch (cp) {
+        case 936:   return TextEncoding::Gbk;
+        case 950:   return TextEncoding::Big5;
+        case 949:   return TextEncoding::EucKr;
+        case 932:   return TextEncoding::ShiftJis;
+        case 54936: return TextEncoding::Gb18030;
+        default:    return TextEncoding::Windows1252;
+        }
+    }();
+    EXPECT_EQ(LightCpp::Text::localAnsiEncoding(), expected);
+}
+
+// --- legacy codec detection (local ANSI fallback) -----------------------------
+//
+// Per the new detection algorithm, a non-Unicode byte stream is reported as
+// the local ANSI code page. On this zh-CN build machine that is GBK (CP936),
+// so any of the GBK / GB18030 / Big5 / Shift-JIS / EUC-KR / Latin1 byte
+// streams below are detected as GBK. The user can override the choice via
+// the encoding drop-down (which calls readTextFileWithEncoding).
+
+TEST(EncodingDetect, GbkChinese)
+{
+    const QByteArray bytes = winEncode("你好，世界！今天天气不错。", 936);
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, LightCpp::Text::localAnsiEncoding())
+        << "detected: " << LightCpp::Text::toName(d.encoding);
+}
+
+TEST(EncodingDetect, GbkMixedWithAsciiFallsBackToLocalAnsi)
+{
+    const QByteArray bytes =
+        winEncode("// 注释：这是一个测试函数\n"
+                  "int main() { return 0; }\n"
+                  "// 输出结果到控制台\n", 936);
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, LightCpp::Text::localAnsiEncoding())
+        << "detected: " << LightCpp::Text::toName(d.encoding);
+}
+
+TEST(EncodingDetect, NonLocalBig5FallsBackToLocalAnsi)
+{
+    // Big5 byte stream on a zh-CN machine: detected as the local ANSI
+    // (GBK), not Big5. The user must manually pick Big5 from the
+    // drop-down to read it correctly.
+    const QByteArray bytes = winEncode("你好，世界！這是繁體中文測試。", 950);
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, LightCpp::Text::localAnsiEncoding())
+        << "detected: " << LightCpp::Text::toName(d.encoding);
+}
+
+TEST(EncodingDetect, NonLocalShiftJisFallsBackToLocalAnsi)
+{
+    const QByteArray bytes = winEncode("こんにちは世界。これはテストです。", 932);
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, LightCpp::Text::localAnsiEncoding())
+        << "detected: " << LightCpp::Text::toName(d.encoding);
+}
+
+TEST(EncodingDetect, NonLocalEucKrFallsBackToLocalAnsi)
+{
+    const QByteArray bytes = winEncode("안녕하세요 세계. 이것은 테스트입니다.", 51949);
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, LightCpp::Text::localAnsiEncoding())
+        << "detected: " << LightCpp::Text::toName(d.encoding);
+}
+
+TEST(EncodingDetect, NonLocalLatin1FallsBackToLocalAnsi)
+{
+    const QByteArray bytes("caf\xE9 na\xEFve r\xE9sum\xE9");
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, LightCpp::Text::localAnsiEncoding())
+        << "detected: " << LightCpp::Text::toName(d.encoding);
+}
+
+// --- nearly UTF-8: a few broken bytes in an otherwise clean buffer -----------
+//
+// Strict validation is all-or-nothing and the fallback is the local ANSI code
+// page, so one byte cut out of a character used to turn an entire UTF-8 source
+// file into mojibake — every Chinese comment decoded through GBK. These tests
+// pin the two halves of the fix: the buffer still counts as UTF-8, and it is
+// reported as a *guess* (the damaged bytes have no character to write back).
+
+TEST(EncodingDetect, ACharacterCutInHalfKeepsTheFileUtf8)
+{
+    QByteArray bytes("// 中文注释：这是一个 UTF-8 源文件\n");
+    bytes += QByteArray(200, 'x');            // plenty of clean text around it
+    bytes += QByteArray("\xE4\xB8", 2);       // U+4E2D with its last byte lost
+
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, TextEncoding::Utf8)
+        << "detected: " << LightCpp::Text::toName(d.encoding);
+    EXPECT_FALSE(d.reliable) << "damaged bytes cannot be called a verified read";
+    EXPECT_EQ(d.invalidUtf8Sequences, 1u);
+}
+
+TEST(EncodingDetect, AStrayByteFromALegacyToolKeepsTheFileUtf8)
+{
+    QByteArray bytes("中文 ");
+    bytes += QByteArray(200, 'x');
+    bytes += QByteArray("\xFF", 1);  // neither UTF-8 nor anything else's first byte
+
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, TextEncoding::Utf8);
+    EXPECT_FALSE(d.reliable);
+    EXPECT_EQ(d.invalidUtf8Sequences, 1u);
+}
+
+TEST(EncodingDetect, ARealGbkFileIsNotNearlyUtf8)
+{
+    // The other side of the same rule: a buffer with many broken sequences is
+    // not "UTF-8 with a scratch", it is another encoding. Guessing UTF-8 here
+    // would take the text away from the user in the other direction.
+    const QByteArray bytes = winEncode("你好，世界！今天天气不错。", 936);
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, LightCpp::Text::localAnsiEncoding());
+    EXPECT_FALSE(d.reliable);
+    EXPECT_GT(d.invalidUtf8Sequences, 3u) << "the count is what the decision was made on";
+}
+
+TEST(EncodingDetect, ARealGbkFileDamagedInTheMiddleIsNotNearlyUtf8)
+{
+    // The mirror image of ACharacterCutInHalf…: `CF EE C4 BF` is 项目 in GBK, and
+    // it is *also* exactly one broken UTF-8 sequence (`CF` starts a pair, `EE`
+    // is not a continuation) followed by a valid one (`C4 BF` = U+013F). The
+    // count-only rule called this "damaged UTF-8" and the project name came
+    // back as "�Ŀ" — not an improvement over mojibake, and it broke
+    // `DspProject.GbkEncodedDspDecodesItsName` the moment that suite was
+    // actually relinked. A few broken sequences are only evidence when they
+    // sit at the tail, where truncation is the story.
+    QByteArray bytes("Name=\"");
+    bytes += QByteArrayLiteral("\xCF\xEE\xC4\xBF" "1");
+    bytes += QByteArray(" has plenty of plain ascii around it");
+    bytes += QByteArray(300, 'x');  // ratio test must not be the one saying no
+
+    const auto d = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(d.encoding, LightCpp::Text::localAnsiEncoding());
+    EXPECT_EQ(d.invalidUtf8Sequences, 2u)
+        << "two broken sequences, well under the count and ratio limits, and "
+           "not at the tail — only the tail rule can reject this";
+}
+
+TEST(EncodingDetect, PlainUtf8CarriesNoBrokenSequences)
+{
+    const auto d = LightCpp::Text::detectEncoding(QByteArray("中文注释\n"));
+    EXPECT_EQ(d.encoding, TextEncoding::Utf8);
+    EXPECT_TRUE(d.reliable);
+    EXPECT_EQ(d.invalidUtf8Sequences, 0u);
+}
+
+TEST(EncodingNames, AGuessedEncodingSaysSo)
+{
+    // The label is what the log line and the status-bar tooltip show. Without
+    // the marker a guessed read looks exactly like a BOM-verified one.
+    EXPECT_EQ(LightCpp::Text::encodingDisplayName(TextEncoding::Gbk, true),
+              QStringLiteral("GBK"));
+    EXPECT_EQ(LightCpp::Text::encodingDisplayName(TextEncoding::Gbk, false),
+              QStringLiteral("GBK (guessed)"));
+}
+
+TEST(EncodingNames, AVerifiedReadHasNothingToWarnAbout)
+{
+    // Silence is the correct output here: a warning on every open would teach
+    // the user to skip the line that matters.
+    EXPECT_TRUE(LightCpp::Text::encodingGuessWarning(TextEncoding::Utf8, true, 0).isEmpty());
+    EXPECT_TRUE(LightCpp::Text::encodingGuessWarning(TextEncoding::Gbk, true, 0).isEmpty());
+}
+
+TEST(EncodingNames, ADamagedUtf8FileIsWarnedAboutPrecisely)
+{
+    // This one knows the text is right and only a few spots are lost, so it
+    // says that instead of "the encoding may be wrong".
+    const QString warning =
+        LightCpp::Text::encodingGuessWarning(TextEncoding::Utf8, false, 2);
+    EXPECT_TRUE(warning.contains(QStringLiteral("U+FFFD"))) << warning.toStdString();
+    EXPECT_TRUE(warning.contains(QStringLiteral("2"))) << warning.toStdString();
+}
+
+TEST(EncodingNames, AGuessedLegacyFileNamesItsEncodingAndTheWayOut)
+{
+    const QString warning =
+        LightCpp::Text::encodingGuessWarning(TextEncoding::Gbk, false, 40);
+    EXPECT_TRUE(warning.contains(QStringLiteral("guessed"))) << warning.toStdString();
+    EXPECT_TRUE(warning.contains(QStringLiteral("GBK"))) << warning.toStdString();
+    EXPECT_TRUE(warning.contains(QStringLiteral("status bar"))) << warning.toStdString();
+}
+
+// --- explicit conversion (always picks the right codec) -----------------------
+
+TEST(EncodingConvert, LenientUtf8KeepsTheTextAroundTheDamage)
+{
+    // The counterpart of the "nearly UTF-8" detection above: decoding must not
+    // throw away the good text to punish the bad bytes. Exactly one U+FFFD, and
+    // the characters on both sides of it survive untouched.
+    QByteArray bytes("中文 ");
+    bytes += QByteArray(200, 'x');
+    bytes += QByteArray("\xFF", 1);
+    bytes += QByteArray(" 尾巴");
+
+    const auto converted = LightCpp::Text::convertUtf8Lenient(bytes);
+    ASSERT_TRUE(converted.hasValue());
+    const QString text = QString::fromUtf8(converted.value());
+    EXPECT_TRUE(text.startsWith(QStringLiteral("中文 ")));
+    EXPECT_TRUE(text.endsWith(QStringLiteral(" 尾巴")));
+    EXPECT_EQ(text.count(QChar::ReplacementCharacter), 1);
+}
+
+TEST(EncodingConvert, LenientUtf8LeavesCleanTextExactlyAsIs)
+{
+    // Leniency is not a different decoder: with nothing to repair the bytes
+    // must come back identical, so choosing it can never change a good file.
+    const QByteArray bytes("中文注释\r\nint x = 1;\r\n");
+    const auto converted = LightCpp::Text::convertUtf8Lenient(bytes);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(converted.value(), bytes);
+}
+
+TEST(EncodingConvert, GbkToUtf8RoundTrip)
+{
+    const QString text = "你好，世界！";
+    const QByteArray gbk = winEncode(text, 936);
+    const auto converted = LightCpp::Text::convertToUtf8(gbk, TextEncoding::Gbk);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(utf8(converted.value()), text);
+}
+
+TEST(EncodingConvert, Big5ToUtf8RoundTrip)
+{
+    const QString text = "這是繁體中文。";
+    const QByteArray big5 = winEncode(text, 950);
+    const auto converted = LightCpp::Text::convertToUtf8(big5, TextEncoding::Big5);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(utf8(converted.value()), text);
+}
+
+TEST(EncodingConvert, ShiftJisToUtf8RoundTrip)
+{
+    const QString text = "こんにちは世界。";
+    const QByteArray sjis = winEncode(text, 932);
+    const auto converted =
+        LightCpp::Text::convertToUtf8(sjis, TextEncoding::ShiftJis);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(utf8(converted.value()), text);
+}
+
+TEST(EncodingConvert, InvalidGbkRejected)
+{
+    // 0x81 is a GBK lead byte; 0xFF is never a valid GBK trail byte.
+    const auto converted =
+        LightCpp::Text::convertToUtf8(QByteArray("\x81\xFF", 2), TextEncoding::Gbk);
+    EXPECT_FALSE(converted.hasValue());
+}
+
+#endif  // _WIN32
+
+#ifndef _WIN32
+TEST(EncodingDetect, InvalidBytesOnUtf8LocaleUseLosslessFallback)
+{
+    if (LightCpp::Text::localAnsiEncoding() != TextEncoding::Utf8) {
+        GTEST_SKIP() << "test requires a UTF-8 POSIX locale";
+    }
+    const QByteArray bytes = QByteArray::fromHex("FFFFFFFFFF");
+    const auto detection = LightCpp::Text::detectEncoding(bytes);
+    EXPECT_EQ(detection.encoding, TextEncoding::Latin1);
+    EXPECT_FALSE(detection.reliable);
+    const auto decoded =
+        LightCpp::Text::decodeToQString(bytes, detection.encoding);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(*decoded, QString::fromLatin1(bytes));
+}
+
+TEST(EncodingConvert, PosixLegacyCodecsRoundTrip)
+{
+    struct Case {
+        TextEncoding encoding;
+        QByteArray bytes;
+        QString text;
+    };
+    const Case cases[] = {
+        {TextEncoding::Gbk, QByteArray::fromHex("C4E3BAC3A3ACCAC0BDE7A3A1"),
+         QString::fromUtf8("你好，世界！")},
+        {TextEncoding::Gb18030, QByteArray::fromHex("C4E3BAC3"),
+         QString::fromUtf8("你好")},
+        {TextEncoding::Big5, QByteArray::fromHex("B36FAC4FC163C5E9A4A4A4E5A143"),
+         QString::fromUtf8("這是繁體中文。")},
+        {TextEncoding::ShiftJis, QByteArray::fromHex("82B182F182C982BF82CD90A28A458142"),
+         QString::fromUtf8("こんにちは世界。")},
+        {TextEncoding::EucKr, QByteArray::fromHex("BEC8B3E7C7CFBCBCBFE420BCBCB0E82E"),
+         QString::fromUtf8("안녕하세요 세계.")},
+        {TextEncoding::Windows1252, QByteArray::fromHex("636166E9"),
+         QString::fromUtf8("café")},
+    };
+
+    for (const Case& item : cases) {
+        const auto decoded = LightCpp::Text::convertToUtf8(item.bytes,
+                                                            item.encoding);
+        ASSERT_TRUE(decoded.hasValue()) << LightCpp::Text::toName(item.encoding);
+        EXPECT_EQ(utf8(decoded.value()), item.text);
+        const auto encoded = LightCpp::Text::encodeFromQString(item.text,
+                                                                item.encoding);
+        ASSERT_TRUE(encoded.hasValue()) << LightCpp::Text::toName(item.encoding);
+        EXPECT_EQ(encoded.value(), item.bytes);
+    }
+}
+
+TEST(EncodingConvert, PosixLegacyCodecRejectsInvalidOrUnmappableText)
+{
+    EXPECT_FALSE(LightCpp::Text::convertToUtf8(
+        QByteArray::fromHex("81FF"), TextEncoding::Gbk).hasValue());
+    EXPECT_FALSE(LightCpp::Text::encodeFromQString(
+        QString::fromUtf8("😀"), TextEncoding::Gbk).hasValue());
+    EXPECT_FALSE(LightCpp::Text::encodeFromQString(
+        QString::fromUtf8("😀"), TextEncoding::Windows1252).hasValue());
+}
+#endif  // !_WIN32
+
+// --- conversion: Unicode families (cross-platform, Qt built-ins) ---------------
+
+TEST(EncodingConvert, Utf16LeToUtf8)
+{
+    const QString text = "你好，world";
+    const QByteArray bytes = QStringEncoder(QStringConverter::Utf16LE)(text);
+    const auto converted =
+        LightCpp::Text::convertToUtf8(bytes, TextEncoding::Utf16Le);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(utf8(converted.value()), text);
+}
+
+TEST(EncodingConvert, Utf16LeBomStripped)
+{
+    const QString text = "text";
+    QByteArray bytes = QByteArray::fromHex("FFFE");
+    bytes.append(QStringEncoder(QStringConverter::Utf16LE)(text));
+    const auto converted =
+        LightCpp::Text::convertToUtf8(bytes, TextEncoding::Utf16Le);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(utf8(converted.value()), text);  // BOM must not leak into output
+}
+
+TEST(EncodingConvert, Utf8Passthrough)
+{
+    const auto converted = LightCpp::Text::convertToUtf8(
+        QByteArray("hello"), TextEncoding::Utf8);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(converted.value(), QByteArray("hello"));
+}
+
+TEST(EncodingConvert, Latin1ToUtf8)
+{
+    const auto converted = LightCpp::Text::convertToUtf8(
+        QByteArray("caf\xE9"), TextEncoding::Latin1);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(utf8(converted.value()), QString::fromUtf8("caf\xC3\xA9"));
+}
+
+TEST(EncodingConvert, UnpairedSurrogateRejected)
+{
+    // A lone low surrogate in UTF-16LE must fail strict decoding.
+    const auto converted = LightCpp::Text::convertToUtf8(
+        QByteArray::fromHex("00DC"), TextEncoding::Utf16Le);
+    EXPECT_FALSE(converted.hasValue());
+}
+
+TEST(EncodingConvert, WellFormedSurrogatePairIsAccepted)
+{
+    // U+1F600 (😀) is D8 3D DE 00 in UTF-16LE — a high/low surrogate pair.
+    // The strict pass used to reject the whole D800-DFFF range, which made
+    // every UTF-16 file containing an emoji (or 𠮷, or any astral character)
+    // impossible to open.
+    const auto converted = LightCpp::Text::convertToUtf8(
+        QByteArray::fromHex("3DD800DE"), TextEncoding::Utf16Le);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(utf8(converted.value()), QString::fromUtf8("\xF0\x9F\x98\x80"));
+}
+
+TEST(EncodingConvert, HighSurrogateWithoutALowIsStillRejected)
+{
+    // A high surrogate that is not followed by a low one is invalid and must
+    // keep failing.
+    const auto converted = LightCpp::Text::convertToUtf8(
+        QByteArray::fromHex("3DD8"), TextEncoding::Utf16Le);
+    EXPECT_FALSE(converted.hasValue());
+}
+
+TEST(EncodingConvert, Utf32AstralCharacterIsAccepted)
+{
+    // U+1F600 in UTF-32LE; Qt decodes it to a surrogate pair internally, so
+    // the same pairing rule has to let it through.
+    const auto converted = LightCpp::Text::convertToUtf8(
+        QByteArray::fromHex("00F60100"), TextEncoding::Utf32Le);
+    ASSERT_TRUE(converted.hasValue());
+    EXPECT_EQ(utf8(converted.value()), QString::fromUtf8("\xF0\x9F\x98\x80"));
+}
+
+TEST(EncodingConvert, InvalidUtf8Rejected)
+{
+    // 0xFF is never valid UTF-8. A manual "reopen as UTF-8" override on a
+    // misdetected legacy file used to produce U+FFFD soup here, which a
+    // later save then wrote back over the original bytes — the strict
+    // decoder must fail instead.
+    const QByteArray invalid("a\xFF""b");
+    EXPECT_FALSE(LightCpp::Text::decodeToQString(
+        invalid, TextEncoding::Utf8).has_value());
+    const auto converted = LightCpp::Text::convertToUtf8(
+        invalid, TextEncoding::Utf8);
+    ASSERT_FALSE(converted.hasValue());
+    EXPECT_EQ(converted.error(), LightCpp::Text::ConvertError::InvalidInput);
+}
+
+// --- encoding: QString -> target bytes (the save path) --------------------------
+
+TEST(EncodingEncode, Utf8NoBom)
+{
+    const QString text = "你好 hello";
+    const auto encoded =
+        LightCpp::Text::encodeFromQString(text, TextEncoding::Utf8);
+    ASSERT_TRUE(encoded.hasValue());
+    EXPECT_EQ(encoded.value(), text.toUtf8());
+}
+
+TEST(EncodingEncode, Utf8WithBom)
+{
+    const QString text = "你好 hello";
+    const auto encoded =
+        LightCpp::Text::encodeFromQString(text, TextEncoding::Utf8, true);
+    ASSERT_TRUE(encoded.hasValue());
+    // Exactly the three BOM bytes, then the plain UTF-8 payload.
+    EXPECT_EQ(encoded.value(), QByteArray("\xEF\xBB\xBF") + text.toUtf8());
+    bool hadBom = false;
+    const auto decoded =
+        LightCpp::Text::decodeToQString(encoded.value(), TextEncoding::Utf8, true, &hadBom);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_TRUE(hadBom);
+    EXPECT_EQ(*decoded, text);
+}
+
+TEST(EncodingEncode, Utf8BomIsNotDoubledAcrossASaveCycle)
+{
+    const QString text = "中文注释 // comment";
+    const auto first = LightCpp::Text::encodeFromQString(text, TextEncoding::Utf8, true);
+    ASSERT_TRUE(first.hasValue());
+
+    // The save cycle is: strip the BOM on load, put it back on save. That
+    // must be a fixed point — a second BOM would show up as text.
+    bool hadBom = false;
+    const auto loaded =
+        LightCpp::Text::decodeToQString(first.value(), TextEncoding::Utf8, true, &hadBom);
+    ASSERT_TRUE(loaded.has_value());
+    const auto second = LightCpp::Text::encodeFromQString(*loaded, TextEncoding::Utf8, true);
+    ASSERT_TRUE(second.hasValue());
+    EXPECT_EQ(second.value(), first.value());
+    EXPECT_EQ(second.value().count(QByteArray("\xEF\xBB\xBF")), 1);
+}
+
+TEST(EncodingEncode, Utf8AsciiWithBomIsStillAThreeBytePrefix)
+{
+    // Nothing in the payload can be mistaken for the BOM on the way back in.
+    const auto encoded =
+        LightCpp::Text::encodeFromQString("int main() {}\n", TextEncoding::Utf8, true);
+    ASSERT_TRUE(encoded.hasValue());
+    EXPECT_EQ(encoded.value().left(3), QByteArray("\xEF\xBB\xBF"));
+    bool hadBom = false;
+    const auto detected = LightCpp::Text::detectEncoding(encoded.value());
+    EXPECT_EQ(detected.encoding, TextEncoding::Utf8);
+    EXPECT_TRUE(detected.hadBom);
+    const auto decoded =
+        LightCpp::Text::decodeToQString(encoded.value(), TextEncoding::Utf8, true, &hadBom);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(*decoded, QStringLiteral("int main() {}\n"));
+}
+
+TEST(EncodingEncode, Utf16LeWithBom)
+{
+    const QString text = "你好 world";
+    const auto encoded =
+        LightCpp::Text::encodeFromQString(text, TextEncoding::Utf16Le, true);
+    ASSERT_TRUE(encoded.hasValue());
+    // Re-decoding must restore the text and report the BOM.
+    bool hadBom = false;
+    const auto decoded = LightCpp::Text::decodeToQString(
+        encoded.value(), TextEncoding::Utf16Le, true, &hadBom);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_TRUE(hadBom);
+    EXPECT_EQ(*decoded, text);
+}
+
+TEST(EncodingEncode, Utf16BeNoBomByDefault)
+{
+    const auto encoded =
+        LightCpp::Text::encodeFromQString("abc", TextEncoding::Utf16Be);
+    ASSERT_TRUE(encoded.hasValue());
+    EXPECT_EQ(encoded.value().size(), 6);  // 3 chars * 2 bytes, no BOM
+}
+
+// --- the save path: should a BOM be written back? -------------------------------
+
+TEST(BomOnSave, Utf8KeepsWhatTheFileHad)
+{
+    // A BOM-bearing file keeps its BOM (MSVC reads the code page from it);
+    // a BOM-less file must not gain one (that would rewrite line 1 of every
+    // such file in a diff).
+    EXPECT_TRUE(LightCpp::Text::bomOnSave(TextEncoding::Utf8, true));
+    EXPECT_FALSE(LightCpp::Text::bomOnSave(TextEncoding::Utf8, false));
+}
+
+TEST(BomOnSave, Utf16AndUtf32AlwaysNeedOne)
+{
+    for (const TextEncoding encoding : {TextEncoding::Utf16Le, TextEncoding::Utf16Be,
+                                        TextEncoding::Utf32Le, TextEncoding::Utf32Be}) {
+        // Even for a file that had none: the BOM is the only thing that
+        // makes the endianness explicit on the next open.
+        EXPECT_TRUE(LightCpp::Text::bomOnSave(encoding, false));
+        EXPECT_TRUE(LightCpp::Text::bomOnSave(encoding, true));
+    }
+}
+
+TEST(BomOnSave, LegacyCodePagesNeverTakeOne)
+{
+    for (const TextEncoding encoding : {TextEncoding::Gb18030, TextEncoding::Gbk,
+                                        TextEncoding::Big5, TextEncoding::ShiftJis,
+                                        TextEncoding::EucKr, TextEncoding::Windows1252,
+                                        TextEncoding::Latin1}) {
+        EXPECT_FALSE(LightCpp::Text::bomOnSave(encoding, true));
+        EXPECT_FALSE(LightCpp::Text::bomOnSave(encoding, false));
+    }
+}
+
+TEST(BomOnSave, ThePolicyIsWhatTheEncoderActuallyWrites)
+{
+    // End to end: the flag the policy returns must be the flag the encoder
+    // acts on, and detection on the way back in must agree with it. A
+    // policy that says "yes" while the encoder ignores it is exactly the
+    // bug this pair guards against.
+    const QString text = "// 中文";
+    for (const TextEncoding encoding : {TextEncoding::Utf8, TextEncoding::Utf16Le}) {
+        for (const bool sourceHadBom : {false, true}) {
+            // Independent oracle, spelled out from the requirement rather
+            // than read back from bomOnSave(): "every UTF-16 save carries a
+            // BOM; a UTF-8 save carries one exactly when the file had one".
+            // Asking the policy for the expectation would make the test
+            // blind to both halves being wrong in the same direction.
+            const bool want =
+                encoding == TextEncoding::Utf16Le || sourceHadBom;
+            EXPECT_EQ(LightCpp::Text::bomOnSave(encoding, sourceHadBom), want);
+            const auto bytes = LightCpp::Text::encodeFromQString(text, encoding, want);
+            ASSERT_TRUE(bytes.hasValue());
+            EXPECT_EQ(LightCpp::Text::detectEncoding(bytes.value()).hadBom, want);
+            bool hadBom = false;
+            const auto back =
+                LightCpp::Text::decodeToQString(bytes.value(), encoding, true, &hadBom);
+            ASSERT_TRUE(back.has_value());
+            EXPECT_EQ(hadBom, want);
+            EXPECT_EQ(*back, text);
+        }
+    }
+}
+
+TEST(EncodingEncode, Latin1)
+{
+    const auto encoded =
+        LightCpp::Text::encodeFromQString(QString::fromUtf8("caf\xC3\xA9"), TextEncoding::Latin1);
+    ASSERT_TRUE(encoded.hasValue());
+    EXPECT_EQ(encoded.value(), QByteArray("caf\xE9"));
+}
+
+TEST(EncodingEncode, EmptyInput)
+{
+    for (const TextEncoding encoding : {
+             TextEncoding::Utf8, TextEncoding::Utf16Le, TextEncoding::Utf16Be,
+             TextEncoding::Gb18030, TextEncoding::Big5, TextEncoding::Latin1}) {
+        const auto encoded =
+            LightCpp::Text::encodeFromQString(QString(), encoding, true);
+        ASSERT_TRUE(encoded.hasValue());
+        // Encoded empty text is either empty or just the requested BOM.
+        EXPECT_LE(encoded.value().size(), 4);
+    }
+}
+
+TEST(EncodingEncode, UnsupportedEncodingRejected)
+{
+    const auto encoded =
+        LightCpp::Text::encodeFromQString("x", TextEncoding::Binary);
+    EXPECT_FALSE(encoded.hasValue());
+}
+
+#ifdef _WIN32
+
+TEST(EncodingEncode, GbkRoundTripThroughDecode)
+{
+    const QString text = "中文注释 // comment";
+    const auto encoded =
+        LightCpp::Text::encodeFromQString(text, TextEncoding::Gbk);
+    ASSERT_TRUE(encoded.hasValue());
+    const auto decoded =
+        LightCpp::Text::decodeToQString(encoded.value(), TextEncoding::Gbk);
+    ASSERT_TRUE(decoded.has_value());
+    EXPECT_EQ(*decoded, text);
+}
+
+TEST(EncodingEncode, UnmappableCharacterRejected)
+{
+    // U+3053 is hiragana — not representable in Windows-1252. The encoder
+    // must fail instead of silently writing a best-fit '?' byte.
+    const auto encoded = LightCpp::Text::encodeFromQString(
+        QString::fromUtf8("\xE3\x81\x93"), TextEncoding::Windows1252);
+    EXPECT_FALSE(encoded.hasValue());
+}
+
+TEST(EncodingEncode, GbkUnmappableEmojiRejected)
+{
+    // Emoji are outside GBK: saving a GBK tab containing one must fail.
+    const auto encoded = LightCpp::Text::encodeFromQString(
+        QString::fromUtf8("\xF0\x9F\x98\x80"), TextEncoding::Gbk);
+    EXPECT_FALSE(encoded.hasValue());
+}
+
+TEST(EncodingEncode, BestFitCharacterRejected)
+{
+    // U+0410 (Cyrillic capital A) has a best-fit mapping to ASCII 'A' in
+    // Windows-1252. Best-fit substitution does not set usedDefault, so a
+    // plain dwFlags=0 encoder used to report SUCCESS while writing a
+    // different character than the user typed — silent corruption. The
+    // WC_NO_BEST_FIT_CHARS encoder must fail instead.
+    const QChar cyrillicA(0x0410);
+    const auto encoded = LightCpp::Text::encodeFromQString(
+        QString(cyrillicA), TextEncoding::Windows1252);
+    EXPECT_FALSE(encoded.hasValue());
+}
+
+#endif  // _WIN32
+
+
+// --- name mapping ----------------------------------------------------------------
+
+TEST(EncodingNames, RoundTrip)
+{
+    for (const TextEncoding encoding : {
+             TextEncoding::Utf8, TextEncoding::Utf16Le, TextEncoding::Utf16Be,
+             TextEncoding::Utf32Le, TextEncoding::Utf32Be, TextEncoding::Gb18030,
+             TextEncoding::Gbk, TextEncoding::Big5, TextEncoding::ShiftJis,
+             TextEncoding::EucKr, TextEncoding::Windows1252, TextEncoding::Latin1}) {
+        const auto parsed = LightCpp::Text::fromName(LightCpp::Text::toName(encoding));
+        ASSERT_TRUE(parsed.has_value()) << LightCpp::Text::toName(encoding);
+        EXPECT_EQ(*parsed, encoding);
+    }
+}
+
+TEST(EncodingNames, CaseAndSeparatorInsensitive)
+{
+    EXPECT_EQ(LightCpp::Text::fromName("utf8"), TextEncoding::Utf8);
+    EXPECT_EQ(LightCpp::Text::fromName("shift_jis"), TextEncoding::ShiftJis);
+    EXPECT_EQ(LightCpp::Text::fromName("gb2312"), TextEncoding::Gbk);
+    EXPECT_EQ(LightCpp::Text::fromName("no-such-codec"), std::nullopt);
+}

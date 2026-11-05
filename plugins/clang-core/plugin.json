@@ -1,0 +1,93 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "clang-core",
+  "name": "Clang Core",
+  "nameZh": "Clang Core",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "language",
+  "description": "基于 clangd 的 LSP 引擎，内置 clang-format 与 clang-tidy。单文件格式化优先调用 clangd 内置能力，多文件 / 项目级格式化调用独立 clang-format；打开项目时自动发现 .clang-format / .clang-tidy 并提供轻量设置页。",
+  "dependencies": {
+    "cpp-base": "^0.2.0"
+  },
+  "capabilitySets": [
+    "lang.buildfile",
+    "clang.format",
+    "clang.tidy",
+    "clang.discovery",
+    "clang.settings",
+    "intel.core",
+    "intel.nav",
+    "analysis.engine",
+    "analysis.quality"
+  ],
+  "activation": [
+    "onLanguage:cpp",
+    "workspaceContains:.clangd",
+    "workspaceContains:.clang-format"
+  ],
+  "contributes": {
+    "lsp": {
+      "engine": "clangd",
+      "executable": "clangd",
+      "exclusiveGroup": "cpp-lsp",
+      "languageScope": [
+        "c",
+        "cpp"
+      ]
+    },
+    "toolchain": [
+      "clang-format",
+      "clang-tidy",
+      "clang"
+    ],
+    "commands": [
+      {
+        "id": "clangCore.formatDocument",
+        "title": "格式化当前文件（clangd）"
+      },
+      {
+        "id": "clangCore.formatWorkspace",
+        "title": "格式化整个项目（clang-format）"
+      },
+      {
+        "id": "clangCore.tidy.toggle",
+        "title": "切换 clang-tidy 实时检查"
+      }
+    ],
+    "settings": [
+      {
+        "key": "lightcpp.clangCore.tidy.enable",
+        "type": "boolean",
+        "default": false,
+        "description": "开启 clang-tidy 实时检查（大型项目建议关闭）"
+      },
+      {
+        "key": "lightcpp.clangCore.format.style",
+        "type": "string",
+        "default": "LLVM",
+        "enum": [
+          "LLVM",
+          "Google",
+          "Chromium",
+          "Mozilla",
+          "WebKit"
+        ],
+        "description": "无 .clang-format 时使用的回退风格"
+      },
+      {
+        "key": "lightcpp.clangCore.executable.clangd",
+        "type": "string",
+        "default": "",
+        "description": "自定义 clangd 路径（留空则查 PATH）"
+      },
+      {
+        "key": "lightcpp.clangCore.executable.clangTidy",
+        "type": "string",
+        "default": "",
+        "description": "自定义 clang-tidy 路径（留空则查 PATH）"
+      }
+    ]
+  }
+}

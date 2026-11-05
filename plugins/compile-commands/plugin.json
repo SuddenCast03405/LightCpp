@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "compile-commands",
+  "name": "compile_commands.json Import",
+  "nameZh": "compile_commands.json 导入",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "选择一个现成的 compile_commands.json，以「无构建系统」方式打开、配置并索引 C/C++ 项目。",
+  "dependencies": {
+    "cpp-base": "^0.2.0",
+    "build-core": "^0.2.0"
+  },
+  "contributes": {
+    "buildSystems": [
+      "compile-commands"
+    ],
+    "fileAssociations": [
+      {
+        "pattern": "compile_commands.json",
+        "language": "json"
+      }
+    ],
+    "commands": [
+      {
+        "id": "compileCommands.import",
+        "title": "导入 compile_commands.json"
+      }
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "vs-project",
+  "name": "Visual Studio Project",
+  "nameZh": "Visual Studio Project",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "解析 .vcxproj / .sln 并通过 MSBuild 构建，支持 Windows 平台目标。",
+  "dependencies": {
+    "cpp-base": "^0.2.0",
+    "build-core": "^0.2.0"
+  },
+  "contributes": {
+    "buildSystems": [
+      "msbuild"
+    ],
+    "fileAssociations": [
+      {
+        "pattern": "*.sln",
+        "language": "msbuild"
+      },
+      {
+        "pattern": "*.vcxproj",
+        "language": "msbuild"
+      },
+      {
+        "pattern": "*.vcxproj.filters",
+        "language": "msbuild"
+      }
+    ]
+  },
+  "platforms": [
+    "win32"
+  ]
+}

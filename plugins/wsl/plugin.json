@@ -1,0 +1,28 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "wsl",
+  "name": "WSL Integration",
+  "nameZh": "WSL 集成",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "在 Windows 上以 WSL 发行版作为工具链与运行环境。",
+  "dependencies": {
+    "cpp-base": "^0.2.0"
+  },
+  "capabilitySets": [
+    "tool.runtime"
+  ],
+  "platforms": [
+    "win32"
+  ],
+  "contributes": {
+    "toolchainProviders": [
+      {
+        "id": "wsl",
+        "transport": "wsl.exe"
+      }
+    ]
+  }
+}

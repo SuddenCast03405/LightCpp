@@ -1,0 +1,31 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "build-core",
+  "name": "Build & Project Core",
+  "nameZh": "项目与构建系统核心",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-framework",
+  "description": "所有具体构建系统插件的前置核心框架：提供统一的项目管理接口、构建任务调度引擎，并向下分发项目/配置/工具链/执行/诊断/高级特性等标准化构建能力。",
+  "dependencies": {
+    "cpp-base": "^0.2.0"
+  },
+  "capabilitySets": [
+    "project.core",
+    "build.config",
+    "build.toolchain",
+    "build.exec",
+    "build.diagnostics",
+    "build.advanced"
+  ],
+  "activation": [
+    "onStartup"
+  ],
+  "contributes": {
+    "buildTaskEngine": {
+      "providers": "buildSystems",
+      "queue": "per-workspace"
+    }
+  }
+}

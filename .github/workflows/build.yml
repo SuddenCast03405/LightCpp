@@ -1,0 +1,100 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # ---------------------------------------------------------------- C++ 内核
+  cxx:
+    name: C++ 内核（${{ matrix.os }} / ${{ matrix.cxx }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cxx: g++
+            extra: -DLIGHTC_WITH_SANITIZERS=ON
+          - os: ubuntu-latest
+            cxx: clang++
+            extra: ""
+          - os: macos-latest
+            cxx: clang++
+            extra: ""
+          - os: windows-latest
+            cxx: cl
+            extra: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Ninja
+        if: runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y ninja-build
+          else
+            brew install ninja || true
+          fi
+
+      - name: 配置（严格模式：警告即错误）
+        run: >
+          cmake -S core -B core/build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DLIGHTC_WERROR=ON
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          ${{ matrix.extra }}
+
+      - name: 构建
+        run: cmake --build core/build
+
+      - name: 单元测试与 CLI 冒烟测试
+        run: ctest --test-dir core/build --output-on-failure
+
+      - name: 清单校验（C++ 实现）
+        shell: bash
+        run: |
+          core/build/bin/lightcpp-pm validate --strict
+          core/build/bin/lightcpp-pm docs --check
+
+      # 两份实现（C++ / Python）必须逐字节同构。只在 POSIX 上跑：
+      # Windows 的 .dll 命名与换行翻译会让 diff 失去意义，那边的对等性由
+      # 单元测试里的清单断言覆盖。
+      - name: C++ 与 Python 输出对拍
+        if: runner.os != 'Windows'
+        shell: bash
+        run: scripts/cli_parity.sh core/build/bin/lightcpp-pm
+
+      # 信息性步骤：清单声明了原生贡献点、但仓库里还没有实现库的插件有多少。
+      # 不设门槛（0.2.0 是清单层完成、引擎层部分完成），只是让这个数字每次都在日志里
+      # 露面，避免"清单齐全"被读成"功能齐全"。
+      - name: 插件宿主自检（信息性，不作为门禁）
+        shell: bash
+        continue-on-error: true
+        run: |
+          core/build/bin/lightcpp-pm host --require-native | tail -n 5 || true
+          core/build/bin/lightcpp-pm host | tail -n 1
+
+  # Python 参考实现的校验与单元测试由 validate.yml 负责，这里不再重复跑一遍
+  # （同一套命令在两个 workflow 里各有一份，改一处忘一处时两边会给出矛盾的绿灯）。
+
+  # ---------------------------------------------------------------- 打包
+  package:
+    name: 打包交付物
+    needs: [cxx]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: 构建并打包
+        run: bash scripts/package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lightcpp-delivery
+          path: dist/*.tar.gz

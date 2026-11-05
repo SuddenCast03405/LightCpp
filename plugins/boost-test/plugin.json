@@ -1,0 +1,23 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "boost-test",
+  "name": "Boost.Test",
+  "nameZh": "Boost.Test",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "Boost.Test 适配器：解析 boost 单元测试输出。",
+  "dependencies": {
+    "test-core": "^0.2.0"
+  },
+  "capabilitySets": [
+    "test.framework"
+  ],
+  "contributes": {
+    "testFramework": {
+      "id": "boost-test",
+      "label": "Boost.Test"
+    }
+  }
+}

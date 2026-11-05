@@ -1,0 +1,40 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "lldb",
+  "name": "LLDB",
+  "nameZh": "LLDB",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "debugger",
+  "description": "LLVM 生态调试器后端，支持 core 文件、远程调试与 pretty-printer。",
+  "dependencies": {
+    "cpp-base": "^0.2.0"
+  },
+  "capabilitySets": [
+    "debug.breakpoint",
+    "debug.control",
+    "debug.inspect",
+    "debug.attach",
+    "debug.symbols",
+    "debug.log"
+  ],
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "lldb",
+        "label": "LLDB",
+        "platforms": [
+          "linux",
+          "darwin",
+          "win32"
+        ]
+      }
+    ]
+  },
+  "platforms": [
+    "linux",
+    "darwin",
+    "win32"
+  ]
+}

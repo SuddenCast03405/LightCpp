@@ -1,0 +1,74 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "cmake",
+  "name": "CMake",
+  "nameZh": "CMake",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "build-system",
+  "description": "解析 CMakeLists.txt 完成配置与构建；安装时自动连带安装 Ninja 作为默认生成器。",
+  "dependencies": {
+    "cpp-base": "^0.2.0",
+    "build-core": "^0.2.0"
+  },
+  "capabilitySets": [
+    "lang.buildfile"
+  ],
+  "contributes": {
+    "buildSystems": [
+      "cmake"
+    ],
+    "languages": [
+      {
+        "id": "cmake",
+        "extensions": [
+          ".cmake"
+        ]
+      }
+    ],
+    "fileAssociations": [
+      {
+        "pattern": "CMakeLists.txt",
+        "language": "cmake"
+      },
+      {
+        "pattern": "*.cmake",
+        "language": "cmake"
+      }
+    ],
+    "commands": [
+      {
+        "id": "cmake.configure",
+        "title": "配置 (CMake)"
+      },
+      {
+        "id": "cmake.build",
+        "title": "构建 (CMake)"
+      },
+      {
+        "id": "cmake.clean",
+        "title": "清理 (CMake)"
+      },
+      {
+        "id": "cmake.install",
+        "title": "安装 (CMake)"
+      }
+    ],
+    "settings": [
+      {
+        "key": "lightcpp.cmake.generator",
+        "type": "string",
+        "default": "Ninja",
+        "description": "CMake 生成器"
+      }
+    ]
+  },
+  "recommends": {
+    "ninja": {
+      "version": "^0.2.0",
+      "autoInstall": true,
+      "reason": "CMake 默认生成器，安装 CMake 时自动连带安装"
+    }
+  }
+}

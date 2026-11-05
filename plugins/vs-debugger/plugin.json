@@ -1,0 +1,43 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "vs-debugger",
+  "name": "Visual Studio Debugger",
+  "nameZh": "Visual Studio Debugger",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "debugger",
+  "description": "复用 Visual Studio 调试引擎，适用于 MSVC 工具链；与 Visual Studio Project 插件配合最佳。",
+  "dependencies": {
+    "cpp-base": "^0.2.0"
+  },
+  "capabilitySets": [
+    "debug.breakpoint",
+    "debug.control",
+    "debug.inspect",
+    "debug.attach",
+    "debug.symbols",
+    "debug.log"
+  ],
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "vs",
+        "label": "Visual Studio Debugger",
+        "platforms": [
+          "win32"
+        ]
+      }
+    ]
+  },
+  "platforms": [
+    "win32"
+  ],
+  "recommends": {
+    "vs-project": {
+      "version": "^0.2.0",
+      "autoInstall": false,
+      "reason": "MSVC 工程通常由 MSBuild 构建，建议同时安装"
+    }
+  }
+}

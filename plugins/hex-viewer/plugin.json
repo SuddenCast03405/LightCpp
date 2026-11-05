@@ -1,0 +1,14 @@
+{
+  "$schema": "../../schemas/plugin.schema.json",
+  "id": "hex-viewer",
+  "name": "Hex Viewer",
+  "nameZh": "Hex 查看器",
+  "version": "0.2.0",
+  "publisher": "lightcpp",
+  "kind": "plugin",
+  "layer": "tooling",
+  "description": "二进制文件的十六进制查看与编辑。",
+  "capabilitySets": [
+    "tool.runtime"
+  ]
+}
