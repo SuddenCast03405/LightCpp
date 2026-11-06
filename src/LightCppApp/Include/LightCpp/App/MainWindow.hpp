@@ -19,6 +19,7 @@
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
+#include "LightCpp/App/TerminalWidget.hpp"
 #include "LightCpp/App/ProcessShutdown.hpp"
 #include "LightCpp/App/ProcessTree.hpp"
 #include "LightCpp/App/StartupPage.hpp"
@@ -1057,6 +1058,21 @@ private:
     QTimer* terminalProgramTimer_ = nullptr;
     /// The terminal channel's stack/combo index once it has been opened.
     int terminalChannel_ = -1;
+    /// The grid the embedded terminal renders into. Created on the first
+    /// session: before that there is nothing to show, and an empty grid
+    /// would claim a shell is running when none is.
+    TerminalWidget* terminalWidget_ = nullptr;
+    /// Session-local command history, oldest first. The shell keeps its own
+    /// history; this one is what Up does before the shell has any, and it
+    /// survives a shell that was replaced.
+    QStringList terminalHistory_;
+    int terminalHistoryCursor_ = -1;
+    /// Create the grid on first use and wire it to the session. Returns the
+    /// existing one when a screen is already installed.
+    TerminalWidget* ensureTerminalWidget(const QString& title);
+    /// Route one decoded chunk of shell output to the grid, which is the
+    /// only consumer once a session has started.
+    void feedTerminalGrid(const QString& text);
     /// The debug session (gdb / lldb / cdb). Created in the constructor.
     LightCpp::App::DebuggerController* debugger_ = nullptr;
     /// The inspection views (locals, stack, threads, registers, memory,

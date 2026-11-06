@@ -109,6 +109,11 @@ public:
 
     // --- reading -----------------------------------------------------------
 
+    /// The window title as last set by OSC 0/2, empty until something sets
+    /// one. A renderer that polls this does not need to hold the update it
+    /// came in.
+    [[nodiscard]] QString title() const { return title_; }
+
     [[nodiscard]] int cursorColumn() const { return cursorColumn_; }
     [[nodiscard]] int cursorRow() const { return cursorRow_; }
     [[nodiscard]] bool cursorVisible() const { return cursorVisible_; }
@@ -144,6 +149,12 @@ public:
     /// shell prompt looks like. Used by the shell-integration tests and by
     /// the "copy command" action.
     [[nodiscard]] QString currentLine() const;
+
+    /// The palette entry a 256-colour SGR index refers to (0xRRGGBB). The
+    /// first 16 are the xterm defaults, 16..231 the 6x6x6 cube, 232..255 the
+    /// grey ramp — the same mapping every terminal uses, because tools pick
+    /// indices expecting it.
+    [[nodiscard]] static quint32 paletteColor(int index);
 
 private:
     struct Room {

@@ -2387,3 +2387,57 @@ TEST(ShellIntegration, SplittingAPromptLineAtTheMarkGivesTheTypedCommand)
     EXPECT_EQ(Sh::commandText(line, 999), QString());
     EXPECT_EQ(Sh::promptText(line, 999), line);
 }
+
+TEST(TerminalPalette, TheFirstSixteenAreTheAnsiColours)
+{
+    // A tool that emits SGR "31" is asking for red as xterm defines it; if
+    // the table disagreed, `ls --color` would come out the wrong hue.
+    EXPECT_EQ(Term::Emulator::paletteColor(0), 0x000000u);
+    EXPECT_EQ(Term::Emulator::paletteColor(1), 0xcd0000u);
+    EXPECT_EQ(Term::Emulator::paletteColor(7), 0xe5e5e5u);
+    EXPECT_EQ(Term::Emulator::paletteColor(9), 0xff0000u);
+    EXPECT_EQ(Term::Emulator::paletteColor(15), 0xffffffu);
+}
+
+TEST(TerminalPalette, TheCubeAndTheGreyRampMatchEveryOtherTerminal)
+{
+    // Index 16 is the cube's origin, 231 its far corner, 232 the darkest
+    // grey and 255 the lightest. These four pins catch a cube built with the
+    // wrong step table, which is otherwise invisible until something uses
+    // all 216 entries.
+    EXPECT_EQ(Term::Emulator::paletteColor(16), 0x000000u);
+    EXPECT_EQ(Term::Emulator::paletteColor(231), 0xffffffu);
+    EXPECT_EQ(Term::Emulator::paletteColor(232), 0x080808u);
+    EXPECT_EQ(Term::Emulator::paletteColor(255), 0xeeeeeeu);
+    // A component taken from the middle of the ramp.
+    EXPECT_EQ(Term::Emulator::paletteColor(16 + 36 * 2 + 6 * 2 + 2), 0x878787u);
+}
+
+TEST(TerminalPalette, IndicesOutsideTheTableResolveToNothing)
+{
+    EXPECT_EQ(Term::Emulator::paletteColor(-1), 0u);
+    EXPECT_EQ(Term::Emulator::paletteColor(256), 0u);
+    EXPECT_EQ(Term::Emulator::paletteColor(9999), 0u);
+}
+
+TEST(TerminalEmulator, TheTitleIsReadableAfterTheUpdateThatSetIt)
+{
+    // A tab that renames itself from the update alone loses the name as
+    // soon as another byte arrives; the getter keeps it.
+    Term::Emulator emulator(20, 3);
+    EXPECT_EQ(emulator.title(), QString());
+    const Term::EmulatorUpdate update =
+        emulator.feedText(QStringLiteral("\x1b]2;vim lightcpp.cpp\x07"));
+    EXPECT_EQ(update.title, QStringLiteral("vim lightcpp.cpp"));
+    EXPECT_EQ(emulator.title(), QStringLiteral("vim lightcpp.cpp"));
+    // OSC 0 is the same field.
+    const Term::EmulatorUpdate second =
+        emulator.feedText(QStringLiteral("\x1b]0;bash\x07"));
+    EXPECT_EQ(second.title, QStringLiteral("bash"));
+    EXPECT_EQ(emulator.title(), QStringLiteral("bash"));
+    // An empty title is not a title: a shell that clears it must not blank
+    // the tab back to "Terminal".
+    const Term::EmulatorUpdate empty = emulator.feedText(QStringLiteral("\x1b]2;\x07"));
+    EXPECT_EQ(empty.title, QString());
+    EXPECT_EQ(emulator.title(), QStringLiteral("bash"));
+}

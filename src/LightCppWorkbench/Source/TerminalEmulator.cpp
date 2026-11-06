@@ -1025,4 +1025,36 @@ QString Emulator::currentLine() const
     return rowText(cursorRow_, true);
 }
 
+quint32 Emulator::paletteColor(int index)
+{
+    // The sixteen ANSI colours, in the "normal then bright" order SGR 30-37
+    // and 90-97 index into. These are the xterm defaults, which is what a
+    // tool that emits "31" for red is asking for.
+    static const quint32 s_ansi[16] = {
+        0x000000, 0xcd0000, 0x00cd00, 0xcdcd00, 0x0000ee, 0xcd00cd, 0x00cdcd, 0xe5e5e5,
+        0x7f7f7f, 0xff0000, 0x00ff00, 0xffff00, 0x5c5cff, 0xff00ff, 0x00ffff, 0xffffff,
+    };
+    if (index < 0) {
+        return 0;
+    }
+    if (index < 16) {
+        return s_ansi[index];
+    }
+    if (index < 232) {
+        // 6x6x6 cube: component n maps to 0, 95, 135, 175, 215, 255 — the
+        // uneven ramp is not a bug, it is what every implementation ships.
+        static const int s_steps[6] = {0, 95, 135, 175, 215, 255};
+        const int n = index - 16;
+        const int r = s_steps[(n / 36) % 6];
+        const int g = s_steps[(n / 6) % 6];
+        const int b = s_steps[n % 6];
+        return (quint32(r) << 16) | (quint32(g) << 8) | quint32(b);
+    }
+    if (index < 256) {
+        const int level = 8 + (index - 232) * 10;
+        return (quint32(level) << 16) | (quint32(level) << 8) | quint32(level);
+    }
+    return 0;
+}
+
 }  // namespace LightCpp::Workbench::Terminal

@@ -40,6 +40,7 @@ set(LIGHTCPP_APP_SOURCES
     Include/LightCpp/App/SettingsDialog.hpp
     Include/LightCpp/App/StartupPage.hpp
     Include/LightCpp/App/TestExplorerPanel.hpp
+    Include/LightCpp/App/TerminalWidget.hpp
     Include/LightCpp/App/ToolchainHeaders.hpp
     Include/LightCpp/App/ToolchainPaths.hpp
     Source/AnalysisPanel.cpp
@@ -83,6 +84,7 @@ set(LIGHTCPP_APP_SOURCES
     Source/StartupPage.cpp
     Source/TestExplorerPanel.cpp
     Source/TerminalLaunch.cpp
+    Source/TerminalWidget.cpp
     Source/TextColumns.cpp
     Source/ToolchainPaths.cpp
 )

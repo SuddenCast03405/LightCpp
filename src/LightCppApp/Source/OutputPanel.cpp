@@ -2,6 +2,8 @@
 
 #include "LightCpp/App/OutputPanel.hpp"
 
+#include "LightCpp/App/TerminalWidget.hpp"
+
 #include <QColor>
 #include <QComboBox>
 #include <QFileInfo>
@@ -267,7 +269,7 @@ int OutputPanel::openTerminalChannel(const QString& title, bool resetBuffer)
         // new drop-down entry at the end of the fixed channels.
         terminalLog_ = makeLogView(this);
         terminalLog_->setPlaceholderText(tr("No terminal session yet."));
-        auto* page = makeInputLogPage(
+            auto* page = makeInputLogPage(
             terminalLog_, &terminalInput_,
             tr("Type a shell command here, press Enter to send (enabled while "
                "the terminal runs)"),
@@ -275,6 +277,18 @@ int OutputPanel::openTerminalChannel(const QString& title, bool resetBuffer)
             &terminalInputRow_);
         terminalChannel_ = stack_->addWidget(page);
         channelCombo_->addItem(title);
+        if (terminal_ == nullptr) {
+            // A screen model installed *before* the first session lives in
+            // the page itself: swapping it in later would need a second
+            // stack entry and a second drop-down item for the same channel.
+            if (auto* layout = qobject_cast<QVBoxLayout*>(page->layout())) {
+                layout->insertWidget(0, terminal_, 1);
+                terminalLog_->setVisible(false);
+                if (terminalInputRow_ != nullptr) {
+                    terminalInputRow_->setVisible(false);
+                }
+            }
+        }
     } else {
         // A later session reuses the channel: fresh title, and a fresh
         // buffer unless the caller is reusing a still-live session whose
@@ -325,6 +339,44 @@ void OutputPanel::appendTerminalOutput(const QString& text)
         // Stale maximum after an insert would clamp this; setting the value we
         // read keeps the lines the user is looking at under the viewport.
         bar->setValue(previousScroll);
+    }
+}
+
+void OutputPanel::setTerminalScreen(TerminalWidget* terminal)
+{
+    terminal_ = terminal;
+    if (terminal_ == nullptr) {
+        return;
+    }
+    // The terminal widget has no input field of its own: keys go straight to
+    // the PTY. The generic input row would then be a second, wrong way to
+    // type into the same shell, so it is hidden while a screen is attached.
+    if (terminalInputRow_ != nullptr) {
+        terminalInputRow_->setVisible(false);
+    }
+    if (terminalChannel_ >= 0) {
+        // The channel already exists: it was built around a transcript, so
+        // the grid replaces the transcript *in that page* rather than in a
+        // page of its own.
+        QWidget* page = stack_->widget(terminalChannel_);
+        if (page != nullptr && terminal_->parentWidget() != page) {
+            if (auto* layout = qobject_cast<QVBoxLayout*>(page->layout())) {
+                layout->insertWidget(0, terminal_, 1);
+            }
+        }
+        if (terminalLog_ != nullptr) {
+            terminalLog_->setVisible(false);
+        }
+    }
+}
+
+void OutputPanel::setChannelTitle(int channel, const QString& title)
+{
+    if (channel < 0 || channel >= channelCombo_->count() || title.isEmpty()) {
+        return;
+    }
+    if (channelCombo_->itemText(channel) != title) {
+        channelCombo_->setItemText(channel, title);
     }
 }
 

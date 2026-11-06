@@ -9394,6 +9394,70 @@ QProcess* MainWindow::ensureProgramRunner()
     return runner_;
 }
 
+TerminalWidget* MainWindow::ensureTerminalWidget(const QString& title)
+{
+    if (terminalWidget_ != nullptr) {
+        return terminalWidget_;
+    }
+    terminalWidget_ = new TerminalWidget(title, outputPanel_);
+    terminalWidget_->setObjectName(QStringLiteral("terminalScreen"));
+    // Keys leave the grid already encoded for a terminal (CR for Enter,
+    // CSI sequences for the arrows, ^C for Ctrl+C). Writing those bytes
+    // verbatim is what lets the shell's own line editor — and a
+    // full-screen program like vim — behave the way they do in a real
+    // terminal: on Windows QProcess pipes binary through a CRT stream, so
+    // CR must be in the byte stream rather than relying on a newline
+    // translation that is not there.
+    connect(terminalWidget_, &TerminalWidget::bytesTyped, this,
+            [this](const QByteArray& bytes) {
+                if (terminalRunner_ == nullptr
+                    || terminalRunner_->state() == QProcess::NotRunning
+                    || bytes.isEmpty()) {
+                    return;
+                }
+                terminalRunner_->write(bytes);
+            });
+    connect(terminalWidget_, &TerminalWidget::commandEntered, this,
+            [this](const QString& text) {
+                const QString trimmed = text.trimmed();
+                if (trimmed.isEmpty()) {
+                    return;
+                }
+                // Consecutive repeats collapse: pressing Up in a shell that
+                // already remembers the line should not double the entry.
+                if (terminalHistory_.isEmpty() || terminalHistory_.last() != trimmed) {
+                    terminalHistory_.append(trimmed);
+                    while (terminalHistory_.size() > 200) {
+                        terminalHistory_.removeFirst();
+                    }
+                }
+                terminalHistoryCursor_ = -1;
+            });
+    connect(terminalWidget_, &TerminalWidget::titleChanged, this,
+            [this](const QString& newTitle) {
+                if (terminalChannel_ < 0 || newTitle.isEmpty()) {
+                    return;
+                }
+                // The drop-down entry follows the shell the way a tab in a
+                // terminal emulator follows `vim`: that title is the only
+                // thing that says what the session is *doing*.
+                outputPanel_->setChannelTitle(terminalChannel_, newTitle);
+            });
+    outputPanel_->setTerminalScreen(terminalWidget_);
+    return terminalWidget_;
+}
+
+void MainWindow::feedTerminalGrid(const QString& text)
+{
+    if (terminalWidget_ == nullptr) {
+        // No grid means no session ever opened one; the transcript is then
+        // the honest destination rather than a dropped byte.
+        outputPanel_->appendTerminalOutput(text);
+        return;
+    }
+    terminalWidget_->feed(text.toUtf8());
+}
+
 QProcess* MainWindow::ensureTerminalRunner()
 {
     if (terminalRunner_ == nullptr) {
@@ -9412,7 +9476,7 @@ QProcess* MainWindow::ensureTerminalRunner()
             const QString text = terminalStreamDecoder_.decode(
                 terminalRunner_->readAllStandardOutput());
             if (!text.isEmpty()) {
-                outputPanel_->appendTerminalOutput(text);
+                feedTerminalGrid(text);
             }
         });
         connect(terminalRunner_, &QProcess::started, this, [this] {
@@ -9422,6 +9486,10 @@ QProcess* MainWindow::ensureTerminalRunner()
                 [this](QProcess::ProcessError e) {
             if (terminalRunner_ == nullptr) return;
             if (e == QProcess::FailedToStart) {
+                if (terminalWidget_ != nullptr) {
+                    terminalWidget_->setExitedWithError(
+                        tr("Failed to start the terminal"));
+                }
                 outputPanel_->appendTerminalOutput(
                     tr("Failed to start the terminal.\n"));
                 outputPanel_->setTerminalInputEnabled(false);
@@ -9436,7 +9504,13 @@ QProcess* MainWindow::ensureTerminalRunner()
             // mid-character leaves behind.
             const QString tail = terminalStreamDecoder_.flush();
             if (!tail.isEmpty()) {
-                outputPanel_->appendTerminalOutput(tail);
+                feedTerminalGrid(tail);
+            }
+            // The grid says "exited" in its own status strip, where the
+            // user is looking; the transcript keeps the banner because a
+            // transcript is what it is for.
+            if (terminalWidget_ != nullptr) {
+                terminalWidget_->setExited(status == QProcess::NormalExit ? code : -1);
             }
             outputPanel_->appendTerminalOutput(
                 status == QProcess::NormalExit
@@ -9740,6 +9814,7 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir,
                 tr("A program is already running in the terminal.\n"));
             return;
         }
+        ensureTerminalWidget(terminalLabel);
         if (!shellUp) {
             terminalChannel_ = outputPanel_->openTerminalChannel(terminalLabel);
         } else {
@@ -10489,12 +10564,16 @@ void MainWindow::applyPreferences()
             }
         }
     }
+    QFont outputFont;
     if (prefs.outputFont.isValid()) {
-        QFont font(prefs.outputFont.family);
-        font.setPointSizeF(prefs.outputFont.size);
-        outputPanel_->setOutputFont(font);
-    } else {
-        outputPanel_->setOutputFont(QFont());
+        outputFont = QFont(prefs.outputFont.family);
+        outputFont.setPointSizeF(prefs.outputFont.size);
+    }
+    outputPanel_->setOutputFont(outputFont);
+    if (terminalWidget_ != nullptr && !outputFont.family().isEmpty()) {
+        // The grid and the log must share a font: a terminal rendered in a
+        // proportional face stops lining up after the first wide character.
+        terminalWidget_->setTerminalFont(outputFont);
     }
 
     // --- files ----------------------------------------------------------

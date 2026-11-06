@@ -7,6 +7,7 @@
 
 #include <functional>
 
+class TerminalWidget;
 class QComboBox;
 class QLabel;
 class QLineEdit;
@@ -104,6 +105,20 @@ public:
     void appendTerminalOutput(const QString& text);
     /// Enable/disable the terminal input row (live while the shell runs).
     void setTerminalInputEnabled(bool enabled);
+    /// Render the terminal through a screen model instead of appending text.
+    ///
+    /// Appending is right for a command's *transcript* and wrong for a
+    /// full-screen program: `clear` arrives as an escape sequence, not as a
+    /// cleared buffer, so a transcript keeps every frame. Once a widget is
+    /// installed the channel is a grid, and `appendTerminalOutput` becomes a
+    /// plain-text fallback for callers that have no bytes. Ownership stays
+    /// with the caller; passing nullptr restores the transcript.
+    void setTerminalScreen(TerminalWidget* terminal);
+    [[nodiscard]] TerminalWidget* terminalScreen() const { return terminal_; }
+    /// Rename a channel after the session it holds (a shell setting its
+    /// window title, a terminal that runs `vim`). Out-of-range indices are
+    /// ignored: a late title from a closed session must not create an entry.
+    void setChannelTitle(int channel, const QString& title);
     /// Replace the Problems list. An empty list shows "no problems".
     void setProblems(const QList<ProblemEntry>& problems);
     /// Replace the Problems (Compiler) list (parsed compiler output).
@@ -187,6 +202,9 @@ private:
     QPlainTextEdit* debugLog_;
     QPlainTextEdit* pluginLog_;
     QTreeWidget* problems_;
+    /// The screen-model renderer, when one is installed (see
+    /// setTerminalScreen).
+    TerminalWidget* terminal_ = nullptr;
     /// The embedded terminal session (created on demand by
     /// openTerminalChannel): one log + input row appended after the fixed
     /// channels, titled after the selected terminal.

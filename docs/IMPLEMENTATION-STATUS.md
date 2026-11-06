@@ -248,7 +248,7 @@
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
 | `tool.run` 运行程序 | 实现 | F5 / Run Project / Compile & Run |
-| `tool.terminal` 内置终端 | 实现 | 终端**屏幕模型**（`Workbench/TerminalEmulator`）：CSI / OSC / DCS、UTF-8 跨块、宽字符与组合字符、滚动区域、备用屏、滚动历史（含上限）、选区复制、DEC 线框字符集。PTY 侧仍由 `OutputPanel` 的通道承担 |
+| `tool.terminal` 内置终端 | 实现 | 两层。**屏幕模型**（`Workbench/TerminalEmulator`）：CSI / OSC / DCS、UTF-8 跨块、宽字符与组合字符、滚动区域、备用屏、滚动历史（含上限）、选区复制、DEC 线框字符集、xterm 256 色调色板；**渲染器**（`App/TerminalWidget`）：按 `screenRuns()` 把属性映射成字符格式（16 色 / 256 色 / 真彩、粗体斜体下划线删除线、dim 混色、inverse 换色、hidden）、等宽网格与固定行高、零时延迟合并重绘、滚轮回看历史（回看时不跟随尾部）、右键菜单（Copy / Paste / Select All / Clear Screen / Clear Scrollback）、`Ctrl+Shift+C/V` 复制粘贴、`Ctrl+L` 本地清屏（不进 shell）、括号粘贴模式、应用光标键模式（`ESC O A` vs `ESC [ A`）、`Alt+x` → `ESC x`、`Ctrl+字母` → 控制码。PTY 仍由 `QProcess` 的二进制管道承担（不是真 `posix_openpt`，见缺口） |
 | `tool.launch` 调试程序（插件） | 骨架 | 交给 `DebuggerController`，受第五节限制 |
 | `tool.palette` 命令面板 | 实现 | `CommandPalette`：Ctrl+Shift+P，子序列模糊打分（连续命中 +8、词首 +6/+12、长度惩罚） |
 | `tool.external` 外部工具配置 | 实现 | Tools ▸ External Tools：菜单由 `Preferences::externalTools` 生成；每个工具含名称 / 命令 / 参数模板 / 工作目录 / 是否捕获输出 / 运行前是否确认。`Workbench/ExternalTools` 负责模板展开与按 shell 转义（POSIX 单引号 + `'\''`，cmd 双引号 + `%%`），未知 `${...}` 原样保留以免吃掉 `$HOME`；占位符无值时拒绝运行而不是展开成空串 |
@@ -364,7 +364,7 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 `0.2.0` 的定位是「插件生态内核 + 可用的 C/C++ IDE」。当前分支把调试器（含符号设置页）、测试、静态分析、Git、Markdown、**语义高亮与层级导航**、**包管理器**、**二进制/日志/图像查看器**几块从「声明」推到了「能跑」，剩下的差距集中在两处：
 
 1. **Qt 渲染端**：`.ui` / `.qrc` 已有 HTML 预览（`Workbench/QtPreview`），QML 有对象树结构视图但没有渲染器——那需要 QML 引擎与场景图，是这个仓库刻意不链接的东西。真正的所见即所得（拖动 widget 改 geometry）也还没有。
-2. **远程与终端**：远程构建（distcc/icecc）、真实 PTY 终端、WSL 与串口集成仍是清单。终端这一块在 §一 就标着「目前有问题」，本轮没有改动。
+2. **远程与终端**：远程构建（distcc/icecc）、WSL 与串口集成仍是清单。终端已经从「追加文本」换成真正的屏幕模型 + 渲染器，全屏程序（`vim`、`top`、`less`）能正确重绘；但传输层仍是 `QProcess` 的管道而非 `posix_openpt`/`conpty`，所以 `isatty()` 为假、窗口大小协商（`TIOCSWINSZ`）与 `SIGWINCH` 缺失——依赖终端尺寸的程序会退化成 80x24 的默认值。
 
 调试器只剩一条边角：natvis 的**搜索顺序**（先私有后公共、同名后者覆盖）尚未建模，`.natvis` 现在按列表逐个加载。除此之外的符号层能力——pretty-printer、STL / 智能指针展开、枚举显示、动态类型、源码映射、符号路径、`reload /f`——都已经有界面、有落盘、有断言，并在会话开始时下发给后端。
 
@@ -405,5 +405,7 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `Workbench/ShellIntegration` | OSC 133 标记、命令记录与历史、提示行切分 | 11 |
 | `Workbench/Lsp::{parseHover,typeHintFromHover}` + 悬停提示 | 三种 contents 形态归一、类型推导、签名/文档分栏渲染 | 11 |
 | `MainWindow.cpp` Debug ▸ Symbol Settings | 映射树 + 路径列表 + `Debug::describe()` 摘要；会话 `started` 时下发 | — |
+| `App/TerminalWidget` + `OutputPanel::setTerminalScreen` | 终端渲染器：属性 → 字符格式、网格对齐、合并重绘、历史回看、复制粘贴、括号粘贴、光标键模式 | 4 |
+| `Workbench/TerminalEmulator` 调色板与标题 | xterm 256 色表（16 基色 + 6×6×6 立方 + 灰阶）、`title()` 取值 | 4 |
 
-单元测试从 781 增至 **962**（本轮新增 181 个），`100% tests passed`。
+单元测试从 781 增至 **966**，`100% tests passed`。
