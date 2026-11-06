@@ -23,12 +23,12 @@
 | 五、调试器 | 34 | 33 | 0 | 1 | 95% |
 | 六、代码智能 | 23 | 20 | 0 | 3 | 87% |
 | 七、静态分析与代码质量 | 13 | 12 | 1 | 0 | 96% |
-| 八、版本控制 | 26 | 14 | 8 | 4 | 70% |
+| 八、版本控制 | 26 | 17 | 5 | 4 | 79% |
 | 九、终端与工具集成 | 15 | 11 | 0 | 4 | 73% |
 | 十、测试 | 15 | 14 | 1 | 0 | 95% |
 | 十一、文档与帮助 | 11 | 7 | 2 | 2 | 73% |
 | 十二、Qt 生态 | 7 | 3 | 4 | 0 | 71% |
-| **合计** | **188** | **138** | **31** | **19** | **84%** |
+| **合计** | **188** | **141** | **28** | **19** | **85%** |
 
 口径说明：
 
@@ -210,7 +210,7 @@
 | `analysis.coding_standard` 编码规范检查 | 实现 | Coding standard 项：`cppcoreguidelines-*` / `hicpp-*` / `cert-*`；"Write .clang-tidy..." 把规则集落盘成项目基线（已存在时先确认覆盖） |
 | `analysis.security` 安全漏洞检查 | 实现 | Security 项：`cert-*` / `clang-analyzer-security.*` / `bugprone-signal-handler` / `bugprone-signed-char-misuse` |
 
-## 八、版本控制（26 条：实现 14 / 骨架 8 / 声明 4）
+## 八、版本控制（26 条：实现 17 / 骨架 5 / 声明 4）
 
 `GitClient.cpp` 仍是进程通道（`refreshStatus()` + 通用 `run(args, title)`），`GitCommandPolicy.cpp` 是命令白名单与超时分类。本轮在两者之上加了两层：`Workbench/GitModel.cpp` 把 git 的稳定输出解析成结构（分支含 ahead/behind 与 detached HEAD、tag、remote、stash、blame、unified diff、porcelain 冲突码、`.git/MERGE_HEAD` 之类的操作状态），并给出 30 余个命令构造器；`GitBranchDialog.cpp` 把它们做成四页签对话框（Branches / Tags / Remotes / Stash）加一条冲突与操作横幅。
 
@@ -227,18 +227,18 @@
 | `git.push` push | 实现 | Branches 页签的 Push，用 `--force-with-lease` 而非 `--force` |
 | `git.branch.checkout` 切换分支 | 实现 | 分支表双击 / Checkout，用 `git switch` 避开 `checkout` 的名实歧义 |
 | `git.branch.create` 创建分支 | 实现 | 对话框输入名字 + 起点，`git switch -c` |
-| `git.clone` 克隆仓库 | 声明 | 无克隆向导 |
+| `git.clone` 克隆仓库 | 实现 | Git ▸ Clone Repository：URL / 目标 / 深度 / 单分支 / 子模块；目标路径从 URL 推断但绝不覆盖用户已选路径，成功后直接打开为项目。`Commands::clone` 把 `--depth` 与 `--single-branch` 保持独立（全分支浅克隆是合理需求），并在 URL 前加 `--` 使以横线开头的路径不会被当成选项 |
 | `git.branch.manage` 分支管理 | 实现 | 分支表（含 ahead/behind 与 upstream）+ 新建 / 切换 / 删除（含 `-D` 强删）；重命名与 upstream 设置只有命令构造器 |
 | `git.merge` 合并 | 实现 | 分支表的 Merge；`detectOperationState` 给出进行中的操作并提供 Abort / Continue |
 | `git.rebase` rebase | 骨架 | `git rebase <onto>` 可用，`-i` 交互式流程没有编辑器 |
 | `git.cherry_pick` cherry-pick | 骨架 | `Commands::cherryPick` 与 abort/continue 已就位，无 UI 入口 |
-| `git.history.blame` 查看 blame | 骨架 | `parseBlame` 解析 `--porcelain` 并有单测，无 blame 视图 |
+| `git.history.blame` 查看 blame | 实现 | `parseBlame` + `groupBlame` 进日志，`Git::BlameLookup` 进行边栏：按作者截断、只显示日期、按 commit 哈希取稳定色、越界行答 `uncommitted` 而不是崩溃。View ▸ Blame Column 开关，随当前标签页 |
 | `git.conflict` 解决冲突 | 骨架 | 冲突清单（UU/AA/DU/UD/DD）+ abort/continue 有；三方合并编辑器没有 |
 | `git.submodule` 子模块支持 | 骨架 | `listSubmodules` / `updateSubmodules` 只有命令封装 |
 | `git.worktree` worktree 支持 | 骨架 | `listWorktrees` / `addWorktree` 只有命令封装 |
 | `git.tag` tag 管理 | 实现 | Tags 页签：列表（含注释 tag 摘要）/ 轻量与注释 tag 创建 / 删除 |
 | `git.remote` remote 管理 | 骨架 | Remotes 页签可列出与新增，删除与 URL 修改只有命令封装 |
-| `git.inline` 行内修改标记 | 声明 | 无编辑器行内 gutter |
+| `git.inline` 行内修改标记 | 实现 | `Editor::diffLines` 的 gutter 色条 + `Git::inlineDiff` 的字符级跨度；并排 diff 由 delegate 逐字符着色（`QTreeWidgetItem` 每格只能一个背景，所以跨度必须自己画） |
 | `git.commit.template` 提交模板 | 声明 | 交给系统 git 配置 |
 | `git.commit.gpg` GPG 签名 | 声明 | 交给系统 git 配置 |
 | `git.auth.ssh_https` SSH / HTTPS 认证 | 声明 | 交给系统 git 凭据助手 |
@@ -364,6 +364,7 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 `0.2.0` 的定位是「插件生态内核 + 可用的 C/C++ IDE」。当前分支把调试器（含符号设置页）、测试、静态分析、Git、Markdown、**语义高亮与层级导航**、**包管理器**、**二进制/日志/图像查看器**几块从「声明」推到了「能跑」，剩下的差距集中在两处：
 
 1. **Qt 渲染端**：`.ui` / `.qrc` 已有 HTML 预览（`Workbench/QtPreview`），QML 有对象树结构视图但没有渲染器——那需要 QML 引擎与场景图，是这个仓库刻意不链接的东西。真正的所见即所得（拖动 widget 改 geometry）也还没有。
+1.5 **合并/变基编辑器与 rebase -i**：冲突清单与 abort/continue 有，三方合并的模型（`parseConflictFile` / `resolve`）也有并有单测，缺的是把 hunks 做成可点击三栏的编辑器；`rebase -i` 需要 todo 列表编辑器，目前只能跑非交互 rebase。
 2. **远程与终端**：远程构建（distcc/icecc）、WSL 与串口集成仍是清单。终端已经从「追加文本」换成真正的屏幕模型 + 渲染器，全屏程序（`vim`、`top`、`less`）能正确重绘；但传输层仍是 `QProcess` 的管道而非 `posix_openpt`/`conpty`，所以 `isatty()` 为假、窗口大小协商（`TIOCSWINSZ`）与 `SIGWINCH` 缺失——依赖终端尺寸的程序会退化成 80x24 的默认值。
 
 调试器的符号层现在连 natvis 的**搜索顺序**都建模了：`Debug::orderNatvis()` 按 toolchain → public → private → project → user 分层、同级按路径、再按输入位置稳定排序（加载顺序即优先级，后者覆盖前者），`Debug::natvisConflicts()` 把「同一类型被多个文件定义」连同两者的路径按「输家在前」列出，`Debug::natvisTypesIn()` 用扫描而非 DOM 解析（调试器要拒绝的文件，IDE 必须仍能读），会话开始时把冲突打进行调试控制台。pretty-printer、STL / 智能指针展开、枚举显示、动态类型、源码映射、符号路径、`reload /f` 早就有界面、有落盘、有断言。§五 除一条 `tool.launch` 的插件化声明外已无缺口。
@@ -408,5 +409,7 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `App/TerminalWidget` + `OutputPanel::setTerminalScreen` | 终端渲染器：属性 → 字符格式、网格对齐、合并重绘、历史回看、复制粘贴、括号粘贴、光标键模式 | 4 |
 | `Workbench/TerminalEmulator` 调色板与标题 | xterm 256 色表（16 基色 + 6×6×6 立方 + 灰阶）、`title()` 取值 | 4 |
 | `Workbench/DebugSymbols` natvis 顺序 | `orderNatvis` / `natvisConflicts` / `natvisTypesIn` + 会话启动时按序下发与冲突告警 | 9 |
+| `Workbench/GitDiff` | 字符级跨度（前后缀裁剪 + LCS）、并排对齐、blame 查询与稳定着色 | 19 |
+| `App/CodeEditor` blame 栏 + `Commands::clone` + 并排 diff 对话框 + 克隆向导 | 行边栏绘制、逐字符高亮的 delegate、`--` 分隔的 clone | 4 |
 
-单元测试从 781 增至 **975**，`100% tests passed`。
+单元测试从 781 增至 **998**，`100% tests passed`。
