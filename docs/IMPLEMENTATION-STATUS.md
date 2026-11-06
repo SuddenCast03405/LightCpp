@@ -366,7 +366,7 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 1. **Qt 渲染端**：`.ui` / `.qrc` 已有 HTML 预览（`Workbench/QtPreview`），QML 有对象树结构视图但没有渲染器——那需要 QML 引擎与场景图，是这个仓库刻意不链接的东西。真正的所见即所得（拖动 widget 改 geometry）也还没有。
 2. **远程与终端**：远程构建（distcc/icecc）、WSL 与串口集成仍是清单。终端已经从「追加文本」换成真正的屏幕模型 + 渲染器，全屏程序（`vim`、`top`、`less`）能正确重绘；但传输层仍是 `QProcess` 的管道而非 `posix_openpt`/`conpty`，所以 `isatty()` 为假、窗口大小协商（`TIOCSWINSZ`）与 `SIGWINCH` 缺失——依赖终端尺寸的程序会退化成 80x24 的默认值。
 
-调试器只剩一条边角：natvis 的**搜索顺序**（先私有后公共、同名后者覆盖）尚未建模，`.natvis` 现在按列表逐个加载。除此之外的符号层能力——pretty-printer、STL / 智能指针展开、枚举显示、动态类型、源码映射、符号路径、`reload /f`——都已经有界面、有落盘、有断言，并在会话开始时下发给后端。
+调试器的符号层现在连 natvis 的**搜索顺序**都建模了：`Debug::orderNatvis()` 按 toolchain → public → private → project → user 分层、同级按路径、再按输入位置稳定排序（加载顺序即优先级，后者覆盖前者），`Debug::natvisConflicts()` 把「同一类型被多个文件定义」连同两者的路径按「输家在前」列出，`Debug::natvisTypesIn()` 用扫描而非 DOM 解析（调试器要拒绝的文件，IDE 必须仍能读），会话开始时把冲突打进行调试控制台。pretty-printer、STL / 智能指针展开、枚举显示、动态类型、源码映射、符号路径、`reload /f` 早就有界面、有落盘、有断言。§五 除一条 `tool.launch` 的插件化声明外已无缺口。
 
 按现有代码量（`src/` + `apps/` 约 5.9 万行）估算，以上合计约为现有仓库的 0.4 倍工作量。
 
@@ -407,5 +407,6 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `MainWindow.cpp` Debug ▸ Symbol Settings | 映射树 + 路径列表 + `Debug::describe()` 摘要；会话 `started` 时下发 | — |
 | `App/TerminalWidget` + `OutputPanel::setTerminalScreen` | 终端渲染器：属性 → 字符格式、网格对齐、合并重绘、历史回看、复制粘贴、括号粘贴、光标键模式 | 4 |
 | `Workbench/TerminalEmulator` 调色板与标题 | xterm 256 色表（16 基色 + 6×6×6 立方 + 灰阶）、`title()` 取值 | 4 |
+| `Workbench/DebugSymbols` natvis 顺序 | `orderNatvis` / `natvisConflicts` / `natvisTypesIn` + 会话启动时按序下发与冲突告警 | 9 |
 
-单元测试从 781 增至 **966**，`100% tests passed`。
+单元测试从 781 增至 **975**，`100% tests passed`。
