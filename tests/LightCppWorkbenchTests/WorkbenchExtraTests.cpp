@@ -1455,3 +1455,122 @@ TEST(ClassView, MultipleClassesInOneFileKeepTheirOwnSourceOrder)
     EXPECT_EQ(classes.at(1).name, QStringLiteral("Apple"));
     EXPECT_EQ(classes.at(2).name, QStringLiteral("Mango"));
 }
+
+// ---------------------------------------------------------------------------
+// Call graph — the parts the graph window relies on
+// ---------------------------------------------------------------------------
+
+TEST(CallGraph, TheEmptyGraphIsStillValidDot)
+{
+    // The window offers "Copy DOT" on every finished walk, including trivial
+    // ones, so the empty graph must still be a *valid* DOT document.
+    Lsp::CallGraph empty;
+    const QString dot = empty.toDot(QStringLiteral("nothing"));
+    EXPECT_TRUE(dot.startsWith(QLatin1String("digraph \"nothing\" {")));
+    EXPECT_TRUE(dot.trimmed().endsWith(QLatin1Char('}')));
+    EXPECT_EQ(dot.count(QLatin1String("->")), 0);
+}
+
+TEST(CallGraph, DotLabelsEscapeQuotesAndBackslashes)
+{
+    // A C++ function name cannot contain a quote, but a detail string can
+    // (e.g. operator""_km). Unescaped it would break the whole document,
+    // and Graphviz would reject it with a parse error pointing at nothing
+    // useful.
+    Lsp::HierarchyItem root;
+    root.name = QStringLiteral("operator\"\"_km");
+    root.uri = QStringLiteral("file:///src/units.cpp");
+    root.selectionRange.startLine = 4;
+
+    Lsp::CallGraph graph;
+    graph.addNode(root);
+    const QString dot = graph.toDot();
+    EXPECT_TRUE(dot.contains(QLatin1String("operator\\\"\\\"_km")));
+    // Every label opened is closed: an odd number of unescaped quotes on a
+    // line means the escaping failed somewhere.
+    for (const QString& line : dot.split(QLatin1Char('\n'))) {
+        if (!line.contains(QLatin1String("label="))) {
+            continue;
+        }
+        int quotes = 0;
+        for (int i = 0; i < line.size(); ++i) {
+            if (line.at(i) == QLatin1Char('"')
+                && (i == 0 || line.at(i - 1) != QLatin1Char('\\'))) {
+                ++quotes;
+            }
+        }
+        EXPECT_EQ(quotes % 2, 0) << line.toStdString();
+    }
+}
+
+TEST(CallGraph, ADiamondIsNotACycle)
+{
+    // a calls b and c; both call d. The tree text repeats d under each, but
+    // `hasCycleFrom` must stay false — a shared callee is not recursion, and
+    // telling the user their code recurses when it does not is the worse of
+    // the two mistakes.
+    Lsp::HierarchyItem a;
+    a.name = QStringLiteral("a");
+    a.uri = QStringLiteral("file:///a.cpp");
+    a.selectionRange.startLine = 0;
+    Lsp::HierarchyItem b = a;
+    b.name = QStringLiteral("b");
+    b.selectionRange.startLine = 10;
+    Lsp::HierarchyItem c = a;
+    c.name = QStringLiteral("c");
+    c.selectionRange.startLine = 20;
+    Lsp::HierarchyItem d = a;
+    d.name = QStringLiteral("d");
+    d.selectionRange.startLine = 30;
+
+    Lsp::CallGraph graph;
+    graph.addCall(a, b);
+    graph.addCall(a, c);
+    graph.addCall(b, d);
+    graph.addCall(c, d);
+
+    EXPECT_FALSE(graph.hasCycleFrom(Lsp::nodeKey(a)));
+    const QString tree = graph.toTreeText(Lsp::nodeKey(a));
+    // d appears twice in the *text* (once per path) and once in the graph.
+    EXPECT_EQ(tree.count(QLatin1String("d (")), 2);
+    EXPECT_EQ(graph.nodes.size(), 4);
+    EXPECT_FALSE(tree.contains(QLatin1String("[recursive]")));
+}
+
+TEST(CallGraph, ARepeatedCallIsOneEdgeAndTwoOverloadsAreTwoNodes)
+{
+    Lsp::HierarchyItem run;
+    run.name = QStringLiteral("run");
+    run.uri = QStringLiteral("file:///r.cpp");
+    run.selectionRange.startLine = 0;
+    Lsp::HierarchyItem otherSameLine = run;
+    otherSameLine.selectionRange.startColumn = 12;  // overload on one line
+
+    Lsp::CallGraph graph;
+    graph.addCall(run, run);
+    graph.addCall(run, run);  // the same edge twice
+    EXPECT_EQ(graph.edges.size(), 1);
+
+    Lsp::HierarchyItem overload;
+    overload.name = QStringLiteral("run");
+    overload.uri = QStringLiteral("file:///r.cpp");
+    overload.selectionRange.startLine = 40;
+    graph.addCall(run, overload);
+    graph.addNode(otherSameLine);
+    // Two functions called run() at different lines, plus the overloaded one
+    // on the same line as the first: three nodes, not one.
+    EXPECT_EQ(graph.nodes.size(), 3);
+}
+
+TEST(CallGraph, AMissingRootProducesNoTreeInsteadOfTheWholeGraph)
+{
+    // toTreeText is keyed by the root; an unknown root must not fall back to
+    // "print whatever is there", which would show a graph with the wrong
+    // function at the top.
+    Lsp::HierarchyItem a;
+    a.name = QStringLiteral("a");
+    a.uri = QStringLiteral("file:///a.cpp");
+    Lsp::CallGraph graph;
+    graph.addNode(a);
+    EXPECT_TRUE(graph.toTreeText(QStringLiteral("file:///nowhere.cpp#0:0")).isEmpty());
+}

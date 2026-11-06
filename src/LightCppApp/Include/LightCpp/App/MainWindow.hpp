@@ -792,6 +792,7 @@ private:
     QAction* actCommandPalette_ = nullptr;   // Tools > Command Palette (Ctrl+Shift+P)
     QAction* actMarkdownPreview_ = nullptr;  // View > Preview Markdown (Ctrl+Shift+M)
     QAction* actClassBrowser_ = nullptr;     // View > Class Browser (Ctrl+Shift+B)
+    QAction* actCallGraph_ = nullptr;        // View > Call Graph (Ctrl+Alt+G)
 
     // --- git state ---
     LightCpp::App::GitClient* git_ = nullptr;
@@ -942,6 +943,15 @@ private:
     void showCallHierarchy();
     /// The same for the type hierarchy (base types and derived types).
     void showTypeHierarchy();
+
+    // --- call graph ---------------------------------------------------------
+    /// Walk the call hierarchy outwards from the symbol at the caret and show
+    /// the result as a graph: a QTreeWidget of the calls as text, plus DOT
+    /// written next to the source for anyone who wants a picture. The graph
+    /// is a *neighbourhood*, not a whole-program call graph — the server only
+    /// answers one call site at a time, and depth 2 is already hundreds of
+    /// round trips.
+    void showCallGraph();
 
     // --- class browser ------------------------------------------------------
     /// Show the classes of the active document with their members, in a

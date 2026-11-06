@@ -3037,6 +3037,13 @@ void MainWindow::createActions()
         }
     });
 
+    actCallGraph_ = new QAction(tr("Call &Graph"), this);
+    actCallGraph_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Alt+G")));
+    actCallGraph_->setStatusTip(
+        tr("The functions this one calls, and what they call (clangd)"));
+    connect(actCallGraph_, &QAction::triggered, this,
+            [this] { showCallGraph(); });
+
     actClassBrowser_ = new QAction(tr("Class &Browser"), this);
     actClassBrowser_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+B")));
     actClassBrowser_->setStatusTip(
@@ -3146,6 +3153,7 @@ void MainWindow::createActions()
         {actBlameFile_, "actionBlameFile"},
         {actDebugSymbols_, "actionDebugSymbols"},
         {actClassBrowser_, "actionClassBrowser"},
+        {actCallGraph_, "actionCallGraph"},
     };
     for (auto it = actionNames.constBegin(); it != actionNames.constEnd();
          ++it) {
@@ -3268,6 +3276,7 @@ void MainWindow::createMenuBar()
     viewMenu->addSeparator();
     viewMenu->addAction(actMarkdownPreview_);
     viewMenu->addAction(actClassBrowser_);
+    viewMenu->addAction(actCallGraph_);
 
     auto* gitMenu = menuBar()->addMenu(tr("&Git"));
     gitMenu->setObjectName(QStringLiteral("menuGit"));
@@ -4727,6 +4736,321 @@ void MainWindow::jumpToClassBrowserItem(int line, int column)
     ed->setTextCursor(cursor);
     ed->centerCursor();
     ed->setFocus();
+}
+
+// --- call graph ------------------------------------------------------------
+
+namespace {
+
+/// How deep the walk goes. Depth 1 is "what this calls", depth 2 is "what
+/// they call" — beyond that the graph stops being readable long before it
+/// stops being expensive.
+constexpr int kCallGraphDepth = 2;
+/// A hard ceiling on nodes. clangd answers one call site at a time, so a
+/// function that happens to be called from two hundred places would
+/// otherwise generate two hundred follow-up requests nobody asked for.
+constexpr int kCallGraphNodeLimit = 120;
+
+/// One walk in progress: the graph, the nodes still waiting for an answer,
+/// the requests already counted, and how deep each node still may expand.
+struct CallGraphWalk {
+    LightCpp::Workbench::Lsp::CallGraph graph;
+    QString rootKey;
+    /// Request id -> the item it asked about (echoed back verbatim).
+    QHash<int, QJsonObject> inFlight;
+    /// The depth still available below each node key.
+    QHash<QString, int> remainingDepth;
+    /// Requests whose answer has not arrived yet.
+    int pending = 0;
+    /// A node was dropped because the graph hit the ceiling.
+    bool truncated = false;
+};
+
+/// The name the graph is titled by: the root function's.
+QString graphTitleOf(const LightCpp::Workbench::Lsp::CallGraph& graph,
+                    const QString& rootKey)
+{
+    const int index = graph.indexOf(rootKey);
+    return index >= 0 ? graph.nodes.at(index).name : QStringLiteral("calls");
+}
+
+QString formatNodeLocation(const LightCpp::Workbench::Lsp::CallGraphNode& node)
+{
+    if (node.file.isEmpty()) {
+        return {};
+    }
+    return QStringLiteral("%1:%2")
+        .arg(QFileInfo(node.file).fileName())
+        .arg(node.line + 1);
+}
+
+}  // namespace
+
+void MainWindow::showCallGraph()
+{
+    auto* ed = currentEditor();
+    if (ed == nullptr || lsp_ == nullptr || !lsp_->isRunning()) {
+        statusBar()->showMessage(tr("Call graph needs the language server"), 4000);
+        return;
+    }
+    const QString path = ed->lintPath();
+    if (path.isEmpty() || !isCppLikeFile(path)) {
+        statusBar()->showMessage(tr("Call graph needs a C++ file"), 4000);
+        return;
+    }
+    lsp_->changeDocument(path, ed->toPlainText());
+    const QTextCursor cursor = ed->textCursor();
+    if (lsp_->requestCallHierarchy(path, cursor.blockNumber(),
+                                   cursor.positionInBlock())
+        <= 0) {
+        return;
+    }
+
+    auto* dialog = new QDialog(this);
+    dialog->setWindowTitle(tr("Call Graph"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->resize(760, 580);
+    auto* layout = new QVBoxLayout(dialog);
+
+    auto* summary = new QLabel(tr("Walking the call graph..."), dialog);
+    summary->setWordWrap(true);
+    layout->addWidget(summary);
+
+    auto* tree = new QTreeWidget(dialog);
+    tree->setHeaderLabels({tr("Call"), tr("Location")});
+    tree->setUniformRowHeights(true);
+    tree->setRootIsDecorated(true);
+    layout->addWidget(tree, 1);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+    auto* copyDot = buttons->addButton(tr("Copy DOT"),
+                                       QDialogButtonBox::ActionRole);
+    auto* saveDot = buttons->addButton(tr("Save DOT..."),
+                                       QDialogButtonBox::ActionRole);
+    copyDot->setObjectName(QStringLiteral("callGraphCopyDot"));
+    saveDot->setObjectName(QStringLiteral("callGraphSaveDot"));
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+    layout->addWidget(buttons);
+
+    // Everything below hangs off `walk`, which the dialog owns: closing the
+    // dialog drops the connections, and the answers that arrive afterwards
+    // are ignored rather than crashing on freed widgets.
+    auto* walk = new CallGraphWalk();
+    auto* state = new QObject(dialog);
+    state->setProperty("walk", QVariant::fromValue<qulonglong>(
+                                   reinterpret_cast<qulonglong>(walk)));
+    connect(dialog, &QObject::destroyed, [walk] { delete walk; });
+
+    auto rebuild = [tree, summary, walk, dialog](bool finished) {
+        const auto& graph = walk->graph;
+        tree->clear();
+        if (graph.isEmpty()) {
+            if (finished) {
+                summary->setText(tr("Nothing was found to call."));
+            }
+            return;
+        }
+        if (finished) {
+            QString text = tr("%n function(s) in this call graph%1.",
+                              nullptr, int(graph.nodes.size()))
+                               .arg(graph.hasCycleFrom(walk->rootKey)
+                                        ? tr(", including a cycle")
+                                        : QString());
+            if (walk->truncated) {
+                text += tr("  Truncated at %1 functions.").arg(kCallGraphNodeLimit);
+            }
+            summary->setText(text);
+            dialog->setWindowTitle(tr("Call Graph — %1")
+                                       .arg(graphTitleOf(graph, walk->rootKey)));
+        } else {
+            summary->setText(tr("Walking the call graph... %n function(s) so far",
+                                nullptr, int(graph.nodes.size())));
+        }
+
+        const int rootIndex = graph.indexOf(walk->rootKey);
+        if (rootIndex < 0) {
+            return;
+        }
+        QSet<int> drawn;
+        std::function<void(QTreeWidgetItem*, int, int)> addChildren =
+            [&](QTreeWidgetItem* parentRow, int nodeIndex, int depth) {
+                if (depth > kCallGraphDepth) {
+                    return;
+                }
+                for (const auto& edge : graph.edges) {
+                    if (edge.first != nodeIndex) {
+                        continue;
+                    }
+                    const auto& child = graph.nodes.at(edge.second);
+                    auto* row = new QTreeWidgetItem(parentRow);
+                    row->setText(1, formatNodeLocation(child));
+                    row->setData(0, Qt::UserRole, child.file);
+                    row->setData(0, Qt::UserRole + 1, child.line);
+                    if (drawn.contains(edge.second)) {
+                        // Already drawn above: name it instead of repeating
+                        // the subtree. That is what stops a cycle from
+                        // becoming an infinite tree.
+                        row->setText(0, child.name + tr("  [see above]"));
+                        continue;
+                    }
+                    drawn.insert(edge.second);
+                    row->setText(0, child.name);
+                    addChildren(row, edge.second, depth + 1);
+                }
+            };
+        const auto& rootNode = graph.nodes.at(rootIndex);
+        auto* rootRow = new QTreeWidgetItem(tree);
+        rootRow->setText(0, rootNode.name);
+        rootRow->setText(1, formatNodeLocation(rootNode));
+        rootRow->setData(0, Qt::UserRole, rootNode.file);
+        rootRow->setData(0, Qt::UserRole + 1, rootNode.line);
+        drawn.insert(rootIndex);
+        addChildren(rootRow, rootIndex, 0);
+        tree->expandToDepth(1);
+    };
+
+    auto finishIfDone = [rebuild, walk, copyDot, saveDot] {
+        if (walk->pending > 0) {
+            return;
+        }
+        rebuild(true);
+        copyDot->setEnabled(!walk->graph.isEmpty());
+        saveDot->setEnabled(!walk->graph.isEmpty());
+    };
+    copyDot->setEnabled(false);
+    saveDot->setEnabled(false);
+
+    connect(copyDot, &QPushButton::clicked, this, [this, walk] {
+        QGuiApplication::clipboard()->setText(
+            walk->graph.toDot(graphTitleOf(walk->graph, walk->rootKey)));
+        statusBar()->showMessage(tr("Call graph copied as Graphviz DOT"), 3000);
+    });
+    connect(saveDot, &QPushButton::clicked, this, [this, walk] {
+        const QString suggested =
+            QDir(QFileInfo(walk->graph.nodes.isEmpty()
+                               ? QString()
+                               : walk->graph.nodes.first().file)
+                     .absolutePath())
+                .filePath(graphTitleOf(walk->graph, walk->rootKey) + QStringLiteral(".dot"));
+        const QString target = QFileDialog::getSaveFileName(
+            this, tr("Save Call Graph"), suggested,
+            tr("Graphviz DOT (*.dot);;All files (*)"));
+        if (target.isEmpty()) {
+            return;
+        }
+        QSaveFile file(target);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            statusBar()->showMessage(
+                tr("Cannot write %1").arg(target), 5000);
+            return;
+        }
+        file.write(walk->graph.toDot(graphTitleOf(walk->graph, walk->rootKey))
+                       .toUtf8());
+        if (file.commit()) {
+            statusBar()->showMessage(tr("Saved %1").arg(target), 4000);
+        }
+    });
+
+    connect(tree, &QTreeWidget::itemDoubleClicked, this,
+            [this](QTreeWidgetItem* item, int) {
+        if (item == nullptr) {
+            return;
+        }
+        const QString target = item->data(0, Qt::UserRole).toString();
+        if (target.isEmpty()) {
+            return;
+        }
+        if (openFileInTab(target) != nullptr) {
+            gotoLine(item->data(0, Qt::UserRole + 1).toInt());
+        }
+    });
+
+    connect(lsp_, &LightCpp::App::LanguageServerClient::rawResponseReady, state,
+            [this, walk, rebuild, finishIfDone, state](
+                int requestId, const QString& method, const QJsonValue& result) {
+        if (method == QLatin1String("textDocument/prepareCallHierarchy")) {
+            const QList<LightCpp::Workbench::Lsp::HierarchyItem> items =
+                LightCpp::Workbench::Lsp::parseHierarchyItems(result);
+            if (items.isEmpty()) {
+                walk->pending = 0;
+                rebuild(true);
+                return;
+            }
+            const auto& root = items.first();
+            walk->rootKey = LightCpp::Workbench::Lsp::nodeKey(root);
+            walk->graph.addNode(root);
+            walk->remainingDepth.insert(walk->rootKey, kCallGraphDepth);
+            const QJsonObject raw = result.toArray().first().toObject();
+            walk->inFlight.insert(lsp_->requestOutgoingCalls(raw), raw);
+            ++walk->pending;
+            state->setProperty("started", true);
+            return;
+        }
+        if (method != QLatin1String("callHierarchy/outgoingCalls")
+            || !walk->inFlight.contains(requestId)) {
+            return;
+        }
+        const QJsonObject asked = walk->inFlight.take(requestId);
+        --walk->pending;
+
+        const QList<LightCpp::Workbench::Lsp::HierarchyItem> caller =
+            LightCpp::Workbench::Lsp::parseHierarchyItems(
+                QJsonArray{asked});
+        const int depthLeft = caller.isEmpty() || walk->rootKey.isEmpty()
+                                  ? 0
+                                  : walk->remainingDepth.value(
+                                        LightCpp::Workbench::Lsp::nodeKey(
+                                            caller.first()), 0);
+        for (const auto& edge :
+             LightCpp::Workbench::Lsp::parseCallEdges(result)) {
+            if (caller.isEmpty()) {
+                break;
+            }
+            walk->graph.addCall(caller.first(), edge.item);
+            const QString childKey = LightCpp::Workbench::Lsp::nodeKey(edge.item);
+            if (walk->remainingDepth.contains(childKey)) {
+                continue;  // already expanded, or already on the queue
+            }
+            if (depthLeft - 1 <= 0) {
+                walk->remainingDepth.insert(childKey, 0);
+                continue;
+            }
+            if (walk->graph.nodes.size() >= kCallGraphNodeLimit) {
+                walk->truncated = true;
+                walk->remainingDepth.insert(childKey, 0);
+                continue;
+            }
+            walk->remainingDepth.insert(childKey, depthLeft - 1);
+            QJsonObject raw;
+            raw.insert(QStringLiteral("name"), edge.item.name);
+            raw.insert(QStringLiteral("kind"), edge.item.kind);
+            raw.insert(QStringLiteral("uri"), edge.item.uri);
+            raw.insert(QStringLiteral("detail"), edge.item.detail);
+            raw.insert(QStringLiteral("data"), edge.item.data);
+            QJsonObject range;
+            range.insert(QStringLiteral("start"),
+                         QJsonObject{{QStringLiteral("line"),
+                                      edge.item.selectionRange.startLine},
+                                     {QStringLiteral("character"),
+                                      edge.item.selectionRange.startColumn}});
+            range.insert(QStringLiteral("end"),
+                         QJsonObject{{QStringLiteral("line"),
+                                      edge.item.selectionRange.endLine},
+                                     {QStringLiteral("character"),
+                                      edge.item.selectionRange.endColumn}});
+            raw.insert(QStringLiteral("range"), range);
+            raw.insert(QStringLiteral("selectionRange"), range);
+            walk->inFlight.insert(lsp_->requestOutgoingCalls(raw), raw);
+            ++walk->pending;
+        }
+        if (walk->pending == 0) {
+            finishIfDone();
+        } else {
+            rebuild(false);
+        }
+    });
+
+    dialog->show();
 }
 
 void MainWindow::requestOutline()
