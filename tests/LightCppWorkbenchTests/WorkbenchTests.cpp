@@ -753,3 +753,97 @@ TEST(Analysis, EveryBuildDrivenToolNeedsItsArgumentsToBeExplicit)
     EXPECT_EQ(arguments.value(1), QStringLiteral("--"));
     EXPECT_EQ(arguments.value(2), QStringLiteral("make -j4"));
 }
+
+// ---------------------------------------------------------------------------
+// clang-tidy rule sets: the -checks value is the answer, so it is tested
+// ---------------------------------------------------------------------------
+
+TEST(Analysis, EveryNamedCheckSetStartsFromEmpty)
+{
+    // clang-tidy merges a `-checks` value into the project's own list. A
+    // set that does not start with `-*` therefore answers "your rules plus
+    // whatever was already enabled", which is not the set the user picked.
+    for (TidyCheckSet set :
+         {TidyCheckSet::Style, TidyCheckSet::Unused, TidyCheckSet::NullPointer,
+          TidyCheckSet::Bounds, TidyCheckSet::Leak, TidyCheckSet::CodingStandard,
+          TidyCheckSet::Security}) {
+        const QString checks = tidyChecks(set);
+        EXPECT_TRUE(checks.startsWith(QLatin1String("-*,")))
+            << tidyCheckSetName(set).toStdString();
+    }
+    // The project option is the absence of an option.
+    EXPECT_TRUE(tidyChecks(TidyCheckSet::Project).isEmpty());
+}
+
+TEST(Analysis, ACategorysCheckSetCoversTheRulesThatCategoryIsMappedFrom)
+{
+    // The mapping in categoryOf() and the globs here have to agree, or a
+    // user picks "Leak" and gets no leak findings. Spot-check one rule from
+    // each bucket against the glob that is supposed to enable it.
+    EXPECT_TRUE(tidyChecks(TidyCheckSet::Unused)
+                    .contains(QLatin1String("misc-unused-*")));
+    EXPECT_TRUE(tidyChecks(TidyCheckSet::NullPointer)
+                    .contains(QLatin1String("bugprone-null*")));
+    EXPECT_TRUE(tidyChecks(TidyCheckSet::Bounds)
+                    .contains(QLatin1String("cppcoreguidelines-pro-bounds-*")));
+    EXPECT_TRUE(tidyChecks(TidyCheckSet::Leak)
+                    .contains(QLatin1String("clang-analyzer-unix.Malloc")));
+    EXPECT_TRUE(tidyChecks(TidyCheckSet::CodingStandard)
+                    .contains(QLatin1String("cppcoreguidelines-*")));
+    EXPECT_TRUE(tidyChecks(TidyCheckSet::Security)
+                    .contains(QLatin1String("clang-analyzer-security.*")));
+}
+
+TEST(Analysis, TheAllNamedSetIsTheUnionOfTheFamilies)
+{
+    const QString all = tidyChecksAllNamed();
+    for (const QString& family :
+         {QStringLiteral("readability-*"), QStringLiteral("modernize-*"),
+          QStringLiteral("bugprone-*"), QStringLiteral("clang-analyzer-*"),
+          QStringLiteral("cppcoreguidelines-*"), QStringLiteral("hicpp-*"),
+          QStringLiteral("cert-*")}) {
+        EXPECT_TRUE(all.contains(family)) << family.toStdString();
+    }
+    EXPECT_TRUE(all.startsWith(QLatin1String("-*,")));
+}
+
+TEST(Analysis, EmptyChecksLeavesTheProjectsOwnConfigurationAlone)
+{
+    // No `--checks` argument at all, not `--checks=`: an empty value would
+    // tell clang-tidy "no checks", which is the opposite of "as configured".
+    const QStringList project =
+        clangTidyArguments(QStringLiteral("a.cpp"), QStringLiteral("/build"));
+    for (const QString& argument : project) {
+        EXPECT_FALSE(argument.startsWith(QLatin1String("--checks")))
+            << argument.toStdString();
+    }
+    EXPECT_EQ(project, (QStringList{QStringLiteral("a.cpp"),
+                                    QStringLiteral("-p"),
+                                    QStringLiteral("/build")}));
+
+    const QStringList explicitSet = clangTidyArguments(
+        QStringLiteral("a.cpp"), QStringLiteral("/build"),
+        tidyChecks(TidyCheckSet::Unused));
+    // One argument, not two: `--checks` and its value must not be split, or
+    // QProcess passes them as separate argv entries and clang-tidy reads the
+    // next flag as the value.
+    const QString expected =
+        QStringLiteral("--checks=%1").arg(tidyChecks(TidyCheckSet::Unused));
+    EXPECT_TRUE(explicitSet.contains(expected)) << expected.toStdString();
+    EXPECT_TRUE(expected.contains(QLatin1String("misc-unused-*")));
+}
+
+TEST(Analysis, TheGeneratedConfigIsAReadableYamlDocument)
+{
+    const QString text = clangTidyConfigFor(tidyChecksAllNamed());
+    // Bracketed by the YAML document markers clang-format / clang-tidy both
+    // expect, or the file is parsed as a fragment and silently ignored.
+    EXPECT_TRUE(text.startsWith(QLatin1String("---")));
+    EXPECT_TRUE(text.contains(QLatin1String("...")));
+    EXPECT_TRUE(text.contains(QLatin1String("Checks: '-*,")));
+    // The comment must not be broken across a line continuation: the old
+    // version left a stray space at the start of a continued line.
+    for (const QString& line : text.split(QLatin1Char('\n'))) {
+        EXPECT_FALSE(line.startsWith(QLatin1Char(' '))) << line.toStdString();
+    }
+}

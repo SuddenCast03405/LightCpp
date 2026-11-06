@@ -12,6 +12,8 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
+#include <QSaveFile>
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
@@ -94,6 +96,66 @@ void AnalysisPanel::buildUi()
     toolRow->addWidget(stopButton_);
     toolRow->addWidget(categoryBox_, 1);
     layout->addLayout(toolRow);
+
+    // clang-tidy's rule set. The first entry keeps the project's own
+    // configuration — the historical behaviour, and what a team with a
+    // committed .clang-tidy actually wants.
+    auto* tidyRow = new QHBoxLayout();
+    tidyRow->addWidget(new QLabel(tr("clang-tidy checks:"), this));
+    checkSetBox_ = new QComboBox(this);
+    checkSetBox_->setObjectName(QStringLiteral("analysisCheckSet"));
+    for (Workbench::TidyCheckSet set :
+         {Workbench::TidyCheckSet::Project, Workbench::TidyCheckSet::Style,
+          Workbench::TidyCheckSet::Unused, Workbench::TidyCheckSet::NullPointer,
+          Workbench::TidyCheckSet::Bounds, Workbench::TidyCheckSet::Leak,
+          Workbench::TidyCheckSet::CodingStandard, Workbench::TidyCheckSet::Security}) {
+        checkSetBox_->addItem(Workbench::tidyCheckSetName(set),
+                              static_cast<int>(set));
+    }
+    tidyRow->addWidget(checkSetBox_, 1);
+    writeConfigButton_ = new QPushButton(tr("Write .clang-tidy..."), this);
+    writeConfigButton_->setObjectName(QStringLiteral("analysisWriteTidyConfig"));
+    writeConfigButton_->setStatusTip(
+        tr("Write the selected rule set into the project so every tool and "
+           "editor agrees with this panel"));
+    tidyRow->addWidget(writeConfigButton_);
+    layout->addLayout(tidyRow);
+
+    connect(writeConfigButton_, &QPushButton::clicked, this, [this] {
+        if (projectRoot_.isEmpty()) {
+            log_->appendPlainText(
+                tr("Open a project first: the file belongs at its root."));
+            return;
+        }
+        const auto set = static_cast<Workbench::TidyCheckSet>(
+            checkSetBox_->currentData().toInt());
+        const QString target = QDir(projectRoot_).filePath(
+            QStringLiteral(".clang-tidy"));
+        // Refuse to overwrite silently: a project's .clang-tidy is a
+        // reviewed file, and losing it to a menu action is unrecoverable
+        // without git.
+        if (QFileInfo::exists(target)
+            && QMessageBox::question(
+                   this, tr("Overwrite .clang-tidy?"),
+                   tr("%1 already exists. Replace it with the %2 rule set?")
+                       .arg(target, Workbench::tidyCheckSetName(set)))
+                   != QMessageBox::Yes) {
+            return;
+        }
+        QSaveFile file(target);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            log_->appendPlainText(tr("Cannot write %1").arg(target));
+            return;
+        }
+        const QString checks =
+            set == Workbench::TidyCheckSet::Project
+                ? Workbench::tidyChecksAllNamed()
+                : Workbench::tidyChecks(set);
+        file.write(Workbench::clangTidyConfigFor(checks).toUtf8());
+        if (file.commit()) {
+            log_->appendPlainText(tr("Wrote %1").arg(target));
+        }
+    });
 
     // scan-build wraps a build, so it needs to know which one. The field is
     // always visible rather than appearing with the checkbox: a user who
@@ -253,8 +315,10 @@ void AnalysisPanel::runNextTool()
         // unit. The first file's answer is enough to prove the pipeline;
         // running all of them here would serialise a build-sized workload
         // behind one button.
-        const QStringList arguments =
-            Workbench::clangTidyArguments(sourceFiles_.first(), buildDirectory_);
+        const auto set = static_cast<Workbench::TidyCheckSet>(
+            checkSetBox_->currentData().toInt());
+        const QStringList arguments = Workbench::clangTidyArguments(
+            sourceFiles_.first(), buildDirectory_, Workbench::tidyChecks(set));
         log_->appendPlainText(tr("$ clang-tidy %1").arg(arguments.join(QLatin1Char(' '))));
         process_->setWorkingDirectory(projectRoot_);
         process_->start(path, arguments);

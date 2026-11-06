@@ -22,13 +22,13 @@
 | 四、Clang 工具链集成 | 8 | 6 | 2 | 0 | 90% |
 | 五、调试器 | 34 | 33 | 0 | 1 | 95% |
 | 六、代码智能 | 23 | 20 | 0 | 3 | 87% |
-| 七、静态分析与代码质量 | 13 | 6 | 7 | 0 | 73% |
+| 七、静态分析与代码质量 | 13 | 12 | 1 | 0 | 96% |
 | 八、版本控制 | 26 | 14 | 8 | 4 | 70% |
 | 九、终端与工具集成 | 15 | 2 | 2 | 11 | 20% |
 | 十、测试 | 15 | 14 | 1 | 0 | 95% |
 | 十一、文档与帮助 | 11 | 7 | 2 | 2 | 73% |
 | 十二、Qt 生态 | 7 | 3 | 4 | 0 | 71% |
-| **合计** | **188** | **123** | **39** | **26** | **79%** |
+| **合计** | **188** | **129** | **33** | **26** | **82%** |
 
 口径说明：
 
@@ -192,23 +192,23 @@
 | `intel.nav.class` 类视图 | 实现 | View ▸ Class Browser（Ctrl+Shift+B）：左侧类型列表带过滤框，右侧成员树（名称 + 种类，签名作 tooltip），底部显示 `detail` / 基类 / 成员数；双击跳到定义。随活动标签页与 lint 刷新，答案按请求号 + 路径双重去旧 |
 | `intel.nav.callgraph` 函数调用图 | 实现 | View ▸ Call Graph（Ctrl+Alt+G）：从光标处向外走两层，边走边显示（"Walking... N function(s) so far"），完成后给出节点数与环提示；树里重复出现的节点标 `[see above]` 而不是展开第二遍；Copy DOT / Save DOT... 两个出口 |
 
-## 七、静态分析与代码质量（13 条：实现 6 / 骨架 7 / 声明 0）
+## 七、静态分析与代码质量（13 条：实现 12 / 骨架 1 / 声明 0）
 
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
 | `analysis.compiler_warnings` 编译器警告分析 | 实现 | `CompilerDiagnostics.cpp` 解析构建输出 + `parseCompilerWarnings` 归类，双击跳转 |
-| `analysis.style` 代码规范检查 | 骨架 | clang-tidy 由面板执行并按 `style-*` 归类，但 `-checks` 不指定，命中与否取决于项目的 `.clang-tidy` |
-| `analysis.unused` 未使用变量检查 | 骨架 | 同上，规则到 `Unused` 的映射齐全，规则集由项目决定 |
-| `analysis.nullptr` 空指针检查 | 骨架 | 同上，`bugprone-null` / `clang-analyzer-core.null` 映射已就位 |
-| `analysis.bounds` 数组越界检查 | 骨架 | 同上，`clang-analyzer-security.array` / `cppcoreguidelines-pro-bounds` 映射已就位 |
-| `analysis.leak` 内存泄漏检查 | 骨架 | 同上，`clang-analyzer-unix.Malloc` / `cplusplus.NewDelete` 映射已就位；非运行时检测 |
+| `analysis.style` 代码规范检查 | 实现 | 面板 "clang-tidy checks" 下拉的 Style 项：`--checks=-*,readability-*,modernize-*,misc-*,bugprone-*` |
+| `analysis.unused` 未使用变量检查 | 实现 | Unused 项：`-*,misc-unused-*,bugprone-unused-*` |
+| `analysis.nullptr` 空指针检查 | 实现 | Null pointer 项：`bugprone-null*` / `bugprone-dereference` / `clang-analyzer-core.NullDereference` |
+| `analysis.bounds` 数组越界检查 | 实现 | Bounds 项：`bugprone-out-of-bounds` / `clang-analyzer-security.ArrayBound` / `cppcoreguidelines-pro-bounds-*` |
+| `analysis.leak` 内存泄漏检查 | 实现 | Leak 项：`clang-analyzer-unix.Malloc` / `cplusplus.NewDelete(Leaks)`；静态检测，非运行时 |
 | `analysis.cppcheck` Cppcheck | 实现 | Analysis 面板调用 `cppcheck --xml --xml-version=2`，XML 与文本两种输出都解析 |
 | `analysis.clang_sa` Clang Static Analyzer | 实现 | Analysis 面板 scan-build 复选框：用 “Build command” 字段包住构建（`--status-bugs -- <cmd>`）。构建命令为空时拒绝运行而不是猜——包错命令会产出空报告，和"没有缺陷"长得一样 |
 | `analysis.pvs` PVS-Studio | 实现 | 面板 PVS-Studio 复选框：读项目根下 `pvs.log` 调 `pvs-studio-analyzer analyze --output-format text`；日志不存在时明确提示先用 `trace` 生成，而不是静默跳过 |
 | `analysis.coverity` Coverity | 实现 | 面板 Coverity 复选框：`cov-build --dir cov-int -- <cmd> && cov-analyze --all && cov-format-errors --all --csv-output`，CSV 解析失败时退回控制台文本 |
 | `analysis.complexity` 复杂度分析 | 实现 | 本地扫描（先剔除注释与字符串）计算 1+if/for/while/case/catch/&&/||/?:，超阈值入表 |
-| `analysis.coding_standard` 编码规范检查 | 骨架 | `cppcoreguidelines-*` / `hicpp-*` / `cert-*` 归到 CodingStandard，但无规则集选择与基线管理 |
-| `analysis.security` 安全漏洞检查 | 骨架 | `cert-*` / `clang-analyzer-security.*` 归到 Security，无独立扫描器 |
+| `analysis.coding_standard` 编码规范检查 | 实现 | Coding standard 项：`cppcoreguidelines-*` / `hicpp-*` / `cert-*`；"Write .clang-tidy..." 把规则集落盘成项目基线（已存在时先确认覆盖） |
+| `analysis.security` 安全漏洞检查 | 实现 | Security 项：`cert-*` / `clang-analyzer-security.*` / `bugprone-signal-handler` / `bugprone-signed-char-misuse` |
 
 ## 八、版本控制（26 条：实现 14 / 骨架 8 / 声明 4）
 
@@ -399,7 +399,8 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `MainWindow.cpp` View ▸ Class Browser | 类型列表 + 过滤 + 成员树 + 定位；随标签页/lint 刷新 | 5 |
 | `MainWindow.cpp` View ▸ Call Graph | 逐层走调用、实时进度、DOT 剪贴板/落盘、双击跳转 | 5 |
 | `AnalysisPanel.cpp` + `ToolchainPaths` | scan-build / PVS-Studio / Coverity 三个运行入口 | 5 |
+| `AnalysisReport` 规则集 | `tidyChecks` / `tidyChecksAllNamed` / `clangTidyConfigFor` + 面板下拉与落盘 | 5 |
 | `Workbench/Lsp::{parseHover,typeHintFromHover}` + 悬停提示 | 三种 contents 形态归一、类型推导、签名/文档分栏渲染 | 11 |
 | `MainWindow.cpp` Debug ▸ Symbol Settings | 映射树 + 路径列表 + `Debug::describe()` 摘要；会话 `started` 时下发 | — |
 
-单元测试从 781 增至 **911**（本轮新增 130 个），`100% tests passed`。
+单元测试从 781 增至 **916**（本轮新增 135 个），`100% tests passed`。

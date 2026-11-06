@@ -57,6 +57,12 @@ private:
     QCheckBox* coverityBox_ = nullptr;
     QCheckBox* complexityBox_ = nullptr;
     QComboBox* categoryBox_ = nullptr;
+    /// Which family of clang-tidy checks to ask for. Without this the run
+    /// inherits whatever the project's .clang-tidy says, which is why the
+    /// style / unused / null-pointer rows of the plan used to depend on the
+    /// project rather than on the IDE.
+    QComboBox* checkSetBox_ = nullptr;
+    QPushButton* writeConfigButton_ = nullptr;
     QPushButton* runButton_ = nullptr;
     QPushButton* stopButton_ = nullptr;
     QTreeWidget* tree_ = nullptr;

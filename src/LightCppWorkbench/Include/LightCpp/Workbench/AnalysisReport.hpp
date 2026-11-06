@@ -121,8 +121,40 @@ struct AnalysisReport {
 /// The arguments each tool needs to produce parsable output.
 [[nodiscard]] QStringList cppcheckArguments(const QStringList& paths,
                                             const QString& compileCommandsDir);
+/// Which family of clang-tidy checks to ask for. The plan names the checks
+/// it wants in prose (style / unused / null pointer / bounds / leak /
+/// coding standard / security); these are those sentences as `-checks`
+/// globs. Without this the answer depends entirely on the project's own
+/// `.clang-tidy`, which is how six rows of §七 ended up "mapped but never
+/// asked for".
+enum class TidyCheckSet {
+    Project,        ///< no -checks: whatever .clang-tidy says (the default)
+    Style,          ///< readability / modernize / misc / bugprone
+    Unused,         ///< misc-unused, bugprone-unused*
+    NullPointer,    ///< bugprone-null*, bugprone-dereference, analyzer null
+    Bounds,         ///< bugprone-out-of-bounds, analyzer array, cppcore bounds
+    Leak,           ///< analyzer unix.Malloc / cplusplus.NewDelete, leak checks
+    CodingStandard, ///< cppcoreguidelines / hicpp / cert
+    Security,       ///< cert / analyzer security / bugprone-signal-handler
+};
+
+[[nodiscard]] QString tidyCheckSetName(TidyCheckSet set);
+/// The `-checks=` value for a set. Always leads with `-*` so the answer is
+/// the set the user picked, not the set plus whatever the project added.
+[[nodiscard]] QString tidyChecks(TidyCheckSet set);
+/// Everything the plan's categories name, as one run.
+[[nodiscard]] QString tidyChecksAllNamed();
+
+/// clang-tidy arguments for one file. `checks` is appended only when it is
+/// non-empty, so callers that want the project's own configuration pass "".
 [[nodiscard]] QStringList clangTidyArguments(const QString& file,
-                                             const QString& buildDirectory);
+                                             const QString& buildDirectory,
+                                             const QString& checks = QString());
+
+/// A `.clang-tidy` document carrying `checks` (plus the header fields a
+/// generated file should always have). Returning the text rather than
+/// writing it keeps the decision of where it goes with the caller.
+[[nodiscard]] QString clangTidyConfigFor(const QString& checks);
 [[nodiscard]] QStringList scanBuildArguments(const QString& buildCommand);
 
 // ---------------------------------------------------------------------------
