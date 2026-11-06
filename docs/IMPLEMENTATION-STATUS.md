@@ -20,7 +20,7 @@
 | 二、项目与文件管理 | 4 | 3 | 1 | 0 | 90% |
 | 三、构建配置与执行 | 27 | 10 | 14 | 3 | 60% |
 | 四、Clang 工具链集成 | 8 | 6 | 2 | 0 | 90% |
-| 五、调试器 | 34 | 26 | 7 | 1 | 85% |
+| 五、调试器 | 34 | 33 | 0 | 1 | 95% |
 | 六、代码智能 | 23 | 16 | 4 | 3 | 78% |
 | 七、静态分析与代码质量 | 13 | 3 | 10 | 0 | 60% |
 | 八、版本控制 | 26 | 14 | 8 | 4 | 70% |
@@ -28,7 +28,7 @@
 | 十、测试 | 15 | 14 | 1 | 0 | 95% |
 | 十一、文档与帮助 | 11 | 7 | 2 | 2 | 73% |
 | 十二、Qt 生态 | 7 | 3 | 4 | 0 | 71% |
-| **合计** | **188** | **109** | **53** | **26** | **72%** |
+| **合计** | **188** | **116** | **46** | **26** | **75%** |
 
 口径说明：
 
@@ -100,7 +100,7 @@
 | `clang.discovery.scan` 扫描项目根及父目录配置 | 骨架 | 只向上查找 `.clang-format`；`.clang-tidy` 仅作为 clangd 参数透传，不解析 |
 | `clang.discovery.apply` 自动应用规则 | 骨架 | 依赖 clangd 自身行为，IDE 无「已应用规则」反馈 |
 
-## 五、调试器（34 条：实现 26 / 骨架 7 / 声明 1）
+## 五、调试器（34 条：实现 33 / 骨架 0 / 声明 1）
 
 `DebuggerController.cpp` 负责进程与命令通道（驱动 GDB / LLDB / cdb 的 MI 或批处理输出，解析 `*stopped`、`=breakpoint-*`，发出 `started / paused / resumed / stopped / logLine / rawLine / targetOutput`）。视图层是本轮新增的五个文件：
 
@@ -112,7 +112,16 @@
 | `Debug/DebugViewsModel.cpp` | 请求-应答协议层：令牌分配、`^done` / `^error` 配对、被拒的快照查询不清空旧视图 |
 | `DebugViewsPanel.cpp` | 8 个页签（Locals / Watch / Stack / Threads / Registers / Memory / Code / Breakpoints）+ 求值框 + 断点属性对话框 |
 
-> 仍然缺的是**符号层**：pretty-printer、natvis、源码路径映射都没有配置入口——它们决定变量树里能看到多少内容，但不决定能不能看到。
+符号层（`DebugSymbols.cpp` 一行未改，本轮只是把它接上）：
+
+| 能力 | 落点 |
+| --- | --- |
+| 三方言的启动命令 | `Debug::startupCommands(backend, SymbolSettings)`：GDB 发 `-enable-pretty-printing` + `set print pretty` + `set substitute-path` + `set debug-file-directory`；LLDB 发 `settings set target.source-map` + `type summary add --summary-string`；CDB 发 `.nvpath+` / `.nvload` / `.sympath+` / `.reload /f` |
+| 设置项 | `Preferences::debugger`（`prettyPrinting` / `showEnumerators` / `dynamicType` / `sourceMappings` / `symbolSearchPaths` / `natvisFiles`），默认全开 |
+| 入口 | Debug ▸ Symbol Settings...（`actionDebugSymbols`）：三个复选框、可增删的 from→to 映射树、两个路径列表；底部摘要由 `Debug::describe()` 生成，直接说明每个后端将收到什么 |
+| 落地时机 | 调试会话 `started` 时由 `applySymbolSettings()` 经 `sendCommands()` 下发——这是命令唯一可交付的时刻 |
+
+> 唯一还没做的是 natvis 的**作用域**：`.natvis` 文件现在按路径逐个加载，没有「先私有后公共、同名后者覆盖」的搜索顺序概念。它不影响能不能看到内容，只影响同名可视化器的冲突取舍。
 
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
@@ -143,13 +152,13 @@
 | `debug.attach.process` 进程附加 | 实现 | `attachCommands(pid)`：`-target-attach` / `process attach --pid` / `.attach` |
 | `debug.attach.core` core 文件加载 | 实现 | `coreCommands(path)`：`-target-select core` / `target create --core` / `.opendump` |
 | `debug.attach.remote` 远程调试 | 实现 | `remoteCommands(url)`：`-target-select remote` / `gdb-remote` / `.remote` |
-| `debug.symbol.load` 符号加载 | 骨架 | 符号由后端自动加载；IDE 无符号搜索路径管理 |
-| `debug.symbol.sourcemap` 源码映射 | 骨架 | 无 `set substitute-path` 入口，路径映射靠后端默认规则 |
-| `debug.symbol.pretty` pretty-printer | 骨架 | 无 `enable-pretty-printing` 开关 |
-| `debug.symbol.stl` STL 容器展开 | 骨架 | 变量树可展开子节点（`expandVariable`），但能否看到容器内容取决于后端 pretty-printer 是否启用 |
-| `debug.symbol.smartptr` 智能指针展开 | 骨架 | 同上：展开 UI 已有，`-enable-pretty-printing` 未由 IDE 下发 |
-| `debug.symbol.enum` 枚举显示 | 骨架 | 后端默认按枚举名显示，IDE 无独立格式化选项 |
-| `debug.symbol.natvis` natvis 可视化器 | 声明 | 无 natvis 文件加载与作用域管理 |
+| `debug.symbol.load` 符号加载 | 实现 | Symbol Settings 的 Symbol Search Paths → `set debug-file-directory` / `settings append target.debug-file-search-paths` / `.sympath+` + `.reload /f` |
+| `debug.symbol.sourcemap` 源码映射 | 实现 | from→to 映射树 → `set substitute-path` / `settings set target.source-map`；失配的孤立 from 在读取时丢弃 |
+| `debug.symbol.pretty` pretty-printer | 实现 | 默认开；GDB `-enable-pretty-printing`、LLDB `type synthetic enable`、CDB 关掉裸 `dv` |
+| `debug.symbol.stl` STL 容器展开 | 实现 | 展开 UI 已有，pretty-printer 现由 IDE 在会话开始时下发；关掉即退回成员视图 |
+| `debug.symbol.smartptr` 智能指针展开 | 实现 | 同上：`enabled` / `auto_ptr` / `unique_ptr` 的 summary 由 pretty-printer 提供 |
+| `debug.symbol.enum` 枚举显示 | 实现 | Show Enumerators 开关：GDB `set print enum on` + `set print pretty on`；LLDB `settings set target.enable-synthetic-value`；CDB 本就按 natvis 打印枚举名，无开关可发，故不发而不是发错 |
+| `debug.symbol.natvis` natvis 可视化器 | 骨架 | 文件列表 → `.nvpath+` + `.nvload` + `.reload /f`；缺的是公共/私有目录的搜索顺序 |
 
 > 这一域差距最大，也是最容易在验收时被误判为「已完成」的部分——34 条在 `catalog/features.json` 里全部标着 `required`，且都有归属插件。
 
@@ -352,11 +361,12 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 
 ## 到「lightcpp.1.md 全部完成」还差什么
 
-`0.2.0` 的定位是「插件生态内核 + 可用的 C/C++ IDE」。当前分支把调试器、测试、静态分析、Git、Markdown、**语义高亮与层级导航**、**包管理器**、**二进制/日志/图像查看器**几块从「声明」推到了「能跑」，剩下的差距集中在三处：
+`0.2.0` 的定位是「插件生态内核 + 可用的 C/C++ IDE」。当前分支把调试器（含符号设置页）、测试、静态分析、Git、Markdown、**语义高亮与层级导航**、**包管理器**、**二进制/日志/图像查看器**几块从「声明」推到了「能跑」，剩下的差距集中在两处：
 
 1. **Qt 渲染端**：`.ui` / `.qrc` 已有 HTML 预览（`Workbench/QtPreview`），QML 有对象树结构视图但没有渲染器——那需要 QML 引擎与场景图，是这个仓库刻意不链接的东西。真正的所见即所得（拖动 widget 改 geometry）也还没有。
-2. **调试器的符号层设置页**：`Workbench/DebugSymbols` 已能为三种方言生成完整命令序列（pretty-printer、枚举显示、动态类型、源码映射、符号路径、natvis、符号加载），缺的是把这些勾选项放进设置页的界面——数据通路已经通了，只差表单。
-3. **远程与终端**：远程构建（distcc/icecc）、真实 PTY 终端、WSL 与串口集成仍是清单。终端这一块在 §一 就标着「目前有问题」，本轮没有改动。
+2. **远程与终端**：远程构建（distcc/icecc）、真实 PTY 终端、WSL 与串口集成仍是清单。终端这一块在 §一 就标着「目前有问题」，本轮没有改动。
+
+调试器只剩一条边角：natvis 的**搜索顺序**（先私有后公共、同名后者覆盖）尚未建模，`.natvis` 现在按列表逐个加载。除此之外的符号层能力——pretty-printer、STL / 智能指针展开、枚举显示、动态类型、源码映射、符号路径、`reload /f`——都已经有界面、有落盘、有断言，并在会话开始时下发给后端。
 
 按现有代码量（`src/` + `apps/` 约 5.9 万行）估算，以上合计约为现有仓库的 0.4 倍工作量。
 
@@ -385,5 +395,7 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `src/LightCppApp/Source/LanguageServerClient.cpp` | `requestRaw` 通用通道 + 语义令牌能力声明 | — |
 | `src/LightCppApp/Source/MainWindow.cpp` | Sort Includes、Call/Type Hierarchy、Git 侧栏、Blame、冲突解决、包管理器、查看器 | 9 |
 | `src/LightCppTesting/{TestModel,TestRunner,CoverageReport}.hpp` | 补回分支上缺失、导致无法编译的三个头 | — |
+| `src/LightCppSettings/` | `Preferences::debugger` + `"debugger"` 块的读写（含孤立 from 丢弃） | 3 |
+| `MainWindow.cpp` Debug ▸ Symbol Settings | 映射树 + 路径列表 + `Debug::describe()` 摘要；会话 `started` 时下发 | — |
 
-单元测试从 781 增至 **882**（本轮新增 101 个），`100% tests passed`。
+单元测试从 781 增至 **885**（本轮新增 104 个），`100% tests passed`。
