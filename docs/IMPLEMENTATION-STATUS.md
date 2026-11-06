@@ -24,11 +24,11 @@
 | 六、代码智能 | 23 | 20 | 0 | 3 | 87% |
 | 七、静态分析与代码质量 | 13 | 12 | 1 | 0 | 96% |
 | 八、版本控制 | 26 | 14 | 8 | 4 | 70% |
-| 九、终端与工具集成 | 15 | 10 | 1 | 4 | 70% |
+| 九、终端与工具集成 | 15 | 11 | 0 | 4 | 73% |
 | 十、测试 | 15 | 14 | 1 | 0 | 95% |
 | 十一、文档与帮助 | 11 | 7 | 2 | 2 | 73% |
 | 十二、Qt 生态 | 7 | 3 | 4 | 0 | 71% |
-| **合计** | **188** | **137** | **32** | **19** | **84%** |
+| **合计** | **188** | **138** | **31** | **19** | **84%** |
 
 口径说明：
 
@@ -243,7 +243,7 @@
 | `git.commit.gpg` GPG 签名 | 声明 | 交给系统 git 配置 |
 | `git.auth.ssh_https` SSH / HTTPS 认证 | 声明 | 交给系统 git 凭据助手 |
 
-## 九、终端与工具集成（15 条：实现 10 / 骨架 1 / 声明 4）
+## 九、终端与工具集成（15 条：实现 11 / 骨架 0 / 声明 4）
 
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
@@ -252,7 +252,7 @@
 | `tool.launch` 调试程序（插件） | 骨架 | 交给 `DebuggerController`，受第五节限制 |
 | `tool.palette` 命令面板 | 实现 | `CommandPalette`：Ctrl+Shift+P，子序列模糊打分（连续命中 +8、词首 +6/+12、长度惩罚） |
 | `tool.external` 外部工具配置 | 实现 | Tools ▸ External Tools：菜单由 `Preferences::externalTools` 生成；每个工具含名称 / 命令 / 参数模板 / 工作目录 / 是否捕获输出 / 运行前是否确认。`Workbench/ExternalTools` 负责模板展开与按 shell 转义（POSIX 单引号 + `'\''`，cmd 双引号 + `%%`），未知 `${...}` 原样保留以免吃掉 `$HOME`；占位符无值时拒绝运行而不是展开成空串 |
-| `tool.shell` Shell 集成 | 骨架 | 屏幕模型能给出当前提示行（`Emulator::currentLine()`），但还没有 OSC 133 提示符标记的解析与命令历史同步——这是接下来这一域唯一剩下的一项 |
+| `tool.shell` Shell 集成 | 实现 | `Workbench/ShellIntegration`：OSC 133 的 A/B/C/D 四种标记解析、命令记录（含退出码）、"上一条命令" / "最近一次失败" / "按行区间找提示符"、提示行按标记切成提示与命令两段。`D` 不带码时记 -1 而不是 0 —— 把"没说"当成功会让每条失败命令都显示通过 |
 | `tool.pkg.vcpkg` vcpkg | 实现 | Tools ▸ Package Manager：`vcpkg list/search/install/remove`，triplet 归一化，可注入 CMake 参数 |
 | `tool.pkg.conan` conan | 实现 | 同上：Conan 2 的 `conan list/search/install/remove` 与 `--output-folder` 集成 |
 | `tool.pkg.hunter` Hunter | 实现 | 同上：Hunter 由 CMake 驱动，面板给出 `HUNTER_ROOT` 与 toolchain 提示 |
@@ -402,7 +402,8 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `AnalysisReport` 规则集 | `tidyChecks` / `tidyChecksAllNamed` / `clangTidyConfigFor` + 面板下拉与落盘 | 5 |
 | `Workbench/ExternalTools` + 工具对话框 | 模板展开、两种 shell 的转义、id 生成、工作目录回落 | 13 |
 | `Workbench/TerminalEmulator` | 终端屏幕模型（转义序列、UTF-8、宽字符、滚动、备用屏） | 22 |
+| `Workbench/ShellIntegration` | OSC 133 标记、命令记录与历史、提示行切分 | 11 |
 | `Workbench/Lsp::{parseHover,typeHintFromHover}` + 悬停提示 | 三种 contents 形态归一、类型推导、签名/文档分栏渲染 | 11 |
 | `MainWindow.cpp` Debug ▸ Symbol Settings | 映射树 + 路径列表 + `Debug::describe()` 摘要；会话 `started` 时下发 | — |
 
-单元测试从 781 增至 **951**（本轮新增 170 个），`100% tests passed`。
+单元测试从 781 增至 **962**（本轮新增 181 个），`100% tests passed`。

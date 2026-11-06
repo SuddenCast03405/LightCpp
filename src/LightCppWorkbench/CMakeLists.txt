@@ -30,6 +30,8 @@
 #                              and the quoting each shell needs.
 #   Source/TerminalEmulator.cpp the terminal's screen model (§九): CSI/OSC,
 #                              UTF-8 across chunks, scrollback.
+#   Source/ShellIntegration.cpp the prompt marks (§九): OSC 133 parsing and
+#                              the command history it produces.
 
 add_library(LightCppWorkbench STATIC
     Source/AnalysisReport.cpp
@@ -45,6 +47,7 @@ add_library(LightCppWorkbench STATIC
     Source/PackageManager.cpp
     Source/QtPreview.cpp
     Source/QtProjectFiles.cpp
+    Source/ShellIntegration.cpp
     Source/TerminalEmulator.cpp
     Source/Viewers.cpp
 )

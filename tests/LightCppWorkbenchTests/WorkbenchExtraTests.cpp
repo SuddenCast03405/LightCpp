@@ -19,6 +19,7 @@
 #include "LightCpp/Workbench/PackageManager.hpp"
 #include "LightCpp/Workbench/QtPreview.hpp"
 #include "LightCpp/Workbench/QtProjectFiles.hpp"
+#include "LightCpp/Workbench/ShellIntegration.hpp"
 #include "LightCpp/Workbench/TerminalEmulator.hpp"
 #include "LightCpp/Workbench/Viewers.hpp"
 
@@ -2209,4 +2210,180 @@ TEST(TerminalModel, BracketedPasteAndApplicationCursorKeysAreTracked)
     type(emulator, QStringLiteral("\x1b[?2004h\x1b[?1h"));
     EXPECT_TRUE(emulator.bracketedPaste());
     EXPECT_TRUE(emulator.cursorKeysApplicationMode());
+}
+
+// ---------------------------------------------------------------------------
+// Shell integration: OSC 133 marks, and what they let a terminal answer
+// ---------------------------------------------------------------------------
+
+namespace {
+
+namespace Sh = LightCpp::Workbench::Shell;
+
+Sh::Mark markOf(Sh::Mark::Kind kind, int row, int exitCode = -1)
+{
+    Sh::Mark mark;
+    mark.kind = kind;
+    mark.row = row;
+    mark.exitCode = exitCode;
+    return mark;
+}
+
+}  // namespace
+
+TEST(ShellIntegration, TheFourMarksParseFromTheirPayloads)
+{
+    Sh::Mark mark;
+    ASSERT_TRUE(Sh::parseOsc133(QStringLiteral("A"), 3, &mark));
+    EXPECT_EQ(mark.kind, Sh::Mark::Kind::PromptStart);
+    EXPECT_EQ(mark.row, 3);
+
+    ASSERT_TRUE(Sh::parseOsc133(QStringLiteral("B"), 3, &mark));
+    EXPECT_EQ(mark.kind, Sh::Mark::Kind::PromptEnd);
+
+    ASSERT_TRUE(Sh::parseOsc133(QStringLiteral("C"), 4, &mark));
+    EXPECT_EQ(mark.kind, Sh::Mark::Kind::CommandStart);
+
+    ASSERT_TRUE(Sh::parseOsc133(QStringLiteral("D;0"), 4, &mark));
+    EXPECT_EQ(mark.kind, Sh::Mark::Kind::CommandEnd);
+    EXPECT_EQ(mark.exitCode, 0);
+    ASSERT_TRUE(Sh::parseOsc133(QStringLiteral("D;127"), 5, &mark));
+    EXPECT_EQ(mark.exitCode, 127);
+}
+
+TEST(ShellIntegration, AFailureAndANonFailureAreDifferentAnswers)
+{
+    // `D` with no code is the shell saying nothing, not saying "success".
+    // Treating it as 0 would report every failed command as passed.
+    Sh::Mark mark;
+    ASSERT_TRUE(Sh::parseOsc133(QStringLiteral("D"), 1, &mark));
+    EXPECT_EQ(mark.exitCode, -1);
+
+    Sh::Tracker tracker;
+    tracker.feed(markOf(Sh::Mark::Kind::PromptStart, 0));
+    tracker.feed(markOf(Sh::Mark::Kind::CommandStart, 0));
+    tracker.feed(mark);
+    ASSERT_EQ(tracker.commands().size(), 1);
+    EXPECT_EQ(tracker.commands().first().exitCode, -1);
+}
+
+TEST(ShellIntegration, TheWholePayloadWithItsPrefixIsAlsoAccepted)
+{
+    // Whether the caller strips "133;" is an implementation detail of the
+    // caller; both spellings must work.
+    Sh::Mark mark;
+    EXPECT_TRUE(Sh::parseOsc133(QStringLiteral("133;A"), 0, &mark));
+    EXPECT_EQ(mark.kind, Sh::Mark::Kind::PromptStart);
+}
+
+TEST(ShellIntegration, NonMarkOscPayloadsAreRefused)
+{
+    // OSC 133 shares its channel with titles and hyperlinks; a parser that
+    // accepts everything here turns a window title into a prompt mark.
+    Sh::Mark mark;
+    EXPECT_FALSE(Sh::parseOsc133(QStringLiteral("0;my title"), 0, &mark));
+    EXPECT_FALSE(Sh::parseOsc133(QStringLiteral("8;;http://x"), 0, &mark));
+    EXPECT_FALSE(Sh::parseOsc133(QStringLiteral("P;Cwd=/tmp"), 0, &mark));
+    EXPECT_FALSE(Sh::parseOsc133(QString(), 0, &mark));
+}
+
+TEST(ShellIntegration, ACompleteCommandBecomesOneRecord)
+{
+    Sh::Tracker tracker;
+    tracker.feed(markOf(Sh::Mark::Kind::PromptStart, 0));
+    tracker.feed(markOf(Sh::Mark::Kind::PromptEnd, 0));
+    tracker.feed(markOf(Sh::Mark::Kind::CommandStart, 0));
+    // The finish mark is on row 1 and reports exit status 1.
+    tracker.feed(markOf(Sh::Mark::Kind::CommandEnd, 1, 1));
+    tracker.feed(markOf(Sh::Mark::Kind::PromptStart, 2));
+
+    ASSERT_EQ(tracker.commands().size(), 1);
+    const Sh::CommandRecord record = tracker.lastCommand();
+    // The record's prompt row is the row the *mark* was on, which here is 0.
+    EXPECT_EQ(record.promptRow, 0);
+    EXPECT_EQ(record.commandRow, 0);
+    EXPECT_EQ(record.exitCode, 1);
+    EXPECT_TRUE(record.finished);
+    // The new prompt is open and nothing is running.
+    EXPECT_EQ(tracker.currentPromptRow(), 2);
+    EXPECT_FALSE(tracker.isCommandRunning());
+}
+
+TEST(ShellIntegration, ACommandInFlightIsNotYetACommand)
+{
+    Sh::Tracker tracker;
+    tracker.feed(markOf(Sh::Mark::Kind::PromptStart, 0));
+    tracker.feed(markOf(Sh::Mark::Kind::CommandStart, 0));
+    EXPECT_TRUE(tracker.isCommandRunning());
+    EXPECT_TRUE(tracker.commands().isEmpty());
+    // lastCommand() of an empty history is a default record, flagged by
+    // `finished` being false rather than by a sentinel exit code.
+    EXPECT_FALSE(tracker.lastCommand().finished);
+}
+
+TEST(ShellIntegration, AnOutOfOrderFinishIsIgnored)
+{
+    // Integration installed mid-session: the shell emits `D` for a command
+    // whose `C` was never seen. Recording it would give a command with no
+    // start row, which the "jump to prompt" logic would then chase.
+    Sh::Tracker tracker;
+    tracker.feed(markOf(Sh::Mark::Kind::CommandEnd, 4, 0));
+    EXPECT_TRUE(tracker.commands().isEmpty());
+    EXPECT_FALSE(tracker.isCommandRunning());
+}
+
+TEST(ShellIntegration, SuccessIsNotAFailure)
+{
+    Sh::Tracker tracker;
+    for (int i = 0; i < 3; ++i) {
+        tracker.feed(markOf(Sh::Mark::Kind::PromptStart, i * 2));
+        tracker.feed(markOf(Sh::Mark::Kind::CommandStart, i * 2));
+        tracker.feed(markOf(Sh::Mark::Kind::CommandEnd, i * 2 + 1, i == 1 ? 2 : 0));
+    }
+    EXPECT_EQ(tracker.commands().size(), 3);
+    const Sh::CommandRecord failure = tracker.lastFailure();
+    EXPECT_TRUE(failure.finished);
+    EXPECT_EQ(failure.exitCode, 2);
+    EXPECT_EQ(failure.promptRow, 2);
+}
+
+TEST(ShellIntegration, HistoryIsCappedAndTheOldestGoesFirst)
+{
+    Sh::Tracker tracker;
+    tracker.setHistoryLimit(2);
+    for (int i = 0; i < 5; ++i) {
+        tracker.feed(markOf(Sh::Mark::Kind::PromptStart, i));
+        tracker.feed(markOf(Sh::Mark::Kind::CommandStart, i));
+        tracker.feed(markOf(Sh::Mark::Kind::CommandEnd, i, i));
+    }
+    ASSERT_EQ(tracker.commands().size(), 2);
+    EXPECT_EQ(tracker.commands().first().exitCode, 3);
+    EXPECT_EQ(tracker.commands().last().exitCode, 4);
+}
+
+TEST(ShellIntegration, PromptRowsAreFoundForJumping)
+{
+    Sh::Tracker tracker;
+    for (int row = 0; row < 10; row += 3) {
+        tracker.feed(markOf(Sh::Mark::Kind::PromptStart, row));
+        tracker.feed(markOf(Sh::Mark::Kind::CommandStart, row));
+        tracker.feed(markOf(Sh::Mark::Kind::CommandEnd, row + 1, 0));
+    }
+    // Rows 3, 6, 9 — the prompt at 0 is outside the requested window.
+    EXPECT_EQ(tracker.promptRowsBetween(2, 9), (QList<int>{3, 6, 9}));
+    // Reversed bounds are the same window.
+    EXPECT_EQ(tracker.promptRowsBetween(9, 2), (QList<int>{3, 6, 9}));
+}
+
+TEST(ShellIntegration, SplittingAPromptLineAtTheMarkGivesTheTypedCommand)
+{
+    // `CSI 133;B` records a column, not a text; the split is how "what is the
+    // user typing" is answered without re-parsing the shell's prompt.
+    const QString line = QStringLiteral("me@box:~/src$ make -j4");
+    // "me@box:~/src$ " is 14 characters, so the command starts at column 14.
+    EXPECT_EQ(Sh::promptText(line, 14), QStringLiteral("me@box:~/src$ "));
+    EXPECT_EQ(Sh::commandText(line, 14), QStringLiteral("make -j4"));
+    // A mark beyond the line (after a resize) is clamped, not trusted.
+    EXPECT_EQ(Sh::commandText(line, 999), QString());
+    EXPECT_EQ(Sh::promptText(line, 999), line);
 }
