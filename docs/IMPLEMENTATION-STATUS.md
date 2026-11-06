@@ -21,14 +21,14 @@
 | 三、构建配置与执行 | 27 | 10 | 14 | 3 | 60% |
 | 四、Clang 工具链集成 | 8 | 6 | 2 | 0 | 90% |
 | 五、调试器 | 34 | 33 | 0 | 1 | 95% |
-| 六、代码智能 | 23 | 18 | 2 | 3 | 83% |
+| 六、代码智能 | 23 | 20 | 0 | 3 | 87% |
 | 七、静态分析与代码质量 | 13 | 3 | 10 | 0 | 60% |
 | 八、版本控制 | 26 | 14 | 8 | 4 | 70% |
 | 九、终端与工具集成 | 15 | 2 | 2 | 11 | 20% |
 | 十、测试 | 15 | 14 | 1 | 0 | 95% |
 | 十一、文档与帮助 | 11 | 7 | 2 | 2 | 73% |
 | 十二、Qt 生态 | 7 | 3 | 4 | 0 | 71% |
-| **合计** | **188** | **118** | **44** | **26** | **76%** |
+| **合计** | **188** | **120** | **42** | **26** | **77%** |
 
 口径说明：
 
@@ -162,7 +162,7 @@
 
 > 这一域差距最大，也是最容易在验收时被误判为「已完成」的部分——34 条在 `catalog/features.json` 里全部标着 `required`，且都有归属插件。
 
-## 六、代码智能（23 条：实现 18 / 骨架 2 / 声明 3）
+## 六、代码智能（23 条：实现 20 / 骨架 0 / 声明 3）
 
 主干是 clangd（LSP 客户端，`LanguageServerClient.cpp` 1455 行）＋ libclang 兜底补全（`LibClangCompleter.cpp`）。
 
@@ -179,10 +179,10 @@
 | `intel.format` 代码格式化 | 实现 | `textDocument/formatting` |
 | `intel.nav.code` 代码导航 | 实现 | 定义 / 引用 / 实现跳转的组合 |
 | `intel.rename` 重命名 | 实现 | `rename` 请求 + `applyWorkspaceEdits` 自底向上应用，未打开的文件计入跳过数并报告 |
-| `intel.include.completion` Include 补全 | 骨架 | 依赖 clangd 内建，无独立补全源 |
-| `intel.type.hint` 类型推导提示 | 骨架 | 仅在悬停文本中体现 |
+| `intel.include.completion` Include 补全 | 骨架 | 依赖 clangd 内建，无独立补全源——`#include` 位置走的是同一套 completion 通道，所以能补，但没有专门的引号内路径补全（含目录列举） |
+| `intel.type.hint` 类型推导提示 | 实现 | 悬停提示第二行：`Workbench/Lsp::typeHintFromHover` 从声明里剥掉声明符得到类型名（`std::map<std::string, Widget> byName` → `std::map<std::string, Widget>`）；函数声明、类声明、带初始化器的声明一律不给提示——给错比不给更糟 |
 | `intel.nav.outline` 代码大纲 | 实现 | Outline 侧栏 + 面包屑 + Ctrl+Shift+O 符号搜索 |
-| `intel.nav.doc` 文档注释预览 | 骨架 | 悬停正文中包含注释 |
+| `intel.nav.doc` 文档注释预览 | 实现 | 悬停提示把签名（等宽）与注释（正文字体）分开渲染，而不是把原始 Markdown 直接贴出来；超过 800 字截断。`parseHover` 接受协议允许的三种 `contents` 形态（字符串 / `{language, value}` / 混合数组）并统一成一个 Markdown |
 | `intel.include.sort` Include 排序 | 实现 | Edit > Sort Includes，`Workbench/EditorTools::sortIncludes` 不跨空行/条件编译/缩进变化 |
 | `intel.macro.expand` 宏展开 | 声明 | 无 |
 | `intel.highlight.semantic` 语义高亮 | 实现 | `semanticTokens/full` + legend 缓存 + `decodeSemanticTokens`，在词法色之上叠一层前景色 |
@@ -398,6 +398,7 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `src/LightCppSettings/` | `Preferences::debugger` + `"debugger"` 块的读写（含孤立 from 丢弃） | 3 |
 | `MainWindow.cpp` View ▸ Class Browser | 类型列表 + 过滤 + 成员树 + 定位；随标签页/lint 刷新 | 5 |
 | `MainWindow.cpp` View ▸ Call Graph | 逐层走调用、实时进度、DOT 剪贴板/落盘、双击跳转 | 5 |
+| `Workbench/Lsp::{parseHover,typeHintFromHover}` + 悬停提示 | 三种 contents 形态归一、类型推导、签名/文档分栏渲染 | 11 |
 | `MainWindow.cpp` Debug ▸ Symbol Settings | 映射树 + 路径列表 + `Debug::describe()` 摘要；会话 `started` 时下发 | — |
 
-单元测试从 781 增至 **895**（本轮新增 114 个），`100% tests passed`。
+单元测试从 781 增至 **906**（本轮新增 125 个），`100% tests passed`。

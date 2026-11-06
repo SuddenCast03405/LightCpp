@@ -197,6 +197,68 @@ struct CallEdge {
 [[nodiscard]] QString pathFromUri(const QString& uri);
 
 // ---------------------------------------------------------------------------
+// Hover
+// ---------------------------------------------------------------------------
+
+/// A decoded `textDocument/hover` answer.
+///
+/// The protocol allows `contents` to be a string, a `{language, value}`
+/// MarkedString, or an array of either, and the array may mix the two. All
+/// three collapse into one Markdown string here, because the alternative —
+/// teaching every caller the union — is three copies of the same switch.
+struct HoverInfo {
+    /// The rendered Markdown. Empty when the server returned nothing.
+    QString markdown;
+    /// The code blocks the answer contained, in order, with their language
+    /// tag when the server supplied one. This is where the declaration lives
+    /// in a clangd answer, and it is what a caller shows as "the type".
+    QList<QPair<QString, QString>> codeBlocks;
+    /// The range the answer applies to, when the server narrowed it.
+    Range range;
+    bool hasRange = false;
+
+    [[nodiscard]] bool isEmpty() const { return markdown.trimmed().isEmpty(); }
+
+    /// The most specific code block: the longest one that is not a comment.
+    /// For a variable clangd sends the declaration line; for a type alias it
+    /// sends both the alias and the underlying spelling, and the longer one
+    /// is the one a reader wants.
+    [[nodiscard]] QString primaryCode() const;
+
+    /// True when the answer carries documentation (a comment block), as
+    /// opposed to only a signature. Callers use this to decide whether a
+    /// "show docs" affordance is worth offering.
+    [[nodiscard]] bool hasDocumentation() const;
+};
+
+/// Decode a `textDocument/hover` result. A null/absent result is an empty
+/// HoverInfo, not an error: "the server has nothing to say here" is normal.
+[[nodiscard]] HoverInfo parseHover(const QJsonValue& result);
+
+// ---------------------------------------------------------------------------
+// Type hints
+// ---------------------------------------------------------------------------
+
+/// A short inline type annotation derived from a hover answer.
+///
+/// This is the "type hint" the spec asks for: for `auto x = f();` the useful
+/// information is `Widget`, not the whole declaration. The rules are
+/// deliberately conservative — a wrong hint is worse than no hint, so
+/// anything that cannot be reduced to one type name yields nothing.
+struct TypeHint {
+    QString type;      ///< e.g. "Widget", "std::vector<int>", "const char *"
+    QString variable;  ///< the name the type belongs to, when identifiable
+    bool isAuto = false;
+
+    [[nodiscard]] bool isValid() const { return !type.isEmpty(); }
+};
+
+/// Derive a type hint from a hover answer for a symbol called `symbolName`.
+/// `symbolName` is used to strip the trailing declarator from `int x`.
+[[nodiscard]] TypeHint typeHintFromHover(const HoverInfo& hover,
+                                         const QString& symbolName);
+
+// ---------------------------------------------------------------------------
 // Class view
 // ---------------------------------------------------------------------------
 

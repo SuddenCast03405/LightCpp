@@ -1261,6 +1261,14 @@ int LanguageServerClient::requestSubtypes(const QJsonObject& item)
                       LspResponse::Kind::TypeHierarchy);
 }
 
+int LanguageServerClient::requestHover(const QString& filePath, int line,
+                                       int column)
+{
+    return requestRaw(QStringLiteral("textDocument/hover"),
+                      positionParams(filePath, line, column),
+                      LspResponse::Kind::Hover);
+}
+
 void LanguageServerClient::handleMessage(const QJsonObject& message)
 {
     const QString method = message.value("method").toString();

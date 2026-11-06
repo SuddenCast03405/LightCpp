@@ -322,6 +322,11 @@ public:
     int requestTypeHierarchy(const QString& filePath, int line, int column);
     int requestSupertypes(const QJsonObject& item);
     int requestSubtypes(const QJsonObject& item);
+    /// `textDocument/hover` — either the typed answer via hoverReady() or the
+    /// raw `{contents, range}` object via rawResponseReady(), whichever the
+    /// caller prefers. This one returns the raw request id so a caller that
+    /// wants to render Markdown itself can use rawResponseReady.
+    int requestHover(const QString& filePath, int line, int column);
 
     // --- URI helpers (LSP uses file:// URIs with percent encoding) ---
 

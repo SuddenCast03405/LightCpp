@@ -953,6 +953,15 @@ void CodeEditor::showSignatureHelp(const QString& html)
         this);
 }
 
+void CodeEditor::showHoverInfo(const QPoint& globalPos, const QString& html)
+{
+    if (html.isEmpty()) {
+        QToolTip::hideText();
+        return;
+    }
+    QToolTip::showText(globalPos, html, this);
+}
+
 // ---------------------------------------------------------------------------
 // Bracket auto-pairing
 // ---------------------------------------------------------------------------
@@ -1731,7 +1740,11 @@ bool CodeEditor::event(QEvent* event)
             QToolTip::showText(helpEvent->globalPos(), text, this);
             return true;
         }
-        QToolTip::hideText();
+        // No diagnostic here: offer the identifier to the language server.
+        // Whether an answer arrives in time is not this class's problem —
+        // a tooltip that never appears is better than one that appears
+        // after the mouse has moved on, so the receiver decides.
+        Q_EMIT hoverRequested(line, col, helpEvent->globalPos());
         event->ignore();
         return true;
     }

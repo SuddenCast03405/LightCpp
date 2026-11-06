@@ -552,6 +552,24 @@ MainWindow::MainWindow(QWidget* parent)
                 return;
             }
             applyClassBrowser(classBrowserFilePath_, result);
+            return;
+        }
+        if (method == QLatin1String("textDocument/hover")) {
+            const auto pendingIt = pendingHovers_.find(requestId);
+            if (pendingIt == pendingHovers_.end()) {
+                return;  // a request we never made, or one already retired
+            }
+            const PendingHover target = pendingIt.value();
+            pendingHovers_.erase(pendingIt);
+            if (target.editor.isNull()) {
+                return;  // the tab that asked is gone
+            }
+            const LightCpp::Workbench::Lsp::HoverInfo hover =
+                LightCpp::Workbench::Lsp::parseHover(result);
+            if (hover.isEmpty()) {
+                return;  // nothing to say here is not an error
+            }
+            target.editor->showHoverInfo(target.position, formatHoverTooltip(hover));
         }
     });
     connect(lsp_, &LightCpp::App::LanguageServerClient::renameReady,
@@ -4738,6 +4756,96 @@ void MainWindow::jumpToClassBrowserItem(int line, int column)
     ed->setFocus();
 }
 
+// --- hover tooltip ---------------------------------------------------------
+
+namespace {
+
+/// HTML-escape one line, keeping a monospace font for the signature itself.
+QString escapedForTooltip(const QString& text)
+{
+    return text.toHtmlEscaped();
+}
+
+/// True when every code block the answer carries is a comment, i.e. the
+/// server answered with documentation and no declaration.
+bool codeBlocksOnlyComments(const LightCpp::Workbench::Lsp::HoverInfo& hover)
+{
+    if (hover.codeBlocks.isEmpty()) {
+        return false;
+    }
+    for (const auto& block : hover.codeBlocks) {
+        const QString trimmed = block.second.trimmed();
+        if (!trimmed.startsWith(QLatin1String("//"))
+            && !trimmed.startsWith(QLatin1String("/*"))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+QString MainWindow::formatHoverTooltip(
+    const LightCpp::Workbench::Lsp::HoverInfo& hover) const
+{
+    // The tooltip has two jobs and they want different presentation: the
+    // signature is code and belongs in monospace with the type called out;
+    // the documentation is prose and belongs readable. Concatenating the raw
+    // Markdown (which is what a naive implementation does) shows the user
+    // literal asterisks and backticks.
+    QString html = QStringLiteral("<div style=\'font-family:sans-serif\'>");
+
+    const QString signature = hover.primaryCode();
+    if (!signature.isEmpty()) {
+        html += QStringLiteral(
+            "<div style=\'font-family:monospace;font-size:12px\'>%1</div>")
+                    .arg(escapedForTooltip(signature));
+    }
+
+    // The type hint: only when the answer is a declaration with a name we
+    // can strip, because a wrong hint teaches the wrong thing.
+    QString name;
+    if (CodeEditor* ed = currentEditor()) {
+        QTextCursor cursor = ed->textCursor();
+        cursor.select(QTextCursor::WordUnderCursor);
+        if (cursor.hasSelection()) {
+            name = cursor.selectedText();
+        }
+    }
+    const LightCpp::Workbench::Lsp::TypeHint hint =
+        LightCpp::Workbench::Lsp::typeHintFromHover(hover, name);
+    if (hint.isValid()) {
+        html += QStringLiteral(
+            "<div style=\'margin-top:4px\'><i>type:</i> "
+            "<span style=\'font-family:monospace\'>%1</span></div>")
+                    .arg(escapedForTooltip(hint.type));
+    }
+
+    // The documentation, when the server sent any. Everything after the
+    // first blank line is treated as prose: that is where clangd puts the
+    // comment, and treating it as Markdown would show the `*` of a `/**` in
+    // the middle of a sentence.
+    const int split = hover.markdown.indexOf(QStringLiteral("\n\n"));
+    QString documentation = split >= 0 ? hover.markdown.mid(split).trimmed()
+                                       : QString();
+    if (documentation.isEmpty() && hover.hasDocumentation()
+        && codeBlocksOnlyComments(hover)) {
+        documentation = hover.markdown;
+    }
+    if (!documentation.isEmpty()) {
+        const int limit = 800;
+        if (documentation.size() > limit) {
+            documentation = documentation.left(limit) + QStringLiteral("...");
+        }
+        html += QStringLiteral(
+            "<div style=\'margin-top:6px;max-width:520px\'>%1</div>")
+                    .arg(escapedForTooltip(documentation).replace(
+                        QStringLiteral("\n"), QStringLiteral("<br>")));
+    }
+    html += QStringLiteral("</div>");
+    return html;
+}
+
 // --- call graph ------------------------------------------------------------
 
 namespace {
@@ -5673,6 +5781,36 @@ CodeEditor* MainWindow::createEditorTab(const QString& title)
             latestDefinitionId_ = reqId;
             pendingDefinitions_[reqId] = edPtr;
         }
+    });
+
+    // Hovering an identifier asks the server what it is. Two spec rows hang
+    // off this one answer (the type hint and the doc-comment preview), which
+    // is why the tooltip renders the signature and the comment differently
+    // instead of dumping the raw Markdown.
+    connect(editor, &CodeEditor::hoverRequested,
+            this, [this, edPtr](int line, int column, const QPoint& globalPos) {
+        CodeEditor* ed = edPtr;
+        if (ed == nullptr || lsp_ == nullptr || !lsp_->isRunning()) {
+            return;
+        }
+        const QString lintPath = ed->lintPath();
+        if (lintPath.isEmpty() || !isCppLikeFile(lintPath)) {
+            return;
+        }
+        if (!clangdHoverEnabled_ || fileExceeds(lintPath, largeFileParseMB_)) {
+            return;
+        }
+        // No changeDocument here: hover is on the mouse's schedule, not the
+        // keyboard's, and pushing the whole buffer on every mouse rest would
+        // make moving the mouse across a large file feel like typing.
+        const int reqId = lsp_->requestHover(lintPath, line, column);
+        if (reqId <= 0) {
+            return;
+        }
+        // The answer is routed by position, not by editor: the mouse may
+        // have left this editor by the time the server replies, and a tooltip
+        // for the wrong buffer is worse than none.
+        pendingHovers_.insert(reqId, {edPtr, globalPos});
     });
 
     // `(` / `,` inside a call asks for signature help. Same push-text-first
@@ -10069,6 +10207,10 @@ void MainWindow::applyPreferences()
     clangdCompletionEnabled_ = prefs.clangd.completion;
     clangdDiagnosticsEnabled_ = prefs.clangd.diagnostics;
     clangdNavigationEnabled_ = prefs.clangd.indexing;
+    // Hover is documentation, not navigation — but it is the same clangd
+    // process, so it goes dark when diagnostics do (the preference group
+    // that governs what the server is asked for at all).
+    clangdHoverEnabled_ = prefs.clangd.diagnostics;
     // A kit's own clangdFallbackStyle wins over the global preference.
     QString clangdStyle = prefs.clangd.fallbackStyle;
     if (const auto kit = activeKit();

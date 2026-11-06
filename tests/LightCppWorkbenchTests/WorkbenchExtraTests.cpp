@@ -1574,3 +1574,162 @@ TEST(CallGraph, AMissingRootProducesNoTreeInsteadOfTheWholeGraph)
     graph.addNode(a);
     EXPECT_TRUE(graph.toTreeText(QStringLiteral("file:///nowhere.cpp#0:0")).isEmpty());
 }
+
+// ---------------------------------------------------------------------------
+// Hover: three shapes in, one Markdown out, plus the type hint
+// ---------------------------------------------------------------------------
+
+TEST(Hover, APlainStringAnswerIsMarkdownWithNoCodeBlock)
+{
+    const Lsp::HoverInfo hover = Lsp::parseHover(QJsonObject{
+        {"contents", QStringLiteral("no answer here")}});
+    EXPECT_EQ(hover.markdown, QStringLiteral("no answer here"));
+    EXPECT_TRUE(hover.codeBlocks.isEmpty());
+    EXPECT_TRUE(hover.primaryCode().isEmpty());
+    EXPECT_FALSE(hover.hasRange);
+}
+
+TEST(Hover, AMarkedStringObjectKeepsItsLanguageTag)
+{
+    // The protocol's second form: {language, value} rather than a bare
+    // string. The language tag is what separates a declaration from prose.
+    const Lsp::HoverInfo hover = Lsp::parseHover(QJsonObject{
+        {"contents", QJsonObject{{"language", "cpp"},
+                                 {"value", QStringLiteral("int x")}}}});
+    ASSERT_EQ(hover.codeBlocks.size(), 1);
+    EXPECT_EQ(hover.codeBlocks.first().first, QStringLiteral("cpp"));
+    EXPECT_EQ(hover.primaryCode(), QStringLiteral("int x"));
+}
+
+TEST(Hover, AnArrayOfMixedShapesIsOneMarkdownWithBothParts)
+{
+    // This is exactly what clangd sends: a fenced declaration, then the
+    // comment as a plain string. Reading only the first element loses the
+    // documentation; reading only the string loses the signature.
+    const Lsp::HoverInfo hover = Lsp::parseHover(QJsonObject{
+        {"contents", QJsonArray{
+             QJsonObject{{"language", "cpp"}, {"value", QStringLiteral("void run()")}},
+             QStringLiteral("Runs the thing."),
+         }}});
+    ASSERT_EQ(hover.codeBlocks.size(), 1);
+    EXPECT_TRUE(hover.markdown.contains(QLatin1String("void run()")));
+    EXPECT_TRUE(hover.markdown.contains(QLatin1String("Runs the thing.")));
+    EXPECT_TRUE(hover.hasDocumentation());
+}
+
+TEST(Hover, AFencedStringInPlainTextIsStillASignature)
+{
+    // Some servers (and clangd under `contentFormat: plaintext`) put the
+    // fence inside the string instead of in a MarkedString. Dropping the
+    // fence is what stops the tooltip from showing three backticks.
+    const Lsp::HoverInfo hover = Lsp::parseHover(QJsonObject{
+        {"contents", QStringLiteral("```cpp\nstd::vector<int> v\n```")}});
+    ASSERT_EQ(hover.codeBlocks.size(), 1);
+    EXPECT_EQ(hover.codeBlocks.first().first, QStringLiteral("cpp"));
+    EXPECT_EQ(hover.primaryCode(), QStringLiteral("std::vector<int> v"));
+    EXPECT_FALSE(hover.markdown.contains(QLatin1String("```")));
+}
+
+TEST(Hover, TheRangeIsReadWhenTheServerNarrowsIt)
+{
+    const Lsp::HoverInfo hover = Lsp::parseHover(QJsonObject{
+        {"contents", QStringLiteral("int x")},
+        {"range", QJsonObject{
+             {"start", QJsonObject{{"line", 4}, {"character", 8}}},
+             {"end", QJsonObject{{"line", 4}, {"character", 9}}}}}});
+    EXPECT_TRUE(hover.hasRange);
+    EXPECT_EQ(hover.range.startLine, 4);
+    EXPECT_EQ(hover.range.startColumn, 8);
+
+    // A null result is the normal "nothing here", not a malformed answer.
+    const Lsp::HoverInfo empty = Lsp::parseHover(QJsonValue());
+    EXPECT_TRUE(empty.isEmpty());
+    EXPECT_FALSE(empty.hasRange);
+}
+
+TEST(TypeHint, AVariableDeclarationYieldsItsType)
+{
+    Lsp::HoverInfo hover;
+    hover.codeBlocks.append({"cpp", QStringLiteral("Widget w")});
+    const Lsp::TypeHint hint = Lsp::typeHintFromHover(hover, QStringLiteral("w"));
+    ASSERT_TRUE(hint.isValid());
+    EXPECT_EQ(hint.type, QStringLiteral("Widget"));
+    EXPECT_EQ(hint.variable, QStringLiteral("w"));
+}
+
+TEST(TypeHint, PointerAndReferenceDeclaratorsKeepTheStar)
+{
+    // `int *p` → `int`, because the star belongs to the declarator in C++
+    // and a hint that says `int *` for an `int` pointer is still readable —
+    // but `int * *` is not, so the stars are stripped with the name.
+    Lsp::HoverInfo pointer;
+    pointer.codeBlocks.append({"cpp", QStringLiteral("const char *name")});
+    EXPECT_EQ(Lsp::typeHintFromHover(pointer, QStringLiteral("name")).type,
+              QStringLiteral("const char"));
+
+    Lsp::HoverInfo reference;
+    reference.codeBlocks.append({"cpp", QStringLiteral("Widget &ref")});
+    EXPECT_EQ(Lsp::typeHintFromHover(reference, QStringLiteral("ref")).type,
+              QStringLiteral("Widget"));
+}
+
+TEST(TypeHint, AFunctionOrTypeDeclarationYieldsNoHint)
+{
+    // A hint that repeats the signature is noise. `void run()` has nothing
+    // to strip, and neither has a bare type spelling.
+    Lsp::HoverInfo function;
+    function.codeBlocks.append({"cpp", QStringLiteral("void run()")});
+    EXPECT_FALSE(
+        Lsp::typeHintFromHover(function, QStringLiteral("run")).isValid());
+
+    Lsp::HoverInfo type;
+    type.codeBlocks.append({"cpp", QStringLiteral("class Widget")});
+    EXPECT_FALSE(
+        Lsp::typeHintFromHover(type, QStringLiteral("Widget")).isValid());
+}
+
+TEST(TypeHint, AnInitialiserOrMultiLineDeclarationYieldsNoHint)
+{
+    // `auto x = make();` hovers as the deduced declaration in clangd, but a
+    // server that answers with the initialiser expression must not produce
+    // "auto x = make(" as a type.
+    Lsp::HoverInfo withCall;
+    withCall.codeBlocks.append(
+        {"cpp", QStringLiteral("Widget w = make_widget()")});
+    EXPECT_FALSE(
+        Lsp::typeHintFromHover(withCall, QStringLiteral("w")).isValid());
+
+    // A trailing comment is not part of the type.
+    Lsp::HoverInfo commented;
+    commented.codeBlocks.append(
+        {"cpp", QStringLiteral("int count // how many")});
+    EXPECT_EQ(Lsp::typeHintFromHover(commented, QStringLiteral("count")).type,
+              QStringLiteral("int"));
+}
+
+TEST(TypeHint, TemplateTypesSurviveIntact)
+{
+    // The reason the hint exists: `std::map<std::string, Widget>` is what
+    // `auto` hid, and a naive "take the first word" rule would return
+    // `std::map<std::string,`.
+    Lsp::HoverInfo hover;
+    hover.codeBlocks.append(
+        {"cpp", QStringLiteral("std::map<std::string, Widget> byName")});
+    const Lsp::TypeHint hint =
+        Lsp::typeHintFromHover(hover, QStringLiteral("byName"));
+    ASSERT_TRUE(hint.isValid());
+    EXPECT_EQ(hint.type, QStringLiteral("std::map<std::string, Widget>"));
+}
+
+TEST(Hover, ACommentBlockIsDocumentationNotASignature)
+{
+    Lsp::HoverInfo commentOnly;
+    commentOnly.codeBlocks.append(
+        {"cpp", QStringLiteral("// Returns the widget's size.")});
+    EXPECT_TRUE(commentOnly.hasDocumentation());
+    EXPECT_TRUE(commentOnly.primaryCode().isEmpty());
+
+    Lsp::HoverInfo prose;
+    prose.markdown = QStringLiteral("line one\nline two");
+    EXPECT_TRUE(prose.hasDocumentation());
+}

@@ -113,6 +113,258 @@ QString pathFromUri(const QString& uri)
 }
 
 // ---------------------------------------------------------------------------
+// Hover
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// One MarkedString: either a plain string or a `{language, value}` pair.
+struct MarkedString {
+    QString language;
+    QString value;
+};
+
+MarkedString markedFrom(const QJsonValue& value)
+{
+    MarkedString out;
+    if (value.isString()) {
+        out.value = value.toString();
+        return out;
+    }
+    if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        out.value = object.value(QLatin1String("value")).toString();
+        out.language = object.value(QLatin1String("language")).toString();
+    }
+    return out;
+}
+
+/// The language tag a fenced block in a Markdown string was written with.
+/// clangd prefixes its declarations with "```cpp", and that is the only
+/// signal that separates "this is code" from "this is prose".
+QString fenceLanguage(const QString& text)
+{
+    if (!text.startsWith(QLatin1String("```"))) {
+        return {};
+    }
+    const int newline = text.indexOf(QLatin1Char('\n'));
+    if (newline < 0) {
+        return {};
+    }
+    return text.mid(3, newline - 3).trimmed();
+}
+
+/// Strip a surrounding ``` fence, if the string has one.
+QString withoutFence(const QString& text)
+{
+    const QString trimmed = text.trimmed();
+    if (!trimmed.startsWith(QLatin1String("```"))
+        || !trimmed.endsWith(QLatin1String("```")) || trimmed.size() < 6) {
+        return text;
+    }
+    const int firstNewline = trimmed.indexOf(QLatin1Char('\n'));
+    if (firstNewline < 0 || firstNewline > trimmed.size() - 3) {
+        return text;
+    }
+    return trimmed.mid(firstNewline + 1, trimmed.size() - firstNewline - 4);
+}
+
+}  // namespace
+
+QString HoverInfo::primaryCode() const
+{
+    QString best;
+    for (const auto& block : codeBlocks) {
+        // A comment block is documentation wearing code formatting; the
+        // declaration is what a type hint is built from.
+        const QString trimmed = block.second.trimmed();
+        if (trimmed.startsWith(QLatin1String("//"))
+            || trimmed.startsWith(QLatin1String("/*"))) {
+            continue;
+        }
+        if (trimmed.size() > best.size()) {
+            best = trimmed;
+        }
+    }
+    return best;
+}
+
+bool HoverInfo::hasDocumentation() const
+{
+    // Any text that is neither a code block nor a fence is documentation.
+    // clangd's usual shape is "signature block + prose part", and looking
+    // only at the code blocks would report the most common answer as
+    // undocumented.
+    QString prose = markdown;
+    for (const auto& block : codeBlocks) {
+        prose.remove(block.second);
+    }
+    if (!prose.trimmed().isEmpty()) {
+        return true;
+    }
+    // A comment block is documentation wearing code formatting.
+    for (const auto& block : codeBlocks) {
+        const QString trimmed = block.second.trimmed();
+        if (trimmed.startsWith(QLatin1String("//"))
+            || trimmed.startsWith(QLatin1String("/*"))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+HoverInfo parseHover(const QJsonValue& result)
+{
+    HoverInfo info;
+    if (!result.isObject()) {
+        return info;
+    }
+    const QJsonObject object = result.toObject();
+    const QJsonValue contents = object.value(QLatin1String("contents"));
+
+    QList<MarkedString> parts;
+    if (contents.isArray()) {
+        for (const QJsonValue& item : contents.toArray()) {
+            parts.append(markedFrom(item));
+        }
+    } else if (!contents.isUndefined() && !contents.isNull()) {
+        parts.append(markedFrom(contents));
+    }
+
+    QStringList rendered;
+    for (const MarkedString& part : parts) {
+        const QString language = part.language.isEmpty()
+                                     ? fenceLanguage(part.value)
+                                     : part.language;
+        if (!language.isEmpty()) {
+            // The protocol's MarkedString has no separator: join with a blank
+            // line so a signature and its comment do not run together.
+            info.codeBlocks.append({language, withoutFence(part.value)});
+        }
+        if (!part.value.trimmed().isEmpty()) {
+            // Render the same text the code blocks hold: keeping the fence
+            // here would show the backticks in the tooltip.
+            rendered.append(language.isEmpty() ? part.value
+                                               : withoutFence(part.value));
+        }
+    }
+    info.markdown = rendered.join(QStringLiteral("\n\n"));
+
+    const QJsonValue range = object.value(QLatin1String("range"));
+    if (range.isObject()) {
+        info.range = parseRange(range);
+        info.hasRange = info.range.isValid();
+    }
+    return info;
+}
+
+// ---------------------------------------------------------------------------
+// Type hints
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Strip a trailing comment from a declaration line: `int x;  // the count`
+/// otherwise ends up with the comment glued to the type.
+QString withoutTrailingComment(const QString& text)
+{
+    const int lineComment = text.indexOf(QLatin1String("//"));
+    const int blockComment = text.indexOf(QLatin1String("/*"));
+    int cut = -1;
+    if (lineComment >= 0) {
+        cut = lineComment;
+    }
+    if (blockComment >= 0 && (cut < 0 || blockComment < cut)) {
+        cut = blockComment;
+    }
+    return cut >= 0 ? text.left(cut) : text;
+}
+
+/// Remove a final declarator (`x`, `x[3]`, `*p`, `&r`, `f(...)`) from a
+/// declaration, leaving the type. Only the shapes a hover answer actually
+/// produces are handled — this is not a C++ parser and must not pretend to
+/// be one.
+QString dropDeclarator(const QString& declaration, const QString& symbolName)
+{
+    QString text = declaration.trimmed();
+    while (text.endsWith(QLatin1Char(';'))) {
+        text.chop(1);
+        text = text.trimmed();
+    }
+    // `class Widget` / `struct Widget` / `using Widget = ...` are not
+    // variables: the trailing word is the type's own name, not a declarator,
+    // and stripping it would leave the nonsense type "class".
+    static const QStringList kSpecifiers = {
+        QStringLiteral("class"), QStringLiteral("struct"),
+        QStringLiteral("union"), QStringLiteral("enum"),
+        QStringLiteral("namespace"), QStringLiteral("using"),
+        QStringLiteral("typedef"), QStringLiteral("template"),
+    };
+    const int firstSpace = int(text.indexOf(QLatin1Char(' ')));
+    const QString firstWord =
+        firstSpace > 0 ? text.left(firstSpace) : QString();
+    if (kSpecifiers.contains(firstWord)) {
+        return {};
+    }
+    if (!symbolName.isEmpty() && text.endsWith(symbolName)) {
+        text.chop(int(symbolName.size()));
+        text = text.trimmed();
+        // `int *x` / `int &x`: the declarator took the stars with it.
+        while (text.endsWith(QLatin1Char('*')) || text.endsWith(QLatin1Char('&'))) {
+            text.chop(1);
+            text = text.trimmed();
+        }
+        return text;
+    }
+    // No name to go on. A trailing parameter list means this is a function,
+    // and a function has no "type" to hint at — returning its return type
+    // would be a different fact, presented as if it were the same one.
+    if (text.endsWith(QLatin1Char(')'))) {
+        return {};
+    }
+    return text;
+}
+
+}  // namespace
+
+TypeHint typeHintFromHover(const HoverInfo& hover, const QString& symbolName)
+{
+    TypeHint hint;
+    hint.variable = symbolName;
+    QString declaration = hover.primaryCode();
+    if (declaration.isEmpty()) {
+        return hint;
+    }
+    declaration = withoutTrailingComment(declaration);
+    // A multi-line declaration (a template, a long signature) has no single
+    // meaningful type line; guessing from line one would be wrong more often
+    // than right.
+    if (declaration.contains(QLatin1Char('\n'))) {
+        const QStringList lines = declaration.split(QLatin1Char('\n'));
+        if (lines.size() != 1) {
+            // Keep `= default` / `= 0` tails attached but drop the rest.
+            declaration = lines.first();
+        }
+    }
+    if (declaration.contains(QLatin1String("auto")) && symbolName.isEmpty()) {
+        hint.isAuto = true;
+    }
+    const QString type = dropDeclarator(declaration, symbolName);
+    if (type.isEmpty() || type == declaration.trimmed()) {
+        // Nothing was removed: this is probably a type or a function, not a
+        // variable, and a "hint" would just repeat the signature.
+        return hint;
+    }
+    // A declaration that still contains a call or an initialiser is not a
+    // type; refuse rather than emit `Widget f(` as a type name.
+    if (type.contains(QLatin1Char('(')) || type.contains(QLatin1Char('='))) {
+        return hint;
+    }
+    hint.type = type;
+    return hint;
+}
+
+// ---------------------------------------------------------------------------
 // Semantic tokens
 // ---------------------------------------------------------------------------
 

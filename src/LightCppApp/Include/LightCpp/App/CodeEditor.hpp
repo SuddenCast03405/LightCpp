@@ -220,6 +220,9 @@ public slots:
     /// Show the signature-help tooltip (rich text) anchored at the caret.
     /// An empty string hides it.
     void showSignatureHelp(const QString& html);
+    /// Show the hover tooltip (rich text) at a screen position. An empty
+    /// string hides it, which is how a caller says "the server had nothing".
+    void showHoverInfo(const QPoint& globalPos, const QString& html);
 
 signals:
     /// Emitted when the editor wants completion at the current cursor.
@@ -235,6 +238,13 @@ signals:
     /// Go-to-definition was asked for at (line, column) — Ctrl+Click on an
     /// identifier, or F12 with the caret on one. Both are 0-based.
     void definitionRequested(int line, int column);
+
+    /// The mouse settled on an identifier at (line, column), 0-based, with
+    /// no diagnostic under it. `globalPos` is where the tooltip belongs.
+    /// The receiver answers with showHoverInfo() — inside this event's
+    /// handling if it already has the text, or later when the server
+    /// replies. An unanswered request simply shows no tooltip.
+    void hoverRequested(int line, int column, const QPoint& globalPos);
 
     /// The diagnostic set of this buffer changed. `path` is lintPath(),
     /// and the diagnostics are already position-normalised.

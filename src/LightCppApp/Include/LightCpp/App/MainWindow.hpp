@@ -861,6 +861,18 @@ private:
 
     /// Same routing for textDocument/definition: request id -> editor.
     QMap<int, QPointer<CodeEditor>> pendingDefinitions_;
+    /// Hover requests in flight: the editor that asked and where the tooltip
+    /// belongs, keyed by request id.
+    struct PendingHover {
+        QPointer<CodeEditor> editor;
+        QPoint position;
+    };
+    QMap<int, PendingHover> pendingHovers_;
+    /// Render a decoded hover answer as the tooltip's rich text: the
+    /// signature first, then the documentation, with the type hint called
+    /// out when one can be derived.
+    [[nodiscard]] QString formatHoverTooltip(
+        const LightCpp::Workbench::Lsp::HoverInfo& hover) const;
     /// Id of the most recently issued definition request. A slow answer for
     /// an earlier Ctrl+Click must not yank the view away from wherever the
     /// user has navigated since.
@@ -1091,6 +1103,8 @@ private:
     bool clangdCompletionEnabled_ = true;
     bool clangdDiagnosticsEnabled_ = true;
     bool clangdNavigationEnabled_ = true;
+    /// `languageService.clangd.hover` — the same switch clangd itself uses.
+    bool clangdHoverEnabled_ = true;
     /// languageService.clangFormat.* gates.
     bool clangFormatEnabled_ = true;
     bool formatOnSave_ = false;
