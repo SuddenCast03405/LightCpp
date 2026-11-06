@@ -1,9 +1,10 @@
 // AnalysisPanel — lightcpp.1.md §七 inside the IDE.
 //
-// Three tools, one list. The panel runs cppcheck / clang-tidy / scan-build,
-// parses with LightCppWorkbench and shows the findings grouped by the plan's
-// own categories (style / unused / null pointer / bounds / leak / security /
-// coding standard / complexity), because that is the question a user asks —
+// Many tools, one list. The panel runs cppcheck / clang-tidy / scan-build /
+// PVS-Studio / Coverity, parses with LightCppWorkbench and shows the findings
+// grouped by the plan's own categories (style / unused / null pointer /
+// bounds / leak / security / coding standard / complexity), because that is
+// the question a user asks —
 // "show me the null-pointer risks", not "show me rule V522".
 //
 // Complexity is computed locally: it needs no tool and no build, so it always
@@ -19,6 +20,7 @@
 class QCheckBox;
 class QComboBox;
 class QLabel;
+class QLineEdit;
 class QPlainTextEdit;
 class QProcess;
 class QPushButton;
@@ -50,12 +52,18 @@ private:
 
     QCheckBox* cppcheckBox_ = nullptr;
     QCheckBox* tidyBox_ = nullptr;
+    QCheckBox* scanBuildBox_ = nullptr;
+    QCheckBox* pvsBox_ = nullptr;
+    QCheckBox* coverityBox_ = nullptr;
     QCheckBox* complexityBox_ = nullptr;
     QComboBox* categoryBox_ = nullptr;
     QPushButton* runButton_ = nullptr;
     QPushButton* stopButton_ = nullptr;
     QTreeWidget* tree_ = nullptr;
     QPlainTextEdit* log_ = nullptr;
+    /// The build command scan-build should wrap. Empty means the panel falls
+    /// back to the last successful build command, and then to "make".
+    QLineEdit* buildCommandEdit_ = nullptr;
     QLabel* summary_ = nullptr;
 
     QProcess* process_ = nullptr;

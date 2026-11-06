@@ -681,3 +681,75 @@ TEST(QtFiles, QmakeArgumentsDoAShadowBuild)
     EXPECT_TRUE(arguments.contains(QStringLiteral("CONFIG-=release")));
     EXPECT_TRUE(arguments.contains(QStringLiteral("/build/Makefile")));
 }
+
+// ---------------------------------------------------------------------------
+// The three build-driven analysers, against their real console shapes
+// ---------------------------------------------------------------------------
+
+TEST(Analysis, ScanBuildSummaryLinesAreNotFindings)
+{
+    // A run ends with "scan-build: 3 bugs found." and "scan-build: Run
+    // 'scan-view ...'". Neither is a defect, and reporting them as such
+    // would add two phantom rows to every single run.
+    const QList<Finding> findings = parseScanBuildText(QStringLiteral(
+        "scan-build: Using '/usr/bin/clang-18' for static analysis\n"
+        "In file included from a.cpp:1:\n"
+        "/tmp/a.cpp:4:5: warning: Value stored to 'p' is never read [deadcode.DeadStores]\n"
+        "scan-build: 1 bug found.\n"
+        "scan-build: Run 'scan-view /tmp/scan' to examine bug reports.\n"));
+    ASSERT_EQ(findings.size(), 1);
+    EXPECT_EQ(findings.first().line, 4);
+    EXPECT_EQ(findings.first().column, 5);
+    EXPECT_EQ(findings.first().ruleId, QStringLiteral("deadcode.DeadStores"));
+}
+
+TEST(Analysis, PvsReportsCarryTheirFileLevelColumn)
+{
+    // PVS writes `file(line): level Vnnn: message` with no column. A zero
+    // column is honest; inventing 1 would put the caret on the previous
+    // token after the IDE converts to 0-based.
+    const QList<Finding> findings = parsePvsText(QStringLiteral(
+        "C:\\src\\a.cpp(12): warning V522: Dereferencing of the null pointer 'p'.\n"
+        "/home/me/b.cpp(3): error V568: It is odd that sizeof() is used.\n"));
+    ASSERT_EQ(findings.size(), 2);
+    EXPECT_EQ(findings.at(0).column, 0);
+    EXPECT_EQ(findings.at(0).file, QStringLiteral("C:/src/a.cpp"));
+    EXPECT_EQ(findings.at(1).ruleId, QStringLiteral("V568"));
+    EXPECT_EQ(findings.at(1).severity, Severity::Error);
+}
+
+TEST(Analysis, PvsHeaderLinesAndNotesAreNotErrors)
+{
+    const QList<Finding> findings = parsePvsText(QStringLiteral(
+        "PVS-Studio is a static analyzer for detecting bugs in the source code\n"
+        "a.cpp(7): note V1042: This file is marked with copyleft license\n"));
+    ASSERT_EQ(findings.size(), 1);
+    EXPECT_EQ(findings.first().severity, Severity::Note);
+}
+
+TEST(Analysis, CoverityCsvIgnoresTheBannerAndShortRows)
+{
+    // cov-format-errors prints a banner before the CSV, and a truncated
+    // final row is possible when the run was killed. Neither may become a
+    // finding at the wrong line.
+    const QList<Finding> findings = parseCoverityCsv(QStringLiteral(
+        "Coverity Static Analysis version 2023.6.1 on Linux 6.5\n"
+        "\"file\",\"line\",\"category\",\"severity\",\"message\"\n"
+        "\"b.cpp\",\"9\",\"RESOURCE_LEAK\",\"Medium\",\"Leaked storage returned\"" "\n"
+        "\"c.cpp\",\"1\"\n"));
+    ASSERT_EQ(findings.size(), 1);
+    EXPECT_EQ(findings.first().file, QStringLiteral("b.cpp"));
+    EXPECT_EQ(findings.first().severity, Severity::Warning);
+    EXPECT_EQ(findings.first().category, FindingCategory::Leak);
+}
+
+TEST(Analysis, EveryBuildDrivenToolNeedsItsArgumentsToBeExplicit)
+{
+    // scan-build must be told the build command; wrapping an empty command
+    // would run the analyzer over nothing and report "0 bugs", which reads
+    // exactly like a clean project.
+    const QStringList arguments = scanBuildArguments(QStringLiteral("make -j4"));
+    EXPECT_EQ(arguments.value(0), QStringLiteral("--status-bugs"));
+    EXPECT_EQ(arguments.value(1), QStringLiteral("--"));
+    EXPECT_EQ(arguments.value(2), QStringLiteral("make -j4"));
+}

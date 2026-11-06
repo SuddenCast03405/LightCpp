@@ -11,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
@@ -55,6 +56,17 @@ void AnalysisPanel::buildUi()
     cppcheckBox_ = new QCheckBox(tr("Cppcheck"), this);
     cppcheckBox_->setChecked(true);
     tidyBox_ = new QCheckBox(tr("clang-tidy"), this);
+    // The three analysers below need a build to observe, so they stay
+    // unchecked: running them by default would make "Analyse" build the
+    // project behind the user's back.
+    scanBuildBox_ = new QCheckBox(tr("scan-build"), this);
+    scanBuildBox_->setStatusTip(
+        tr("Clang Static Analyzer, driven through the build (needs a build command)"));
+    pvsBox_ = new QCheckBox(tr("PVS-Studio"), this);
+    pvsBox_->setStatusTip(tr("Analyse a build log produced by pvs-studio-analyzer"));
+    coverityBox_ = new QCheckBox(tr("Coverity"), this);
+    coverityBox_->setStatusTip(
+        tr("cov-build + cov-analyze + cov-format-errors --csv-output"));
     complexityBox_ = new QCheckBox(tr("Complexity (local)"), this);
     complexityBox_->setChecked(true);
     runButton_ = new QPushButton(tr("Analyse"), this);
@@ -74,11 +86,27 @@ void AnalysisPanel::buildUi()
     }
     toolRow->addWidget(cppcheckBox_);
     toolRow->addWidget(tidyBox_);
+    toolRow->addWidget(scanBuildBox_);
+    toolRow->addWidget(pvsBox_);
+    toolRow->addWidget(coverityBox_);
     toolRow->addWidget(complexityBox_);
     toolRow->addWidget(runButton_);
     toolRow->addWidget(stopButton_);
     toolRow->addWidget(categoryBox_, 1);
     layout->addLayout(toolRow);
+
+    // scan-build wraps a build, so it needs to know which one. The field is
+    // always visible rather than appearing with the checkbox: a user who
+    // ticks scan-build and finds no input would have to guess why nothing
+    // happened.
+    auto* buildRow = new QHBoxLayout();
+    buildRow->addWidget(new QLabel(tr("Build command:"), this));
+    buildCommandEdit_ = new QLineEdit(this);
+    buildCommandEdit_->setObjectName(QStringLiteral("analysisBuildCommand"));
+    buildCommandEdit_->setPlaceholderText(
+        tr("cmake --build build   (used by scan-build)"));
+    buildRow->addWidget(buildCommandEdit_, 1);
+    layout->addLayout(buildRow);
 
     tree_ = new QTreeWidget(this);
     tree_->setColumnCount(4);
@@ -146,6 +174,18 @@ void AnalysisPanel::runAnalysis()
     }
     if (tidyBox_->isChecked()) {
         pendingTools_ << QStringLiteral("clang-tidy");
+    }
+    // Order matters: cppcheck and clang-tidy read source, the three below
+    // build. Putting the build-driven ones last means their output (which
+    // includes a full build log) does not bury the cheap answers.
+    if (scanBuildBox_->isChecked()) {
+        pendingTools_ << QStringLiteral("scan-build");
+    }
+    if (pvsBox_->isChecked()) {
+        pendingTools_ << QStringLiteral("pvs-studio");
+    }
+    if (coverityBox_->isChecked()) {
+        pendingTools_ << QStringLiteral("coverity");
     }
     if (complexityBox_->isChecked()) {
         pendingTools_ << QStringLiteral("complexity");
@@ -220,6 +260,95 @@ void AnalysisPanel::runNextTool()
         process_->start(path, arguments);
         return;
     }
+    if (runningTool_ == QLatin1String("scan-build")) {
+        const QString path = LightCpp::App::ToolchainPaths::scanBuildPath();
+        if (path.isEmpty()) {
+            log_->appendPlainText(tr("scan-build not found; skipped."));
+            runNextTool();
+            return;
+        }
+        const QString buildCommand = buildCommandEdit_->text().trimmed();
+        if (buildCommand.isEmpty()) {
+            // Refuse rather than guess: wrapping the wrong command produces
+            // an empty report, which looks exactly like "no bugs found".
+            log_->appendPlainText(
+                tr("scan-build needs a build command; skipped."));
+            runNextTool();
+            return;
+        }
+        const QStringList arguments =
+            Workbench::scanBuildArguments(buildCommand);
+        log_->appendPlainText(
+            tr("$ scan-build %1").arg(arguments.join(QLatin1Char(' '))));
+        process_->setWorkingDirectory(projectRoot_);
+        process_->start(path, arguments);
+        return;
+    }
+    if (runningTool_ == QLatin1String("pvs-studio")) {
+        // The analyzer's own two-step flow: log a build, then analyse the
+        // log. Only the analysis step produces findings, so the log is
+        // produced on a previous run (or by the user) and named here.
+        const QString path = LightCpp::App::ToolchainPaths::pvsStudioPath();
+        if (path.isEmpty()) {
+            log_->appendPlainText(tr("PVS-Studio not found; skipped."));
+            runNextTool();
+            return;
+        }
+        const QString log = QDir(projectRoot_).filePath(QStringLiteral("pvs.log"));
+        if (!QFileInfo::exists(log)) {
+            log_->appendPlainText(
+                tr("PVS-Studio: %1 does not exist. Create it with "
+                   "`pvs-studio-analyzer trace -- <build command>` first.")
+                    .arg(log));
+            runNextTool();
+            return;
+        }
+        const QStringList arguments{
+            QStringLiteral("analyze"), QStringLiteral("--output-format"),
+            QStringLiteral("text"), QStringLiteral("-f"), log};
+        log_->appendPlainText(
+            tr("$ pvs-studio-analyzer %1").arg(arguments.join(QLatin1Char(' '))));
+        process_->setWorkingDirectory(projectRoot_);
+        process_->start(path, arguments);
+        return;
+    }
+    if (runningTool_ == QLatin1String("coverity")) {
+        const QString covBuild = LightCpp::App::ToolchainPaths::coverityPath();
+        if (covBuild.isEmpty()) {
+            log_->appendPlainText(tr("Coverity not found; skipped."));
+            runNextTool();
+            return;
+        }
+        // cov-build, cov-analyze and cov-format-errors are three processes;
+        // the panel runs them as one shell line so the queue stays a queue.
+        const QString buildCommand = buildCommandEdit_->text().trimmed();
+        if (buildCommand.isEmpty()) {
+            log_->appendPlainText(
+                tr("Coverity needs a build command; skipped."));
+            runNextTool();
+            return;
+        }
+        const QDir binDir(QFileInfo(covBuild).absolutePath());
+        const QString intermediate =
+            QDir(projectRoot_).filePath(QStringLiteral("cov-int"));
+        const QString script =
+            QStringLiteral("%1 --dir %2 -- %3 && %4 --dir %5 --all && %6 "
+                           "--dir %5 --all --csv-output -o %7")
+                .arg(covBuild, intermediate, buildCommand,
+                     binDir.filePath(QStringLiteral("cov-analyze")), intermediate,
+                     binDir.filePath(QStringLiteral("cov-format-errors")),
+                     QDir(projectRoot_).filePath(QStringLiteral("coverity.csv")));
+        log_->appendPlainText(tr("$ %1").arg(script));
+        process_->setWorkingDirectory(projectRoot_);
+#ifdef Q_OS_WIN
+        process_->start(QStringLiteral("cmd.exe"),
+                        {QStringLiteral("/c"), script});
+#else
+        process_->start(QStringLiteral("/bin/sh"),
+                        {QStringLiteral("-c"), script});
+#endif
+        return;
+    }
     runNextTool();
 }
 
@@ -233,6 +362,35 @@ void AnalysisPanel::finishTool()
     } else if (runningTool_ == QLatin1String("clang-tidy")) {
         appendFindings(Workbench::parseClangTidyText(text));
         report_.toolsRun << QStringLiteral("clang-tidy");
+    } else if (runningTool_ == QLatin1String("scan-build")) {
+        // scan-build prints one block per bug; the count is in the last
+        // lines ("scan-build: N bugs found"), which is also a finding that
+        // nothing else reports, so an empty list there is not "no bugs".
+        appendFindings(Workbench::parseScanBuildText(text));
+        report_.toolsRun << QStringLiteral("scan-build");
+    } else if (runningTool_ == QLatin1String("pvs-studio")) {
+        appendFindings(Workbench::parsePvsText(text));
+        report_.toolsRun << QStringLiteral("PVS-Studio");
+    } else if (runningTool_ == QLatin1String("coverity")) {
+        // Prefer the CSV: it is the only form that keeps the file, line and
+        // checker for every defect. Falling back to the console text would
+        // lose the locations.
+        const QString csvPath =
+            QDir(projectRoot_).filePath(QStringLiteral("coverity.csv"));
+        QFile csv(csvPath);
+        int parsed = 0;
+        if (csv.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const auto findings =
+                Workbench::parseCoverityCsv(QString::fromUtf8(csv.readAll()));
+            appendFindings(findings);
+            parsed = int(findings.size());
+        }
+        if (parsed == 0) {
+            // The CSV is generated from the intermediate directory; when the
+            // format step failed, the console output still names the defects.
+            appendFindings(Workbench::parseCoverityCsv(text));
+        }
+        report_.toolsRun << QStringLiteral("Coverity");
     }
     if (!text.trimmed().isEmpty()) {
         log_->appendPlainText(text.trimmed().left(2000));

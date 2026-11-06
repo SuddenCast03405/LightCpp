@@ -55,5 +55,10 @@ namespace LightCpp::App::ToolchainPaths {
 [[nodiscard]] QString cppcheckPath();
 [[nodiscard]] QString clangTidyPath();
 [[nodiscard]] QString scanBuildPath();
+/// PVS-Studio and Coverity analyzers. Empty when not installed — the panel
+/// then leaves the tool out of the run instead of queueing a process that
+/// cannot start.
+[[nodiscard]] QString pvsStudioPath();
+[[nodiscard]] QString coverityPath();
 
 }  // namespace LightCpp::App::ToolchainPaths

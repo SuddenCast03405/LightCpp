@@ -227,4 +227,23 @@ QString scanBuildPath()
                      QStringLiteral("scan-build-15"), QStringLiteral("scan-build-14")});
 }
 
+QString pvsStudioPath()
+{
+    // Windows spells it PVS-Studio_Cmd.exe, Linux pvs-studio-analyzer. Both
+    // are accepted because a project may well be analysed on either.
+    return findTool({QStringLiteral("pvs-studio-analyzer"),
+                     QStringLiteral("PVS-Studio_Cmd.exe"),
+                     QStringLiteral("pvs-studio")});
+}
+
+QString coverityPath()
+{
+    // `cov-analyze` is the analyser; `cov-build` only produces the
+    // intermediate directory. The panel drives cov-build itself, so this
+    // resolves the build wrapper and derives the rest from its directory.
+    return findTool({QStringLiteral("cov-build"),
+                     QStringLiteral("cov-analyze"),
+                     QStringLiteral("coverity")});
+}
+
 }  // namespace LightCpp::App::ToolchainPaths
