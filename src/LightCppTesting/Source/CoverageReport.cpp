@@ -231,7 +231,12 @@ QStringList genhtmlArguments(const QString& infoFile,
 
 QString formatCoverageSummary(const CoverageReport& report)
 {
-    if (report.isEmpty()) {
+    // "No data" is about counters, not about the file list: a report built
+    // from a merged total (or from a caller that only filled the counters)
+    // has no per-file rows yet still has something to say. Testing isEmpty()
+    // here would print "no coverage data" over a perfectly good 87% line
+    // count.
+    if (report.linesFound <= 0 && report.branchesFound <= 0) {
         return QStringLiteral("no coverage data");
     }
     QString text = QStringLiteral("%1% lines (%2/%3)")

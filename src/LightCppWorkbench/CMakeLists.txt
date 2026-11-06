@@ -15,12 +15,32 @@
 #                              reStructuredText subset rendered to HTML, and
 #                              Doxygen comment parsing.
 #   Source/QtProjectFiles.cpp  Qt ecosystem (§十二): .pro/.pri, .ui, .qrc.
+#   Source/QtPreview.cpp       the preview half of §十二: .ui / .qrc / QML.
+#   Source/LspModel.cpp        LSP answers as data (§六): semantic tokens, call
+#                              and type hierarchy, class view, call graph.
+#   Source/EditorTools.cpp     include sorting and the gutter's line diff (§六/§八).
+#   Source/DebugSymbols.cpp    the debugger's symbol layer (§五).
+#   Source/GitExtra.cpp        blame blocks, three-way merge, signing (§八).
+#   Source/PackageManager.cpp  vcpkg / conan / hunter / apt / brew / winget (§九).
+#   Source/Viewers.cpp         hex and log decoding, binary sniffing (§九).
+#   Source/BuildOptions.cpp    cross toolchain, ccache, targets, compile
+#                              commands (§三).
+#   Source/DocsCatalog.cpp     the documentation catalogue (§十一).
 
 add_library(LightCppWorkbench STATIC
     Source/AnalysisReport.cpp
+    Source/BuildOptions.cpp
+    Source/DebugSymbols.cpp
+    Source/DocsCatalog.cpp
+    Source/EditorTools.cpp
+    Source/GitExtra.cpp
     Source/GitModel.cpp
+    Source/LspModel.cpp
     Source/MarkupRender.cpp
+    Source/PackageManager.cpp
+    Source/QtPreview.cpp
     Source/QtProjectFiles.cpp
+    Source/Viewers.cpp
 )
 
 add_library(LightCpp::Workbench ALIAS LightCppWorkbench)

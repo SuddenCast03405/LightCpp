@@ -2,6 +2,7 @@
 
 add_executable(LightCppWorkbenchTests
     WorkbenchTests.cpp
+    WorkbenchExtraTests.cpp
 )
 
 target_include_directories(LightCppWorkbenchTests PRIVATE
