@@ -1337,3 +1337,121 @@ TEST(Qt, HasPreviewCoversTheFourExtensions)
     EXPECT_TRUE(QtNs::hasPreview(QStringLiteral("a.qml")));
     EXPECT_FALSE(QtNs::hasPreview(QStringLiteral("a.cpp")));
 }
+
+// ---------------------------------------------------------------------------
+// Class view — the panel-facing details
+// ---------------------------------------------------------------------------
+
+TEST(ClassView, ADocumentWithNoTypesIsAnEmptyViewAndNotAnError)
+{
+    // A header of free functions and constants is legitimate C++; the panel
+    // must say "nothing here", not fail to open.
+    const QJsonArray symbols = jsonArrayOf(R"([
+        {"name": "run", "kind": 12,
+         "selectionRange": {"start": {"line": 0, "character": 5}, "end": {"line": 0, "character": 8}}},
+        {"name": "kMax", "kind": 14,
+         "selectionRange": {"start": {"line": 1, "character": 6}, "end": {"line": 1, "character": 10}}}
+    ])");
+    EXPECT_TRUE(Lsp::buildClassView(symbols).isEmpty());
+    // ... and neither is an empty answer or a null one.
+    EXPECT_TRUE(Lsp::buildClassView(QJsonValue(QJsonArray())).isEmpty());
+    EXPECT_TRUE(Lsp::buildClassView(QJsonValue()).isEmpty());
+}
+
+TEST(ClassView, EveryTypeKindIsAcceptedAndAnonymousTypesAreDropped)
+{
+    const QJsonArray symbols = jsonArrayOf(R"([
+        {"name": "C", "kind": 5, "selectionRange": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}},
+        {"name": "S", "kind": 23, "selectionRange": {"start": {"line": 2, "character": 0}, "end": {"line": 2, "character": 1}}},
+        {"name": "I", "kind": 11, "selectionRange": {"start": {"line": 3, "character": 0}, "end": {"line": 3, "character": 1}}},
+        {"name": "O", "kind": 19, "selectionRange": {"start": {"line": 4, "character": 0}, "end": {"line": 4, "character": 1}}},
+        {"name": "M", "kind": 6, "selectionRange": {"start": {"line": 5, "character": 0}, "end": {"line": 5, "character": 1}}},
+        {"name": "", "kind": 5, "selectionRange": {"start": {"line": 6, "character": 0}, "end": {"line": 6, "character": 1}}}
+    ])");
+    const auto classes = Lsp::buildClassView(symbols);
+    // class, struct, interface, object — but not the method, and not the
+    // nameless type (a row with no label cannot be picked from a list).
+    ASSERT_EQ(classes.size(), 4);
+    EXPECT_EQ(classes.at(0).name, QStringLiteral("C"));
+    EXPECT_EQ(classes.at(1).name, QStringLiteral("S"));
+    EXPECT_EQ(classes.at(2).name, QStringLiteral("I"));
+    EXPECT_EQ(classes.at(3).name, QStringLiteral("O"));
+}
+
+TEST(ClassView, MemberPositionsSurviveSoThePanelCanFlashToThem)
+{
+    // The panel jumps to a member on double click, using exactly these
+    // numbers. If they came from `range` instead of `selectionRange` the
+    // caret would land on the first line of the body, not on the name.
+    const QJsonArray symbols = jsonArrayOf(R"cpp([{
+        "name": "Box", "kind": 23, "detail": "struct Box",
+        "range": {"start": {"line": 0, "character": 0}, "end": {"line": 40, "character": 1}},
+        "selectionRange": {"start": {"line": 0, "character": 7}, "end": {"line": 0, "character": 10}},
+        "children": [
+            {"name": "width", "kind": 8, "detail": "int",
+             "range": {"start": {"line": 12, "character": 4}, "end": {"line": 25, "character": 5}},
+             "selectionRange": {"start": {"line": 12, "character": 8}, "end": {"line": 12, "character": 13}}},
+            {"name": "resize", "kind": 6, "detail": "void resize(int)",
+             "selectionRange": {"start": {"line": 20, "character": 9}, "end": {"line": 20, "character": 15}}}
+        ]
+    }])cpp");
+    const auto classes = Lsp::buildClassView(symbols);
+    ASSERT_EQ(classes.size(), 1);
+    const auto& box = classes.first();
+    EXPECT_EQ(box.line, 0);
+    EXPECT_EQ(box.column, 7);
+    ASSERT_EQ(box.members.size(), 2);
+    EXPECT_EQ(box.members.at(0).name, QStringLiteral("width"));
+    EXPECT_EQ(box.members.at(0).detail, QStringLiteral("int"));
+    EXPECT_EQ(box.members.at(0).line, 12);
+    EXPECT_EQ(box.members.at(0).column, 8);
+    EXPECT_EQ(box.members.at(1).name, QStringLiteral("resize"));
+    EXPECT_EQ(box.members.at(1).kind, Lsp::SymbolKind::Method);
+}
+
+TEST(ClassView, EnumeratorsAreMembersOfAnEnumButAnEnumIsNotAClass)
+{
+    // clangd reports the enumerators as children of the enum, and the enum
+    // itself as SymbolKind::Enum. The class browser shows classes, so the
+    // enum is not a row — but an enum *inside* a class arrives as a member
+    // and must keep its enumerators reachable through that member.
+    const QJsonArray symbols = jsonArrayOf(R"([{
+        "name": "Mode", "kind": 10,
+        "selectionRange": {"start": {"line": 0, "character": 6}, "end": {"line": 0, "character": 10}},
+        "children": [
+            {"name": "Fast", "kind": 22,
+             "selectionRange": {"start": {"line": 1, "character": 4}, "end": {"line": 1, "character": 8}}}
+        ]
+    }, {
+        "name": "Runner", "kind": 5, "detail": "class Runner",
+        "selectionRange": {"start": {"line": 5, "character": 6}, "end": {"line": 5, "character": 12}},
+        "children": [
+            {"name": "mode", "kind": 8, "detail": "Mode",
+             "selectionRange": {"start": {"line": 6, "character": 9}, "end": {"line": 6, "character": 13}}}
+        ]
+    }])");
+    const auto classes = Lsp::buildClassView(symbols);
+    ASSERT_EQ(classes.size(), 1);
+    EXPECT_EQ(classes.first().name, QStringLiteral("Runner"));
+    ASSERT_EQ(classes.first().members.size(), 1);
+    EXPECT_EQ(classes.first().members.first().name, QStringLiteral("mode"));
+}
+
+TEST(ClassView, MultipleClassesInOneFileKeepTheirOwnSourceOrder)
+{
+    // The list is read top to bottom, so it must be in source order — not
+    // sorted by name, and not grouped by kind. This is the one thing a
+    // reader can rely on without reading the labels.
+    const QJsonArray symbols = jsonArrayOf(R"([
+        {"name": "Zebra", "kind": 5, "selectionRange": {"start": {"line": 50, "character": 6}, "end": {"line": 50, "character": 11}}},
+        {"name": "Apple", "kind": 23, "selectionRange": {"start": {"line": 3, "character": 7}, "end": {"line": 3, "character": 12}}},
+        {"name": "Mango", "kind": 5, "selectionRange": {"start": {"line": 20, "character": 6}, "end": {"line": 20, "character": 11}}}
+    ])");
+    const auto classes = Lsp::buildClassView(symbols);
+    ASSERT_EQ(classes.size(), 3);
+    // The server already sends source order; the point of the test is that
+    // buildClassView preserves it instead of reordering for display.
+    EXPECT_EQ(classes.at(0).name, QStringLiteral("Zebra"));
+    EXPECT_EQ(classes.at(1).name, QStringLiteral("Apple"));
+    EXPECT_EQ(classes.at(2).name, QStringLiteral("Mango"));
+}

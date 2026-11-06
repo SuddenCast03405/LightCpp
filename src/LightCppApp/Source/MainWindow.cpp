@@ -78,6 +78,7 @@
 #include <QJsonObject>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QDockWidget>
 #include <QMenuBar>
 #include <QMetaType>
 #include <QMessageBox>
@@ -543,6 +544,14 @@ MainWindow::MainWindow(QWidget* parent)
                 return;  // a newer request is already in flight
             }
             applySemanticTokens(semanticTokensFilePath_, result);
+            return;
+        }
+        if (method == QLatin1String("textDocument/documentSymbol")) {
+            if (requestId != classBrowserRequestId_
+                || classBrowserDock_ == nullptr || !classBrowserDock_->isVisible()) {
+                return;
+            }
+            applyClassBrowser(classBrowserFilePath_, result);
         }
     });
     connect(lsp_, &LightCpp::App::LanguageServerClient::renameReady,
@@ -807,6 +816,12 @@ MainWindow::MainWindow(QWidget* parent)
             updateEolCombo(ed);
             onCursorPositionChanged();
             requestOutline();  // outline follows the active tab
+            // The class browser describes one document, so it has to follow
+            // the tab too — otherwise it silently keeps showing the classes
+            // of the file you just left.
+            if (classBrowserDock_ != nullptr && classBrowserDock_->isVisible()) {
+                requestClassBrowser(ed->lintPath());
+            }
         } else {
             statusLanguage_->clear();
             statusFile_->clear();
@@ -3022,8 +3037,14 @@ void MainWindow::createActions()
         }
     });
 
-    actCommandPalette_ = new QAction(tr("Command &Palette..."), this);
-    actCommandPalette_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+P")));
+    actClassBrowser_ = new QAction(tr("Class &Browser"), this);
+    actClassBrowser_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+B")));
+    actClassBrowser_->setStatusTip(
+        tr("The classes of the active file and what is inside them"));
+    connect(actClassBrowser_, &QAction::triggered, this,
+            [this] { showClassBrowser(); });
+
+    actCommandPalette_ = new QAction(tr("Command &Palette..."), this);    actCommandPalette_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+P")));
     actCommandPalette_->setStatusTip(tr("Run any menu command by name"));
     connect(actCommandPalette_, &QAction::triggered, this, [this] {
         // Every action the window owns, so plugin-registered entries show up
@@ -3124,6 +3145,7 @@ void MainWindow::createActions()
         {actPackageManager_, "actionPackageManager"},
         {actBlameFile_, "actionBlameFile"},
         {actDebugSymbols_, "actionDebugSymbols"},
+        {actClassBrowser_, "actionClassBrowser"},
     };
     for (auto it = actionNames.constBegin(); it != actionNames.constEnd();
          ++it) {
@@ -3245,6 +3267,7 @@ void MainWindow::createMenuBar()
     viewMenu->addAction(actAnalyze_);
     viewMenu->addSeparator();
     viewMenu->addAction(actMarkdownPreview_);
+    viewMenu->addAction(actClassBrowser_);
 
     auto* gitMenu = menuBar()->addMenu(tr("&Git"));
     gitMenu->setObjectName(QStringLiteral("menuGit"));
@@ -4444,6 +4467,266 @@ void MainWindow::showTypeHierarchy()
         }
         dialog->tree()->expandItem(rootPointer);
     });
+}
+
+// --- class browser ---------------------------------------------------------
+
+namespace {
+
+/// The one-word label for a LSP SymbolKind, for the class list and the
+/// member rows. Kept next to the class browser rather than in the model
+/// because it is a display decision, not a fact about the protocol.
+QString symbolKindLabel(int kind)
+{
+    using namespace LightCpp::Workbench::Lsp;
+    switch (kind) {
+    case SymbolKind::Class:
+        return QStringLiteral("class");
+    case SymbolKind::Struct:
+        return QStringLiteral("struct");
+    case SymbolKind::Interface:
+        return QStringLiteral("interface");
+    case SymbolKind::Object:
+        return QStringLiteral("object");
+    case SymbolKind::Method:
+        return QStringLiteral("method");
+    case SymbolKind::Constructor:
+        return QStringLiteral("ctor");
+    case SymbolKind::Operator:
+        return QStringLiteral("operator");
+    case SymbolKind::Field:
+        return QStringLiteral("field");
+    case SymbolKind::Property:
+        return QStringLiteral("property");
+    case SymbolKind::Enum:
+        return QStringLiteral("enum");
+    case SymbolKind::EnumMember:
+        return QStringLiteral("enumerator");
+    case SymbolKind::Function:
+        return QStringLiteral("function");
+    case SymbolKind::Variable:
+        return QStringLiteral("variable");
+    case SymbolKind::Constant:
+        return QStringLiteral("constant");
+    case SymbolKind::Namespace:
+        return QStringLiteral("namespace");
+    case SymbolKind::Event:
+        return QStringLiteral("event");
+    case SymbolKind::TypeParameter:
+        return QStringLiteral("template");
+    default:
+        return QString();
+    }
+}
+
+}  // namespace
+
+void MainWindow::showClassBrowser()
+{
+    if (classBrowserDock_ == nullptr) {
+        classBrowserDock_ = new QDockWidget(tr("Classes"), this);
+        classBrowserDock_->setObjectName(QStringLiteral("classBrowserDock"));
+        classBrowserDock_->setAllowedAreas(Qt::LeftDockWidgetArea
+                                           | Qt::RightDockWidgetArea);
+
+        auto* body = new QWidget(classBrowserDock_);
+        auto* layout = new QVBoxLayout(body);
+        layout->setContentsMargins(4, 4, 4, 4);
+        layout->setSpacing(4);
+
+        classFilter_ = new QLineEdit(body);
+        classFilter_->setObjectName(QStringLiteral("classBrowserFilter"));
+        classFilter_->setPlaceholderText(tr("Filter classes..."));
+        classFilter_->setClearButtonEnabled(true);
+        layout->addWidget(classFilter_);
+
+        auto* splitter = new QSplitter(Qt::Vertical, body);
+        classList_ = new QListWidget(splitter);
+        classList_->setObjectName(QStringLiteral("classBrowserList"));
+        classList_->setUniformItemSizes(true);
+        classMembers_ = new QTreeWidget(splitter);
+        classMembers_->setObjectName(QStringLiteral("classBrowserMembers"));
+        classMembers_->setColumnCount(2);
+        classMembers_->setHeaderLabels({tr("Member"), tr("Kind")});
+        classMembers_->setUniformRowHeights(true);
+        classMembers_->setRootIsDecorated(false);
+        splitter->addWidget(classList_);
+        splitter->addWidget(classMembers_);
+        splitter->setStretchFactor(0, 1);
+        splitter->setStretchFactor(1, 2);
+        layout->addWidget(splitter, 1);
+
+        classDetail_ = new QLabel(body);
+        classDetail_->setObjectName(QStringLiteral("classBrowserDetail"));
+        classDetail_->setWordWrap(true);
+        classDetail_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        // The detail is a second line of information, not a headline: keep it
+        // subordinate to the member list instead of competing with it.
+        classDetail_->setStyleSheet(QStringLiteral("color: palette(mid);"));
+        layout->addWidget(classDetail_);
+
+        classBrowserDock_->setWidget(body);
+        addDockWidget(Qt::LeftDockWidgetArea, classBrowserDock_);
+        classBrowserDock_->hide();
+
+        // Filtering is display-time only: the server answer is cached whole,
+        // so typing a prefix never costs a round trip and never reorders.
+        connect(classFilter_, &QLineEdit::textChanged, this, [this] {
+            classList_->clear();
+            const QString needle = classFilter_->text().trimmed();
+            for (int i = 0; i < classTypes_.size(); ++i) {
+                const auto& type = classTypes_.at(i);
+                if (!needle.isEmpty()
+                    && !type.name.contains(needle, Qt::CaseInsensitive)) {
+                    continue;
+                }
+                auto* row = new QListWidgetItem(
+                    QStringLiteral("%1  %2").arg(symbolKindLabel(type.kind),
+                                                 type.name),
+                    classList_);
+                row->setData(Qt::UserRole, i);
+            }
+            if (classList_->count() > 0) {
+                classList_->setCurrentRow(0);
+            } else {
+                classMembers_->clear();
+                classDetail_->clear();
+            }
+        });
+
+        connect(classList_, &QListWidget::currentItemChanged, this,
+                [this](QListWidgetItem* current) {
+            classMembers_->clear();
+            if (current == nullptr) {
+                classDetail_->clear();
+                return;
+            }
+            const int index = current->data(Qt::UserRole).toInt();
+            if (index < 0 || index >= classTypes_.size()) {
+                classDetail_->clear();
+                return;
+            }
+            const auto& type = classTypes_.at(index);
+            QString detail = type.detail;
+            if (!type.baseClasses.isEmpty()) {
+                detail += tr("  |  inherits %1").arg(type.baseClasses);
+            }
+            detail += tr("  |  %n member(s)", nullptr, int(type.members.size()));
+            classDetail_->setText(detail);
+            for (const auto& member : type.members) {
+                auto* row = new QTreeWidgetItem(classMembers_);
+                row->setText(0, member.name);
+                row->setText(1, symbolKindLabel(member.kind));
+                // Keep the detail as the tooltip: it is the full signature,
+                // which is too wide for a column but exactly what you want
+                // when hovering a name you do not recognise.
+                if (!member.detail.isEmpty()) {
+                    row->setToolTip(0, member.detail);
+                }
+                row->setData(0, Qt::UserRole, member.line);
+                row->setData(0, Qt::UserRole + 1, member.column);
+            }
+            if (type.members.isEmpty()) {
+                auto* none = new QTreeWidgetItem(classMembers_);
+                none->setText(0, tr("(no members)"));
+                none->setDisabled(true);
+            }
+        });
+
+        // A double click is a navigation intent; a single click is a reading
+        // intent. Navigating on selection would fight the person scrolling.
+        connect(classMembers_, &QTreeWidget::itemDoubleClicked, this,
+                [this](QTreeWidgetItem* item, int) {
+            if (item == nullptr) {
+                return;
+            }
+            jumpToClassBrowserItem(item->data(0, Qt::UserRole).toInt(),
+                                   item->data(0, Qt::UserRole + 1).toInt());
+        });
+        connect(classList_, &QListWidget::itemDoubleClicked, this,
+                [this](QListWidgetItem* item) {
+            if (item == nullptr) {
+                return;
+            }
+            const int index = item->data(Qt::UserRole).toInt();
+            if (index < 0 || index >= classTypes_.size()) {
+                return;
+            }
+            const auto& type = classTypes_.at(index);
+            jumpToClassBrowserItem(type.line, type.column);
+        });
+    }
+
+    classBrowserDock_->show();
+    classBrowserDock_->raise();
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || ed->lintPath().isEmpty()) {
+        classList_->clear();
+        classMembers_->clear();
+        classDetail_->setText(
+            tr("Open a C++ file: the class list is built by the language server."));
+        return;
+    }
+    requestClassBrowser(ed->lintPath());
+}
+
+void MainWindow::requestClassBrowser(const QString& filePath)
+{
+    if (lsp_ == nullptr || !lsp_->isRunning() || filePath.isEmpty() || !isCppLikeFile(filePath)) {
+        return;
+    }
+    if (CodeEditor* ed = currentEditor(); ed != nullptr && ed->lintPath() == filePath) {
+        // Same reason as the outline: the lint didChange is debounced, so the
+        // server would otherwise answer about the text before the last edit.
+        lsp_->changeDocument(filePath, ed->toPlainText());
+    }
+    const int requestId = lsp_->requestRaw(
+        QStringLiteral("textDocument/documentSymbol"),
+        QJsonObject{{QStringLiteral("textDocument"),
+                     QJsonObject{{QStringLiteral("uri"),
+                                  LightCpp::App::LanguageServerClient::toFileUri(
+                                      filePath)}}}},
+        LightCpp::App::LspResponse::Kind::DocumentSymbols);
+    if (requestId > 0) {
+        classBrowserRequestId_ = requestId;
+        classBrowserFilePath_ = filePath;
+    }
+}
+
+void MainWindow::applyClassBrowser(const QString& filePath,
+                                   const QJsonValue& result)
+{
+    if (filePath != classBrowserFilePath_) {
+        return;  // an answer about a document that is no longer the subject
+    }
+    classTypes_ = LightCpp::Workbench::Lsp::buildClassView(result);
+    if (classFilter_ != nullptr) {
+        // Re-run the filter so the list reflects the new answer under the
+        // current search text rather than resetting what the user typed.
+        emit classFilter_->textChanged(classFilter_->text());
+    }
+    if (classTypes_.isEmpty()) {
+        classList_->clear();
+        classMembers_->clear();
+        classDetail_->setText(tr("No classes or structs in this file."));
+    }
+}
+
+void MainWindow::jumpToClassBrowserItem(int line, int column)
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || line < 0) {
+        return;
+    }
+    QTextCursor cursor = ed->textCursor();
+    const QTextBlock block = ed->document()->findBlockByNumber(line);
+    if (!block.isValid()) {
+        return;
+    }
+    cursor.setPosition(block.position() + qBound(0, column, block.length() - 1));
+    ed->setTextCursor(cursor);
+    ed->centerCursor();
+    ed->setFocus();
 }
 
 void MainWindow::requestOutline()
@@ -7704,6 +7987,10 @@ void MainWindow::onLintTimerTimeout()
     // The buffer just changed on the server side — refresh the outline in
     // the same round trip (cheap; clangd reuses the parsed AST).
     requestOutline();
+    if (classBrowserDock_ != nullptr && classBrowserDock_->isVisible()
+        && currentEditor() == ed) {
+        requestClassBrowser(lintPath);
+    }
 }
 
 void MainWindow::scheduleLint(CodeEditor* editor)

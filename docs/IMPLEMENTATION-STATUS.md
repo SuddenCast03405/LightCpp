@@ -21,14 +21,14 @@
 | 三、构建配置与执行 | 27 | 10 | 14 | 3 | 60% |
 | 四、Clang 工具链集成 | 8 | 6 | 2 | 0 | 90% |
 | 五、调试器 | 34 | 33 | 0 | 1 | 95% |
-| 六、代码智能 | 23 | 16 | 4 | 3 | 78% |
+| 六、代码智能 | 23 | 17 | 3 | 3 | 80% |
 | 七、静态分析与代码质量 | 13 | 3 | 10 | 0 | 60% |
 | 八、版本控制 | 26 | 14 | 8 | 4 | 70% |
 | 九、终端与工具集成 | 15 | 2 | 2 | 11 | 20% |
 | 十、测试 | 15 | 14 | 1 | 0 | 95% |
 | 十一、文档与帮助 | 11 | 7 | 2 | 2 | 73% |
 | 十二、Qt 生态 | 7 | 3 | 4 | 0 | 71% |
-| **合计** | **188** | **116** | **46** | **26** | **75%** |
+| **合计** | **188** | **117** | **45** | **26** | **75%** |
 
 口径说明：
 
@@ -162,7 +162,7 @@
 
 > 这一域差距最大，也是最容易在验收时被误判为「已完成」的部分——34 条在 `catalog/features.json` 里全部标着 `required`，且都有归属插件。
 
-## 六、代码智能（23 条：实现 16 / 骨架 4 / 声明 3）
+## 六、代码智能（23 条：实现 17 / 骨架 3 / 声明 3）
 
 主干是 clangd（LSP 客户端，`LanguageServerClient.cpp` 1455 行）＋ libclang 兜底补全（`LibClangCompleter.cpp`）。
 
@@ -189,7 +189,7 @@
 | `intel.nav.call.hierarchy` 调用层级 | 实现 | Edit > Call Hierarchy，`prepareCallHierarchy` + incoming/outgoing 两组 |
 | `intel.nav.type.hierarchy` 类型层级 | 实现 | Edit > Type Hierarchy，`prepareTypeHierarchy` + supertypes/subtypes |
 | `intel.nav.inheritance` 继承关系 | 实现 | 同上，基类/派生类即继承关系；类视图由 `buildClassView` 供数据 |
-| `intel.nav.class` 类视图 | 骨架 | `Workbench/Lsp::buildClassView` 能从 documentSymbol 还原类与成员并展平嵌套类，尚未建独立面板 |
+| `intel.nav.class` 类视图 | 实现 | View ▸ Class Browser（Ctrl+Shift+B）：左侧类型列表带过滤框，右侧成员树（名称 + 种类，签名作 tooltip），底部显示 `detail` / 基类 / 成员数；双击跳到定义。随活动标签页与 lint 刷新，答案按请求号 + 路径双重去旧 |
 | `intel.nav.callgraph` 函数调用图 | 骨架 | `CallGraph::toDot` / `toTreeText`（含环检测）已实现并单测，未接渲染出口 |
 
 ## 七、静态分析与代码质量（13 条：实现 3 / 骨架 10 / 声明 0）
@@ -396,6 +396,7 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `src/LightCppApp/Source/MainWindow.cpp` | Sort Includes、Call/Type Hierarchy、Git 侧栏、Blame、冲突解决、包管理器、查看器 | 9 |
 | `src/LightCppTesting/{TestModel,TestRunner,CoverageReport}.hpp` | 补回分支上缺失、导致无法编译的三个头 | — |
 | `src/LightCppSettings/` | `Preferences::debugger` + `"debugger"` 块的读写（含孤立 from 丢弃） | 3 |
+| `MainWindow.cpp` View ▸ Class Browser | 类型列表 + 过滤 + 成员树 + 定位；随标签页/lint 刷新 | 5 |
 | `MainWindow.cpp` Debug ▸ Symbol Settings | 映射树 + 路径列表 + `Debug::describe()` 摘要；会话 `started` 时下发 | — |
 
-单元测试从 781 增至 **885**（本轮新增 104 个），`100% tests passed`。
+单元测试从 781 增至 **890**（本轮新增 109 个），`100% tests passed`。

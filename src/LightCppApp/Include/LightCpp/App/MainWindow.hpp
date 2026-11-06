@@ -53,6 +53,9 @@ class QHBoxLayout;
 class OutputPanel;
 class QLabel;
 class QListWidget;
+class QDockWidget;
+class QLineEdit;
+class QTreeWidget;
 class QTabWidget;
 class QComboBox;
 class QAction;
@@ -669,6 +672,23 @@ private:
     QTabWidget* sideTabs_ = nullptr;
     /// Outline page: the active document's symbol tree (documentSymbol).
     QTreeWidget* outlineTree_ = nullptr;
+    /// Class browser dock: types on the left, the selected type's members on
+    /// the right. Kept separate from the outline on purpose — the outline
+    /// answers "what is in this file", the class browser answers "what is in
+    /// this type", and one list cannot be both without becoming noise.
+    QDockWidget* classBrowserDock_ = nullptr;
+    QLineEdit* classFilter_ = nullptr;
+    QListWidget* classList_ = nullptr;
+    QTreeWidget* classMembers_ = nullptr;
+    QLabel* classDetail_ = nullptr;
+    /// The full class list of the current document, filter applied at display
+    /// time so typing does not re-ask the server.
+    QList<LightCpp::Workbench::Lsp::ClassType> classTypes_;
+    /// The documentSymbol request the class browser is currently waiting for.
+    int classBrowserRequestId_ = 0;
+    /// The document that request was about, so a stale answer for another
+    /// file cannot populate the list.
+    QString classBrowserFilePath_;
     /// Breadcrumb bar: the enclosing-symbol chain of the caret, one flat
     /// button per scope level.
     QWidget* breadcrumbBar_ = nullptr;
@@ -771,6 +791,7 @@ private:
     QAction* actAnalyze_ = nullptr;          // Tools > Static Analysis (Ctrl+Shift+A)
     QAction* actCommandPalette_ = nullptr;   // Tools > Command Palette (Ctrl+Shift+P)
     QAction* actMarkdownPreview_ = nullptr;  // View > Preview Markdown (Ctrl+Shift+M)
+    QAction* actClassBrowser_ = nullptr;     // View > Class Browser (Ctrl+Shift+B)
 
     // --- git state ---
     LightCpp::App::GitClient* git_ = nullptr;
@@ -921,6 +942,20 @@ private:
     void showCallHierarchy();
     /// The same for the type hierarchy (base types and derived types).
     void showTypeHierarchy();
+
+    // --- class browser ------------------------------------------------------
+    /// Show the classes of the active document with their members, in a
+    /// dock that stays in sync with the active editor. Unlike the outline
+    /// (one flat list of every symbol), this keeps *membership*: what belongs
+    /// to `Foo` and not to the namespace that happens to precede it.
+    void showClassBrowser();
+    /// Ask the server for `filePath`'s documentSymbol and feed the class
+    /// browser when the answer is the newest one for that document.
+    void requestClassBrowser(const QString& filePath);
+    /// Rebuild the class browser tree and repopulate the class list.
+    void applyClassBrowser(const QString& filePath, const QJsonValue& result);
+    /// Jump to a class or member row's position in the active editor.
+    void jumpToClassBrowserItem(int line, int column);
     /// Rebuild the outline tree and the flattened symbol cache from one
     /// documentSymbol answer — but only if it is the newest request AND
     /// still describes the active editor's document.
