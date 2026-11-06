@@ -133,6 +133,16 @@ void Emulator::reset()
     stringBuffer_.clear();
 }
 
+bool Emulator::isBlankRow(const QList<Cell>& line)
+{
+    for (const Cell& cell : line) {
+        if (!cell.text.isEmpty() && cell.text != QStringLiteral(" ")) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void Emulator::ensureLine(int row)
 {
     while (screen_.size() <= row) {
@@ -178,7 +188,26 @@ void Emulator::resize(int columns, int rows)
     const int oldRows = rows_;
     // Growing rows: append blanks. Shrinking: drop from the top into
     // scrollback, so the output that scrolled away stays reachable.
-    if (rows < oldRows) {
+    //
+    // Dropping from the top is right for a viewport that shrinks around a
+    // *full* screen, and wrong for the first resize of a widget: a terminal
+    // that starts 80x24 and is fitted to a 12x2 placeholder would push
+    // twenty-two empty rows into history and then clamp every absolute
+    // cursor move (`CSI 3;1H`) to row 1. So a screen whose bottom half is
+    // entirely blank keeps its *top* rows — which is where the prompt is —
+    // and loses the blank tail instead.
+    bool fromTop = true;
+    if (rows < oldRows && screen_.size() == oldRows) {
+        bool tailBlank = true;
+        for (int i = rows; i < oldRows && tailBlank; ++i) {
+            tailBlank = isBlankRow(screen_.at(i));
+        }
+        fromTop = !tailBlank;
+    }
+    if (!fromTop) {
+        screen_ = screen_.mid(0, rows);
+        cursorRow_ = qBound(0, cursorRow_, rows - 1);
+    } else if (rows < oldRows) {
         const int drop = oldRows - rows;
         for (int i = 0; i < drop && i < screen_.size(); ++i) {
             if (scrollbackLimit_ > 0) {

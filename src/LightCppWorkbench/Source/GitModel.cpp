@@ -665,6 +665,34 @@ QStringList deleteTag(const QString& name, bool remote)
     return {QStringLiteral("tag"), QStringLiteral("-d"), name};
 }
 
+QStringList clone(const QString& url, const QString& directory, int depth,
+                  bool singleBranch, bool recurseSubmodules)
+{
+    const QString source = url.trimmed();
+    if (source.isEmpty()) {
+        return {};
+    }
+    QStringList args{QStringLiteral("clone")};
+    if (depth > 0) {
+        args << QStringLiteral("--depth") << QString::number(depth);
+        if (singleBranch) {
+            args << QStringLiteral("--single-branch");
+        }
+    }
+    if (recurseSubmodules) {
+        args << QStringLiteral("--recurse-submodules");
+    }
+    // `--` before the URLs so neither a URL nor a directory that begins with
+    // a dash can be read as an option.
+    args << QStringLiteral("--");
+    args << source;
+    const QString destination = directory.trimmed();
+    if (!destination.isEmpty()) {
+        args << destination;
+    }
+    return args;
+}
+
 QStringList listRemotes()
 {
     return {QStringLiteral("remote"), QStringLiteral("-v")};

@@ -775,6 +775,9 @@ private:
     QMenu* externalToolsMenu_ = nullptr;
     QAction* actManageExternalTools_ = nullptr;
     QAction* actBlameFile_ = nullptr;          // Git > Blame File
+    QAction* actBlameGutter_ = nullptr;        // View > Show Blame Column
+    /// Forget the blame column on every editor (the toggle going off).
+    void clearBlameGutters();
     QAction* actDebugSymbols_ = nullptr;       // Debug > Symbol Settings...
     QAction* actToggleBookmark_ = nullptr;     // Edit > Toggle Bookmark (Ctrl+F2)
     QAction* actNextBookmark_ = nullptr;       // Edit > Next Bookmark (F2)
@@ -794,6 +797,8 @@ private:
     QAction* actGitLog_ = nullptr;
     QAction* actGitDiff_ = nullptr;
     QAction* actGitDiffStaged_ = nullptr;
+    QAction* actGitClone_ = nullptr;           // Git > Clone Repository...
+    QAction* actGitSideBySide_ = nullptr;      // Git > Side-by-Side Diff...
     QAction* actGitInit_ = nullptr;
     QAction* actGitBranches_ = nullptr;      // Git > Branches/Tags/Remotes... dialog
     QAction* actTestExplorer_ = nullptr;     // View > Test Explorer (Ctrl+Shift+T)
@@ -1278,6 +1283,11 @@ private:
     /// The blame view for the active buffer, opened in the output area's
     /// own channel: one row per block, double-click jumps to the line.
     void showBlameForActiveFile();
+    /// Ask for a URL and a destination, then clone.
+    void showCloneDialog();
+    /// The two-column diff of the active file's changes, with a character-level
+    /// highlight inside each changed line.
+    void showSideBySideDiff(bool staged);
     /// Open the three-way conflict editor for `path` when git left markers in
     /// it; a no-op (with a status message) when the file has none.
     void openConflictResolution(const QString& path);

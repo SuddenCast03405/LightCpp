@@ -13,6 +13,7 @@
 #include "LightCpp/Workbench/DocsCatalog.hpp"
 #include "LightCpp/Workbench/EditorTools.hpp"
 #include "LightCpp/Workbench/ExternalTools.hpp"
+#include "LightCpp/Workbench/GitDiff.hpp"
 #include "LightCpp/Workbench/GitExtra.hpp"
 #include "LightCpp/Workbench/GitModel.hpp"
 #include "LightCpp/Workbench/LspModel.hpp"
@@ -2560,4 +2561,320 @@ TEST(NatvisOrder, AMalformedDocumentYieldsWhatCouldBeReadAndNoCrash)
     EXPECT_TRUE(Debug::natvisTypesIn(QStringLiteral("<Type Name=\"Unclosed")).isEmpty());
     EXPECT_TRUE(Debug::natvisTypesIn(QString()).isEmpty());
     EXPECT_EQ(Debug::natvisTypesIn(QStringLiteral("<Type Name=\"A\"><Type Name=\"B\">")).size(), 2);
+}
+
+// --- GitDiff: inline spans, side-by-side alignment, blame lookup -----------
+
+TEST(GitInlineDiff, AOneCharacterFixHighlightsOneCharacterOnEachSide)
+{
+    QList<Git::InlineSpan> before;
+    QList<Git::InlineSpan> after;
+    Git::inlineDiff(QStringLiteral("int counter = 0;"), QStringLiteral("int counter = 1;"),
+                    &before, &after);
+    ASSERT_EQ(before.size(), 1);
+    ASSERT_EQ(after.size(), 1);
+    EXPECT_EQ(before.first().start, 14);
+    EXPECT_EQ(before.first().length, 1);
+    EXPECT_EQ(after.first().start, 14);
+    EXPECT_EQ(after.first().length, 1);
+}
+
+TEST(GitInlineDiff, AnIdenticalPairYieldsNoSpans)
+{
+    QList<Git::InlineSpan> before;
+    QList<Git::InlineSpan> after;
+    Git::inlineDiff(QStringLiteral("same"), QStringLiteral("same"), &before, &after);
+    EXPECT_TRUE(before.isEmpty());
+    EXPECT_TRUE(after.isEmpty());
+}
+
+TEST(GitInlineDiff, AnInsertionLeavesTheOldSideUntouched)
+{
+    QList<Git::InlineSpan> before;
+    QList<Git::InlineSpan> after;
+    Git::inlineDiff(QStringLiteral("ab"), QStringLiteral("axxb"), &before, &after);
+    EXPECT_TRUE(before.isEmpty());
+    ASSERT_EQ(after.size(), 1);
+    EXPECT_EQ(after.first().start, 1);
+    EXPECT_EQ(after.first().length, 2);
+}
+
+TEST(GitInlineDiff, MovingAWordReportsTwoSpansRatherThanTheWholeLine)
+{
+    // "a b c" → "b c a": the reader's eye should go to what moved, not to
+    // every character. The exact span split is an artefact of the LCS, so
+    // the assertion is the invariant that matters: the common part is not
+    // highlighted.
+    QList<Git::InlineSpan> before;
+    QList<Git::InlineSpan> after;
+    Git::inlineDiff(QStringLiteral("a b c"), QStringLiteral("b c a"), &before, &after);
+    int highlightedBefore = 0;
+    for (const auto& s : before) {
+        highlightedBefore += s.length;
+    }
+    EXPECT_LT(highlightedBefore, 5);
+    EXPECT_GT(highlightedBefore, 0);
+}
+
+TEST(GitInlineDiff, MergingJoinsAlmostTouchingSpans)
+{
+    const QList<Git::InlineSpan> spans{Git::InlineSpan{0, 1}, Git::InlineSpan{3, 1},
+                                       Git::InlineSpan{20, 2}};
+    const auto merged = Git::mergeSpans(spans, 2);
+    // 0..1 and 3..4 are two apart, so they become one 0..4 span; 20 is far.
+    ASSERT_EQ(merged.size(), 2);
+    EXPECT_EQ(merged.at(0).start, 0);
+    EXPECT_EQ(merged.at(0).length, 4);
+    EXPECT_EQ(merged.at(1).start, 20);
+}
+
+TEST(GitInlineDiff, MergingSortsAndDropsEmptySpans)
+{
+    const QList<Git::InlineSpan> spans{Git::InlineSpan{9, 0}, Git::InlineSpan{5, 1},
+                                       Git::InlineSpan{1, 1}};
+    const auto merged = Git::mergeSpans(spans, 0);
+    ASSERT_EQ(merged.size(), 2);
+    EXPECT_EQ(merged.at(0).start, 1);
+    EXPECT_EQ(merged.at(1).start, 5);
+}
+
+namespace {
+Git::DiffHunk hunkOf(const QStringList& lines)
+{
+    Git::DiffHunk hunk;
+    hunk.oldStart = 10;
+    hunk.newStart = 10;
+    hunk.lines = lines;
+    return hunk;
+}
+}  // namespace
+
+TEST(GitAlign, ContextLinesSitOnTheSameRow)
+{
+    const auto rows = Git::alignSides(hunkOf({QStringLiteral(" one"), QStringLiteral(" two")}));
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_EQ(rows.at(0).oldLine, 10);
+    EXPECT_EQ(rows.at(0).newLine, 10);
+    EXPECT_FALSE(rows.at(0).leftChanged);
+    EXPECT_EQ(rows.at(1).oldLine, 11);
+}
+
+TEST(GitAlign, OneRemovalAndOneAdditionShareARow)
+{
+    const auto rows = Git::alignSides(
+        hunkOf({QStringLiteral("-old"), QStringLiteral("+new")}));
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_TRUE(rows.at(0).leftChanged);
+    EXPECT_TRUE(rows.at(0).rightChanged);
+    EXPECT_EQ(rows.at(0).left, QStringLiteral("old"));
+    EXPECT_EQ(rows.at(0).right, QStringLiteral("new"));
+    EXPECT_EQ(rows.at(0).oldLine, 10);
+    EXPECT_EQ(rows.at(0).newLine, 10);
+}
+
+TEST(GitAlign, TwoRemovalsAgainstOneAdditionPadTheRightColumn)
+{
+    // Without the filler row the right column slides up and a reader pairs
+    // the wrong lines, which is the classic side-by-side diff bug.
+    const auto rows = Git::alignSides(hunkOf(
+        {QStringLiteral("-a"), QStringLiteral("-b"), QStringLiteral("+c")}));
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_TRUE(rows.at(0).leftChanged);
+    EXPECT_TRUE(rows.at(0).rightChanged);
+    EXPECT_TRUE(rows.at(1).leftChanged);
+    EXPECT_FALSE(rows.at(1).rightChanged);
+    // A half row is not a filler row: it holds a real line and gets a number.
+    EXPECT_FALSE(rows.at(1).filler);
+    EXPECT_EQ(rows.at(1).oldLine, 11);
+    EXPECT_EQ(rows.at(1).newLine, 0);
+}
+
+TEST(GitAlign, TheNoNewlineMarkerIsNotARow)
+{
+    const auto rows = Git::alignSides(hunkOf(
+        {QStringLiteral("-a"), QStringLiteral("+b"),
+         QStringLiteral("\\ No newline at end of file")}));
+    EXPECT_EQ(rows.size(), 1);
+}
+
+TEST(GitAlign, LineNumbersAdvancePerSideIndependentOfTheOther)
+{
+    const auto rows = Git::alignSides(hunkOf({QStringLiteral(" ctx"),
+                                              QStringLiteral("-gone"),
+                                              QStringLiteral("+added"),
+                                              QStringLiteral("+also")}));
+    // ctx(10/10), gone+added(11/11), filler+also(0/12)
+    ASSERT_EQ(rows.size(), 3);
+    EXPECT_EQ(rows.at(1).oldLine, 11);
+    EXPECT_EQ(rows.at(1).newLine, 11);
+    EXPECT_EQ(rows.at(2).oldLine, 0);
+    EXPECT_EQ(rows.at(2).newLine, 12);
+}
+
+TEST(GitAlign, TwoHunksGetOneGapRowBetweenThemAndNoneBeforeTheFirst)
+{
+    Git::DiffFile file;
+    file.hunks.append(hunkOf({QStringLiteral(" a")}));
+    file.hunks.append(hunkOf({QStringLiteral(" b")}));
+    const auto rows = Git::alignDiff({file});
+    ASSERT_EQ(rows.size(), 3);
+    EXPECT_FALSE(rows.at(0).gap);
+    EXPECT_TRUE(rows.at(1).gap);
+    EXPECT_FALSE(rows.at(2).gap);
+    // A file with one hunk needs no separator.
+    Git::DiffFile single;
+    single.hunks.append(hunkOf({QStringLiteral(" a")}));
+    EXPECT_EQ(Git::alignDiff({single}).size(), 1);
+}
+
+namespace {
+Git::BlameLine blameLine(int line, const QString& sha, const QString& author,
+                         const QString& date)
+{
+    Git::BlameLine entry;
+    entry.line = line;
+    entry.sha = sha;
+    entry.author = author;
+    entry.date = date;
+    return entry;
+}
+}  // namespace
+
+TEST(GitBlameLookup, ALookIsOneBasedAndOutOfRangeIsUncommitted)
+{
+    Git::BlameLookup lookup(QList<Git::BlameLine>{
+        blameLine(1, QStringLiteral("aaaaaaaaaaaaaaaa"), QStringLiteral("Ada"),
+                  QStringLiteral("2024-01-02 10:00:00 +0000"))});
+    EXPECT_FALSE(lookup.isEmpty());
+    EXPECT_EQ(lookup.size(), 1);
+    EXPECT_EQ(lookup.line(1)->author, QStringLiteral("Ada"));
+    // Line 0 and line 2 are both out of range: a buffer can be longer than
+    // the blame, and the honest answer is "uncommitted", not a crash.
+    EXPECT_EQ(lookup.line(0), nullptr);
+    EXPECT_EQ(lookup.line(2), nullptr);
+    EXPECT_EQ(lookup.gutterText(2), QStringLiteral("uncommitted"));
+    EXPECT_EQ(lookup.shortSha(2), QStringLiteral("uncommitted"));
+    EXPECT_EQ(lookup.colourIndex(2), -1);
+}
+
+TEST(GitBlameLookup, TheGutterShowsTheAuthorTruncatedAndTheDayOnly)
+{
+    Git::BlameLookup lookup(QList<Git::BlameLine>{
+        blameLine(1, QStringLiteral("abcdef0123456789"), QStringLiteral("Alexandrina Petronella"),
+                  QStringLiteral("2024-01-02 10:00:00 +0000"))});
+    // Fourteen characters: thirteen plus an ellipsis, so the date still fits.
+    const QString text = lookup.gutterText(1, 14);
+    EXPECT_TRUE(text.startsWith(QStringLiteral("Alexandrina P") + QChar(0x2026)));
+    EXPECT_TRUE(text.endsWith(QStringLiteral("2024-01-02")));
+    // No truncation when it fits.
+    EXPECT_EQ(lookup.gutterText(1, 40), QStringLiteral("Alexandrina Petronella  2024-01-02"));
+}
+
+TEST(GitBlameLookup, TheColourOfACommitIsStableAndInRange)
+{
+    Git::BlameLookup lookup(QList<Git::BlameLine>{
+        blameLine(1, QStringLiteral("abcdef0123456789"), QStringLiteral("Ada"),
+                  QStringLiteral("2024-01-02 10:00:00 +0000")),
+        blameLine(2, QStringLiteral("abcdef0123456789"), QStringLiteral("Ada"),
+                  QStringLiteral("2024-01-02 10:00:00 +0000"))});
+    const int first = lookup.colourIndex(1);
+    EXPECT_GE(first, 0);
+    EXPECT_LT(first, 12);
+    // Same commit, same colour: that is what makes a gutter readable.
+    EXPECT_EQ(lookup.colourIndex(2), first);
+}
+
+TEST(GitBlameLookup, AShortHashIsSevenCharactersUnlessItIsShorter)
+{
+    EXPECT_EQ(Git::shortHash(QStringLiteral("abcdef0123456789")), QStringLiteral("abcdef0"));
+    EXPECT_EQ(Git::shortHash(QStringLiteral("abc")), QStringLiteral("abc"));
+    EXPECT_EQ(Git::shortHash(QString()), QString());
+}
+
+TEST(GitClone, DepthAndSingleBranchAreSeparateDecisions)
+{
+    // A shallow clone of every branch is legitimate; so is a full clone of
+    // one. A single flag that sets both would make one of them impossible.
+    auto args = Git::Commands::clone(QStringLiteral("https://h/r.git"),
+                                     QStringLiteral("/tmp/r"), 1, false, false);
+    EXPECT_TRUE(args.contains(QStringLiteral("--depth")));
+    EXPECT_FALSE(args.contains(QStringLiteral("--single-branch")));
+    args = Git::Commands::clone(QStringLiteral("https://h/r.git"),
+                                QStringLiteral("/tmp/r"), 50, true, true);
+    EXPECT_TRUE(args.contains(QStringLiteral("--single-branch")));
+    EXPECT_TRUE(args.contains(QStringLiteral("--recurse-submodules")));
+    EXPECT_EQ(args.at(args.indexOf(QStringLiteral("--depth")) + 1), QStringLiteral("50"));
+}
+
+TEST(GitClone, NoDepthMeansNoShallowFlagsAtAll)
+{
+    const auto args = Git::Commands::clone(QStringLiteral("https://h/r.git"), QString(), 0,
+                                           true, false);
+    EXPECT_FALSE(args.contains(QStringLiteral("--depth")));
+    // --single-branch without --depth would still truncate the fetch, and the
+    // caller asked for neither.
+    EXPECT_FALSE(args.contains(QStringLiteral("--single-branch")));
+    EXPECT_EQ(args.last(), QStringLiteral("https://h/r.git"));
+}
+
+TEST(GitClone, TheSeparatorKeepsADashURLFromBeingAnOption)
+{
+    auto args = Git::Commands::clone(QStringLiteral("-weird"), QStringLiteral("-dir"), 0,
+                                     false, false);
+    // clone -- --weird -dir: the separator protects both the URL and the
+    // destination, in that order.
+    ASSERT_EQ(args.size(), 4);
+    EXPECT_EQ(args.at(1), QStringLiteral("--"));
+    EXPECT_EQ(args.at(2), QStringLiteral("-weird"));
+    EXPECT_EQ(args.at(3), QStringLiteral("-dir"));
+}
+
+TEST(GitClone, AnEmptyUrlBuildsNoCommand)
+{
+    EXPECT_TRUE(Git::Commands::clone(QString(), QStringLiteral("/tmp/r"), 1, false, false)
+                    .isEmpty());
+}
+
+TEST(TerminalResize, ShrinkingToFitAPlaceholderKeepsThePromptAndNotBlankHistory)
+{
+    // The bug this pins: a widget starts 80x24, gets fitted to a 12x2
+    // placeholder on first show, and the old code pushed twenty-two *empty*
+    // rows into scrollback while throwing away the two rows holding the
+    // prompt — then every absolute cursor move was clamped to row 1, so
+    // `CSI 3;1H` wrote on top of the prompt.
+    Term::Emulator emulator(20, 6);
+    Q_UNUSED(emulator.feedText(QStringLiteral("$ ls\r\na\r\nb\r\n")));
+    ASSERT_EQ(emulator.scrollbackCount(), 0);
+    emulator.resize(20, 3);
+    // No blank line reached the history: the tail was blank, so the tail went.
+    EXPECT_EQ(emulator.scrollbackCount(), 0);
+    const QStringList lines = emulator.screenLines();
+    ASSERT_GE(lines.size(), 3);
+    EXPECT_EQ(lines.at(0), QStringLiteral("$ ls"));
+    EXPECT_EQ(lines.at(1), QStringLiteral("a"));
+    EXPECT_EQ(lines.at(2), QStringLiteral("b"));
+}
+
+TEST(TerminalResize, AFullScreenStillDropsFromTheTopIntoHistory)
+{
+    // The other half of the same decision: when the screen is full, what
+    // scrolls off is the interesting part and must stay reachable.
+    Term::Emulator emulator(20, 3);
+    Q_UNUSED(emulator.feedText(QStringLiteral("one\r\ntwo\r\nthree\r\n")));
+    emulator.resize(20, 2);
+    EXPECT_EQ(emulator.scrollbackCount(), 1);
+    const QStringList history = emulator.scrollbackLines();
+    EXPECT_EQ(history.first(), QStringLiteral("one"));
+    EXPECT_EQ(emulator.screenLines().at(0), QStringLiteral("two"));
+}
+
+TEST(TerminalResize, AnAbsoluteCursorMoveLandsWhereItSaysAfterAShrink)
+{
+    Term::Emulator emulator(20, 4);
+    Q_UNUSED(emulator.feedText(QStringLiteral("top\r\n")));
+    emulator.resize(20, 2);
+    Q_UNUSED(emulator.feedText(QStringLiteral("\x1b[2;1Hsecond")));
+    const QStringList lines = emulator.screenLines();
+    EXPECT_EQ(lines.at(0), QStringLiteral("top"));
+    EXPECT_EQ(lines.at(1), QStringLiteral("second"));
 }

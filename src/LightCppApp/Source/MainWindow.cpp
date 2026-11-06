@@ -91,6 +91,9 @@
 #include <QSet>
 #include <QSplitter>
 #include <QStandardPaths>
+#include <QSpinBox>
+#include <QStyledItemDelegate>
+#include <QPainter>
 #include <QStatusBar>
 #include <QStyle>
 #include <QTabWidget>
@@ -2823,6 +2826,22 @@ void MainWindow::createActions()
     connect(actBlameFile_, &QAction::triggered, this,
             [this] { showBlameForActiveFile(); });
 
+    actBlameGutter_ = new QAction(tr("Blame &Column"), this);
+    actBlameGutter_->setCheckable(true);
+    actBlameGutter_->setStatusTip(
+        tr("Show the author and date of every line in a column beside the "
+           "code; the column follows the active tab"));
+    connect(actBlameGutter_, &QAction::toggled, this, [this](bool on) {
+        if (!on) {
+            clearBlameGutters();
+            statusBar()->showMessage(tr("Blame column hidden"), 2000);
+            return;
+        }
+        // Turning the column on is a request for the active file's blame,
+        // not a mode that fills in whenever the user happens to ask again.
+        showBlameForActiveFile();
+    });
+
     // --- debugger symbols --------------------------------------------------
     actDebugSymbols_ = new QAction(tr("Symbol &Settings..."), this);
     actDebugSymbols_->setStatusTip(
@@ -2969,9 +2988,21 @@ void MainWindow::createActions()
     actGitDiff_->setStatusTip(tr("Show the unstaged changes of the active file"));
     connect(actGitDiff_, &QAction::triggered, this, [this] { showGitDiff(false); });
 
+    actGitSideBySide_ = new QAction(tr("Side-by-Side &Diff..."), this);
+    actGitSideBySide_->setStatusTip(
+        tr("Show the active file's changes in two columns, with the changed "
+           "characters highlighted"));
+    connect(actGitSideBySide_, &QAction::triggered, this,
+            [this] { showSideBySideDiff(false); });
+
     actGitDiffStaged_ = new QAction(tr("Diff &Staged"), this);
     actGitDiffStaged_->setStatusTip(tr("Show the staged changes of the active file"));
     connect(actGitDiffStaged_, &QAction::triggered, this, [this] { showGitDiff(true); });
+
+    actGitClone_ = new QAction(tr("Cl&one Repository..."), this);
+    actGitClone_->setStatusTip(
+        tr("Copy a remote repository and open it as the project"));
+    connect(actGitClone_, &QAction::triggered, this, [this] { showCloneDialog(); });
 
     actGitInit_ = new QAction(tr("&Initialise Repository"), this);
     actGitInit_->setStatusTip(tr("git init in the directory git would run in"));
@@ -3158,7 +3189,9 @@ void MainWindow::createActions()
         {actGitCommit_, "actionGitCommit"},
         {actGitLog_, "actionGitLog"},
         {actGitDiff_, "actionGitDiff"},
+        {actGitSideBySide_, "actionGitSideBySide"},
         {actGitDiffStaged_, "actionGitDiffStaged"},
+        {actGitClone_, "actionGitClone"},
         {actGitInit_, "actionGitInit"},
         {actGitBranches_, "actionGitBranches"},
         {actTestExplorer_, "actionTestExplorer"},
@@ -3170,6 +3203,7 @@ void MainWindow::createActions()
         {actTypeHierarchy_, "actionTypeHierarchy"},
         {actPackageManager_, "actionPackageManager"},
         {actBlameFile_, "actionBlameFile"},
+        {actBlameGutter_, "actionBlameGutter"},
         {actDebugSymbols_, "actionDebugSymbols"},
         {actClassBrowser_, "actionClassBrowser"},
         {actCallGraph_, "actionCallGraph"},
@@ -3318,12 +3352,17 @@ void MainWindow::createMenuBar()
     gitMenu->addAction(actGitLog_);
     gitMenu->addAction(actGitDiff_);
     gitMenu->addAction(actGitDiffStaged_);
+    gitMenu->addAction(actGitSideBySide_);
     gitMenu->addSeparator();
+    gitMenu->addAction(actGitClone_);
     gitMenu->addAction(actGitInit_);
     gitMenu->addSeparator();
     gitMenu->addAction(actGitBranches_);
     gitMenu->addSeparator();
     gitMenu->addAction(actBlameFile_);
+
+    viewMenu->addSeparator();
+    viewMenu->addAction(actBlameGutter_);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
     helpMenu->setObjectName(QStringLiteral("menuHelp"));
@@ -7490,6 +7529,14 @@ void MainWindow::showBlameForActiveFile()
         }
         const QList<LightCpp::Workbench::Git::BlameLine> lines =
             LightCpp::Workbench::Git::parseBlame(text, true);
+        // The same parse feeds the gutter: a column beside the code is where
+        // "who wrote this line" is actually asked, and the log stays as the
+        // transcript for a repository nobody has a tab open in.
+        if (CodeEditor* editor = currentEditor();
+            editor != nullptr
+            && QFileInfo(editor->filePath()) == QFileInfo(git_->workingDirectory() + QLatin1Char('/') + relative)) {
+            editor->setBlame(LightCpp::Workbench::Git::BlameLookup(lines));
+        }
         const QList<LightCpp::Workbench::Git::BlameBlock> blocks =
             LightCpp::Workbench::Git::groupBlame(lines);
         if (blocks.isEmpty()) {
@@ -7512,6 +7559,15 @@ void MainWindow::showBlameForActiveFile()
                          block.summary));
         }
     });
+}
+
+void MainWindow::clearBlameGutters()
+{
+    for (int i = 0; i < tabWidget_->count(); ++i) {
+        if (auto* editor = qobject_cast<CodeEditor*>(tabWidget_->widget(i))) {
+            editor->setBlame(LightCpp::Workbench::Git::BlameLookup{});
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -8744,6 +8800,211 @@ void MainWindow::showGitDiff(bool staged)
     git_->run(args, staged ? tr("git diff --staged") : tr("git diff"));
 }
 
+namespace {
+
+/// The item-data role that carries the changed character spans of a diff
+/// cell. A QTreeWidgetItem can only paint one background per cell, so the
+/// character-level highlight has to be drawn by the delegate — this role is
+/// how the spans get from the model to it.
+constexpr int kInlineSpanRole = Qt::UserRole + 41;
+
+/// A role payload holding a span list. QVariant has no list-of-struct
+/// conversion, so the spans are flattened to (start, length) pairs and
+/// rebuilt by the delegate.
+QList<int> spanListToVariant(const QList<LightCpp::Workbench::Git::InlineSpan>& spans)
+{
+    QList<int> flat;
+    flat.reserve(spans.size() * 2);
+    for (const auto& span : spans) {
+        flat.append(span.start);
+        flat.append(span.length);
+    }
+    return flat;
+}
+
+/// Paints a diff cell: the text, then the character-level highlight on top of
+/// whatever background the row already has. A cell without spans is painted by
+/// the base class, so a context row costs nothing extra.
+class SideBySideDelegate : public QStyledItemDelegate {
+public:
+    explicit SideBySideDelegate(QObject* parent) : QStyledItemDelegate(parent) {}
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override
+    {
+        QStyledItemDelegate::paint(painter, option, index);
+        const QVariant payload = index.data(kInlineSpanRole);
+        if (!payload.isValid()) {
+            return;
+        }
+        const QList<int> flat = payload.value<QList<int>>();
+        if (flat.size() < 2) {
+            return;
+        }
+        const QString text = index.data(Qt::DisplayRole).toString();
+        if (text.isEmpty()) {
+            return;
+        }
+        QStyleOptionViewItem opt = option;
+        initStyleOption(&opt, index);
+        const QWidget* widget = opt.widget;
+        QStyle* style = widget != nullptr ? widget->style() : QApplication::style();
+        const QRect textRect =
+            style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget)
+                .adjusted(opt.fontMetrics.horizontalAdvance(QLatin1Char(' ')), 0, 0, 0);
+
+        QColor highlight(0x8a, 0x28, 0x28);
+        if (index.column() == 3) {
+            highlight = QColor(0x28, 0x7a, 0x38);
+        }
+        highlight.setAlpha(200);
+
+        painter->save();
+        painter->setClipRect(textRect);
+        const QFontMetrics metrics = opt.fontMetrics;
+        for (qsizetype i = 0; i + 1 < flat.size(); i += 2) {
+            const int start = std::clamp(flat.at(i), 0, int(text.size()));
+            const int length = std::max(0, flat.at(i + 1));
+            if (length == 0) {
+                continue;
+            }
+            const int left = textRect.left() + metrics.horizontalAdvance(text.left(start));
+            const int width =
+                metrics.horizontalAdvance(text.mid(start, length));
+            painter->fillRect(QRect(left, textRect.top(), std::max(width, 2),
+                                    textRect.height()),
+                              highlight);
+            // Redraw the characters over the highlight: filling over the text
+            // would leave the change invisible exactly where it matters.
+            painter->setPen(opt.palette.color(QPalette::Text));
+            painter->drawText(QRect(left, textRect.top(), width, textRect.height()),
+                              Qt::AlignLeft | Qt::AlignVCenter, text.mid(start, length));
+        }
+        painter->restore();
+    }
+};
+
+}  // namespace
+
+void MainWindow::showSideBySideDiff(bool staged)
+{
+    CodeEditor* editor = currentEditor();
+    if (editor == nullptr || editor->filePath().isEmpty() || git_ == nullptr) {
+        outputPanel_->showChannel(OutputPanel::ChannelGit);
+        outputPanel_->appendGitOutput(
+            tr("--- Side-by-side diff needs a saved file in a repository ---"));
+        return;
+    }
+    const QString file = editor->filePath();
+    const QString relative = QDir(git_->workingDirectory())
+                                 .relativeFilePath(file)
+                                 .replace(QLatin1Char('\\'), QLatin1Char('/'));
+    if (relative.startsWith(QLatin1String(".."))) {
+        outputPanel_->showChannel(OutputPanel::ChannelGit);
+        outputPanel_->appendGitOutput(tr("--- %1 is outside the repository ---").arg(file));
+        return;
+    }
+    QStringList args{QStringLiteral("diff"), QStringLiteral("-U3")};
+    if (staged) {
+        args << QStringLiteral("--staged");
+    }
+    args << QStringLiteral("--") << relative;
+    git_->runForResult(args, tr("git diff"), [this, relative](const QString& text, int exitCode) {
+        if (exitCode != 0) {
+            outputPanel_->showChannel(OutputPanel::ChannelGit);
+            outputPanel_->appendGitOutput(text);
+            return;
+        }
+        const QList<LightCpp::Workbench::Git::DiffFile> files =
+            LightCpp::Workbench::Git::parseUnifiedDiff(text);
+        if (files.isEmpty() || files.first().hunks.isEmpty()) {
+            statusBar()->showMessage(
+                tr("%1 has no differences to show").arg(relative), 4000);
+            return;
+        }
+        QDialog dialog(this);
+        dialog.setObjectName(QStringLiteral("sideBySideDiffDialog"));
+        dialog.setWindowTitle(tr("Diff — %1").arg(relative));
+        dialog.resize(1100, 700);
+        auto* layout = new QVBoxLayout(&dialog);
+        auto* summary = new QLabel(&dialog);
+        int added = 0;
+        int removed = 0;
+        for (const auto& file : files) {
+            added += file.added;
+            removed += file.removed;
+        }
+        summary->setText(tr("%1 file(s), %2 hunk(s), +%3 / -%4")
+                             .arg(files.size())
+                             .arg(files.first().hunks.size())
+                             .arg(added)
+                             .arg(removed));
+        layout->addWidget(summary);
+
+        auto* tree = new QTreeWidget(&dialog);
+        tree->setObjectName(QStringLiteral("sideBySideDiffTree"));
+        tree->setRootIsDecorated(false);
+        tree->setUniformRowHeights(true);
+        tree->setAlternatingRowColors(true);
+        tree->setColumnCount(4);
+        tree->setHeaderLabels({tr("Left"), QString(), QString(), tr("Right")});
+        tree->setColumnWidth(0, 40);
+        tree->setColumnWidth(1, 500);
+        tree->setColumnWidth(2, 40);
+        tree->setColumnWidth(3, 500);
+
+        const QList<LightCpp::Workbench::Git::SideBySideRow> rows =
+            LightCpp::Workbench::Git::alignDiff(files);
+        for (const auto& row : rows) {
+            auto* item = new QTreeWidgetItem(tree);
+            item->setText(0, row.oldLine > 0 ? QString::number(row.oldLine) : QString());
+            item->setText(1, row.left);
+            item->setText(2, row.newLine > 0 ? QString::number(row.newLine) : QString());
+            item->setText(3, row.right);
+            if (row.gap) {
+                item->setText(1, QString(QChar(0x22EF)));
+                item->setFirstColumnSpanned(false);
+                continue;
+            }
+            const QColor removedTint(0x4a, 0x1f, 0x1f);
+            const QColor addedTint(0x1f, 0x40, 0x24);
+            const QColor removedStrong(0x8a, 0x28, 0x28);
+            const QColor addedStrong(0x28, 0x7a, 0x38);
+            if (row.leftChanged) {
+                item->setBackground(1, removedTint);
+            }
+            if (row.rightChanged) {
+                item->setBackground(3, addedTint);
+            }
+            if (row.leftChanged && row.rightChanged) {
+                // The whole reason the alignment exists: a line that changed
+                // by one character should highlight that character, not the
+                // line. Without this a typo fix reads as a rewrite.
+                QList<LightCpp::Workbench::Git::InlineSpan> leftSpans;
+                QList<LightCpp::Workbench::Git::InlineSpan> rightSpans;
+                LightCpp::Workbench::Git::inlineDiff(row.left, row.right, &leftSpans,
+                                                     &rightSpans);
+                if (!leftSpans.isEmpty()) {
+                    item->setData(1, kInlineSpanRole,
+                                  QVariant::fromValue(spanListToVariant(leftSpans)));
+                }
+                if (!rightSpans.isEmpty()) {
+                    item->setData(3, kInlineSpanRole,
+                                  QVariant::fromValue(spanListToVariant(rightSpans)));
+                }
+            }
+        }
+        tree->setItemDelegate(new SideBySideDelegate(tree));
+        layout->addWidget(tree, 1);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        layout->addWidget(buttons);
+        dialog.exec();
+    });
+}
+
 void MainWindow::onGitInit()
 {
     if (inRepository_) {
@@ -8762,6 +9023,139 @@ void MainWindow::onGitInit()
     }
     git_->setWorkingDirectory(dir);
     git_->run({QStringLiteral("init")}, QStringLiteral("git init"));
+}
+
+void MainWindow::showCloneDialog()
+{
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("cloneRepositoryDialog"));
+    dialog.setWindowTitle(tr("Clone Repository"));
+    auto* layout = new QVBoxLayout(&dialog);
+
+    auto* form = new QFormLayout;
+    auto* urlEdit = new QLineEdit(&dialog);
+    urlEdit->setObjectName(QStringLiteral("cloneUrl"));
+    urlEdit->setPlaceholderText(QStringLiteral("https://github.com/user/repo.git"));
+    // A URL pasted from a browser is often a *page* URL; the ".git" guess is
+    // what makes the common paste work rather than failing with git's own
+    // "repository not found".
+    form->addRow(tr("Repository URL"), urlEdit);
+
+    auto* destinationEdit = new QLineEdit(&dialog);
+    destinationEdit->setObjectName(QStringLiteral("cloneDestination"));
+    auto* browse = new QPushButton(tr("Browse..."), &dialog);
+    auto* destinationRow = new QWidget(&dialog);
+    auto* destinationLayout = new QHBoxLayout(destinationRow);
+    destinationLayout->setContentsMargins(0, 0, 0, 0);
+    destinationLayout->addWidget(destinationEdit, 1);
+    destinationLayout->addWidget(browse);
+    form->addRow(tr("Destination"), destinationRow);
+
+    auto* depthSpin = new QSpinBox(&dialog);
+    depthSpin->setObjectName(QStringLiteral("cloneDepth"));
+    depthSpin->setRange(0, 10000);
+    depthSpin->setSpecialValueText(tr("Full history"));
+    depthSpin->setValue(0);
+    form->addRow(tr("Depth"), depthSpin);
+
+    auto* singleBranch = new QCheckBox(tr("Only the default branch"), &dialog);
+    singleBranch->setObjectName(QStringLiteral("cloneSingleBranch"));
+    form->addRow(QString(), singleBranch);
+
+    auto* submodules = new QCheckBox(tr("Initialise submodules"), &dialog);
+    submodules->setObjectName(QStringLiteral("cloneSubmodules"));
+    form->addRow(QString(), submodules);
+    layout->addLayout(form);
+
+    auto* okButton = new QPushButton(tr("Clone"), &dialog);
+    okButton->setDefault(true);
+    auto* cancelButton = new QPushButton(tr("Cancel"), &dialog);
+    auto* buttons = new QDialogButtonBox(&dialog);
+    buttons->addButton(okButton, QDialogButtonBox::AcceptRole);
+    buttons->addButton(cancelButton, QDialogButtonBox::RejectRole);
+    layout->addWidget(buttons);
+
+    connect(browse, &QPushButton::clicked, &dialog, [&] {
+        const QString chosen = QFileDialog::getExistingDirectory(
+            &dialog, tr("Where to clone into"));
+        if (!chosen.isEmpty()) {
+            destinationEdit->setProperty("userChosen", true);
+            destinationEdit->setText(chosen);
+        }
+    });
+    connect(urlEdit, &QLineEdit::textChanged, &dialog, [&](const QString& text) {
+        // Propose "<parent>/<repo name>" as the destination, but never over a
+        // directory the user picked themselves — rewriting a chosen path on
+        // every keystroke is help that has to be undone.
+        if (destinationEdit->property("userChosen").toBool()) {
+            return;
+        }
+        QString name = text.trimmed();
+        while (name.endsWith(QLatin1Char('/'))) {
+            name.chop(1);
+        }
+        const qsizetype slash = name.lastIndexOf(QLatin1Char('/'));
+        if (slash >= 0) {
+            name = name.mid(slash + 1);
+        }
+        if (name.endsWith(QLatin1String(".git"))) {
+            name.chop(4);
+        }
+        const QString parent = gitWorkingDirectory();
+        destinationEdit->setText(name.isEmpty() || parent.isEmpty()
+                                     ? QString()
+                                     : QDir(parent).absoluteFilePath(name));
+    });
+    connect(destinationEdit, &QLineEdit::textEdited, &dialog, [&] {
+        destinationEdit->setProperty("userChosen", true);
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(okButton, &QPushButton::clicked, &dialog, [&] {
+        if (urlEdit->text().trimmed().isEmpty()) {
+            urlEdit->setFocus();
+            return;
+        }
+        dialog.accept();
+    });
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+    const QString url = urlEdit->text().trimmed();
+    const QString destination = destinationEdit->text().trimmed();
+    if (git_ == nullptr) {
+        return;
+    }
+    // Clone runs in the destination's *parent*, because git creates the
+    // directory itself and refuses an existing non-empty one.
+    const QFileInfo destinationInfo(destination);
+    git_->setWorkingDirectory(destination.isEmpty()
+                                  ? gitWorkingDirectory()
+                                  : destinationInfo.absolutePath());
+    if (destination.isEmpty()) {
+        outputPanel_->showChannel(OutputPanel::ChannelGit);
+        outputPanel_->appendGitOutput(
+            tr("--- Choose a destination for the clone ---"));
+        return;
+    }
+    outputPanel_->showChannel(OutputPanel::ChannelGit);
+    outputPanel_->appendGitOutput(tr("--- git clone %1 ---").arg(url));
+    git_->runForResult(
+        LightCpp::Workbench::Git::Commands::clone(url, destination, depthSpin->value(),
+                                                  singleBranch->isChecked(),
+                                                  submodules->isChecked()),
+        tr("git clone"),
+        [this, destination](const QString& text, int exitCode) {
+            if (exitCode != 0) {
+                outputPanel_->appendGitOutput(text);
+                statusBar()->showMessage(tr("Clone failed"), 4000);
+                return;
+            }
+            // Opening the new working copy is the point of cloning from an
+            // IDE; leaving the user to File ▸ Open afterwards would make the
+            // successful case look like a no-op.
+            openFolder(destination);
+        });
 }
 
 void MainWindow::onMarkdownPreview()

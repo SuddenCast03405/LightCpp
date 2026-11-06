@@ -186,6 +186,17 @@ namespace Commands {
                                     const QString& commit);
 [[nodiscard]] QStringList deleteTag(const QString& name, bool remote);
 
+/// `git clone <url> <dir>` (lightcpp.1.md §八 "git.clone").
+///
+/// The argument order is not incidental: git reads the *last* non-option
+/// argument as the destination, so a URL that looks like an option (or a
+/// directory that starts with a dash) is separated with `--`. Shallow and
+/// single-branch are separate flags because "shallow tip" and "one branch"
+/// are separate decisions — a shallow clone of all branches is a common and
+/// perfectly reasonable combination.
+[[nodiscard]] QStringList clone(const QString& url, const QString& directory,
+                                int depth, bool singleBranch, bool recurseSubmodules);
+
 [[nodiscard]] QStringList listRemotes();
 [[nodiscard]] QStringList addRemote(const QString& name, const QString& url);
 [[nodiscard]] QStringList removeRemote(const QString& name);

@@ -161,6 +161,9 @@ private:
         QList<QList<Cell>> lines;  ///< `rows_` lines, may be shorter while growing
     };
 
+    /// True when every cell is a blank. Used by resize() to decide which end
+    /// of the screen to drop.
+    [[nodiscard]] static bool isBlankRow(const QList<Cell>& line);
     void ensureLine(int row);
     QList<Cell>& lineAt(int row);
     const QList<Cell>& lineAt(int row) const;

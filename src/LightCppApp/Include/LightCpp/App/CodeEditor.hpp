@@ -11,6 +11,7 @@
 
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/Core/FoldModel.hpp"
+#include "LightCpp/Workbench/GitDiff.hpp"
 #include "LightCpp/Workbench/LspModel.hpp"
 
 class CppSyntaxHighlighter;
@@ -161,6 +162,25 @@ public:
     void setLineMarks(const QList<int>& marks);
     [[nodiscard]] const QList<int>& lineMarks() const noexcept { return lineMarks_; }
 
+    // --- blame gutter ------------------------------------------------------
+    /// Show a blame column to the left of the line numbers, filled from
+    /// `lookup`. The lookup is by line number and tolerates a buffer longer
+    /// than the blame (an edited file), so the host can hand over a stale
+    /// blame without the gutter lying about which author owns a line it never
+    /// saw — those lines read "uncommitted".
+    ///
+    /// Passing an empty lookup turns the column off, which is the default: a
+    /// blame column costs horizontal room that most editing does not need.
+    void setBlame(const LightCpp::Workbench::Git::BlameLookup& lookup);
+    [[nodiscard]] bool blameVisible() const { return !blame_.isEmpty(); }
+    [[nodiscard]] const LightCpp::Workbench::Git::BlameLookup& blame() const
+    {
+        return blame_;
+    }
+    /// How wide the author column is, in characters. The date beside it is
+    /// fixed-width, so this is the only knob.
+    void setBlameAuthorWidth(int characters);
+
     // --- formatting -------------------------------------------------------
     /// Replace the buffer with `text` — the whole file, as a formatter would
     /// write it — as a single undo step, keeping the caret on the same line
@@ -281,6 +301,10 @@ private:
     /// Reset the tab width to four monospace cells of the current font.
     void applyTabWidthForCurrentFont();
     int lineNumberAreaWidth() const;
+    /// Width of the blame column, 0 when it is hidden.
+    [[nodiscard]] int blameAreaWidth() const;
+    /// Draw the blame column for the blocks inside `event`'s rect.
+    void paintBlameArea(QPainter* painter, QPaintEvent* event);
     void lineNumberAreaPaintEvent(QPaintEvent* event);
     /// Rebuild the extra selections (current-line highlight + diagnostic
     /// underlines). Called whenever either input changes.
@@ -384,6 +408,9 @@ private:
     };
 
     LineNumberArea* lineNumberArea_;
+    /// The blame column's data; empty when the column is off.
+    LightCpp::Workbench::Git::BlameLookup blame_;
+    int blameAuthorWidth_ = 14;
     CppSyntaxHighlighter* highlighter_;
     bool syntaxHighlightEnabled_ = true;
     bool longLinesWrap_ = false;

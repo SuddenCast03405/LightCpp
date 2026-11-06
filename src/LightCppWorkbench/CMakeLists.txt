@@ -32,6 +32,8 @@
 #                              UTF-8 across chunks, scrollback.
 #   Source/ShellIntegration.cpp the prompt marks (§九): OSC 133 parsing and
 #                              the command history it produces.
+#   Source/GitDiff.cpp         inline character spans, side-by-side alignment
+#                              and the blame gutter lookup (§八).
 
 add_library(LightCppWorkbench STATIC
     Source/AnalysisReport.cpp
@@ -40,6 +42,7 @@ add_library(LightCppWorkbench STATIC
     Source/DocsCatalog.cpp
     Source/EditorTools.cpp
     Source/ExternalTools.cpp
+    Source/GitDiff.cpp
     Source/GitExtra.cpp
     Source/GitModel.cpp
     Source/LspModel.cpp

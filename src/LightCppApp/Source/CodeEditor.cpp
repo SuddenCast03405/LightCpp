@@ -369,6 +369,36 @@ bool CodeEditor::isModified() const
     return document()->isModified();
 }
 
+int CodeEditor::blameAreaWidth() const
+{
+    if (blame_.isEmpty()) {
+        return 0;
+    }
+    // Author column, a gap, then the fixed-width day. Measured with the
+    // widest digit so a proportional font still fits, plus the right margin
+    // the blame text is drawn with.
+    const int unit = fontMetrics().horizontalAdvance(u'9');
+    return (blameAuthorWidth_ + 2 + 10) * unit + 10;
+}
+
+void CodeEditor::setBlame(const LightCpp::Workbench::Git::BlameLookup& lookup)
+{
+    blame_ = lookup;
+    updateLineNumberAreaWidth(blockCount());
+    lineNumberArea_->update();
+}
+
+void CodeEditor::setBlameAuthorWidth(int characters)
+{
+    const int clamped = std::clamp(characters, 4, 40);
+    if (clamped == blameAuthorWidth_) {
+        return;
+    }
+    blameAuthorWidth_ = clamped;
+    updateLineNumberAreaWidth(blockCount());
+    lineNumberArea_->update();
+}
+
 int CodeEditor::lineNumberAreaWidth() const
 {
     int digits = 1;
@@ -380,7 +410,7 @@ int CodeEditor::lineNumberAreaWidth() const
     // One spare digit's worth of room keeps the line numbers clear of the fold
     // markers and diagnostic dots drawn on the left.
     int space = 3 + fontMetrics().horizontalAdvance(u'9') * (digits + 1);
-    return space + kFoldColumnWidth;
+    return space + kFoldColumnWidth + blameAreaWidth();
 }
 
 void CodeEditor::updateLineNumberAreaWidth(int)
@@ -2256,10 +2286,71 @@ void CodeEditor::paintFoldMarker(QPainter* painter, int top, int bottom, int reg
     }
 }
 
+void CodeEditor::paintBlameArea(QPainter* painter, QPaintEvent* event)
+{
+    const int width = blameAreaWidth();
+    if (width <= 0) {
+        return;
+    }
+    // One tint per commit, folded into a translucent wash so the text beside
+    // it stays the highest-contrast thing on screen. Twelve hues at 40%
+    // separate two authors without turning the gutter into stripes.
+    static const QColor kTints[12] = {
+        QColor(0x4f, 0x9a, 0xe0), QColor(0x5f, 0xb8, 0x6a), QColor(0xc9, 0x8a, 0x3d),
+        QColor(0xb5, 0x6c, 0xc9), QColor(0x4b, 0xb8, 0xb0), QColor(0xd0, 0x6a, 0x6a),
+        QColor(0x7d, 0x8a, 0xd6), QColor(0xa8, 0xa8, 0x4f), QColor(0xcf, 0x7f, 0x9e),
+        QColor(0x6f, 0xa8, 0x8f), QColor(0x9a, 0x8a, 0x6a), QColor(0x8a, 0x8a, 0x8a),
+    };
+
+    painter->save();
+    painter->setClipRect(QRect(0, event->rect().top(), width, event->rect().height()));
+
+    const QColor base = palette().color(QPalette::Window);
+    const QColor text = palette().color(QPalette::Text);
+
+    QTextBlock block = firstVisibleBlock();
+    int top = qRound(blockBoundingGeometry(block).translated(contentOffset()).top());
+    int bottom = top + qRound(blockBoundingRect(block).height());
+    const int lineHeight = qMax(bottom - top, 1);
+
+    while (block.isValid() && top <= event->rect().bottom()) {
+        if (block.isVisible() && bottom >= event->rect().top()) {
+            const int lineNumber = block.blockNumber() + 1;
+            const int colourIndex = blame_.colourIndex(lineNumber);
+            if (colourIndex >= 0) {
+                QColor wash = kTints[colourIndex % 12];
+                wash.setAlpha(56);
+                painter->fillRect(QRect(0, top, width, lineHeight), wash);
+            }
+            QColor foreground = text;
+            foreground.setAlpha(blame_.line(lineNumber) != nullptr ? 190 : 110);
+            painter->setPen(foreground);
+            const QString label = blame_.gutterText(lineNumber, blameAuthorWidth_);
+            painter->drawText(QRect(0, top, width - 6, lineHeight),
+                              Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                              label);
+        }
+        block = block.next();
+        top = bottom;
+        bottom = top + qRound(blockBoundingRect(block).height());
+    }
+
+    // A hairline between the blame column and the line numbers: without it
+    // the two columns read as one ragged string.
+    painter->setPen(QPen(base.darker(130), 1));
+    painter->drawLine(width - 1, event->rect().top(), width - 1, event->rect().bottom());
+    painter->restore();
+}
+
 void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event)
 {
     QPainter painter(lineNumberArea_);
     painter.fillRect(event->rect(), palette().color(QPalette::Window));
+
+    const int blameWidth = blameAreaWidth();
+    if (blameWidth > 0) {
+        paintBlameArea(&painter, event);
+    }
 
     QTextBlock block = firstVisibleBlock();
     int blockNumber = block.blockNumber();
