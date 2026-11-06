@@ -19,6 +19,7 @@
 #include "LightCpp/Workbench/PackageManager.hpp"
 #include "LightCpp/Workbench/QtPreview.hpp"
 #include "LightCpp/Workbench/QtProjectFiles.hpp"
+#include "LightCpp/Workbench/TerminalEmulator.hpp"
 #include "LightCpp/Workbench/Viewers.hpp"
 
 #include <QDir>
@@ -1903,4 +1904,309 @@ TEST(ExternalTools, DescribeRefusesAToolWithNoCommand)
                       QStringLiteral("--aaaaaaaa --bbbbbbbb --cccccccc"), 20);
     EXPECT_EQ(longText.size(), 20);
     EXPECT_TRUE(longText.endsWith(QLatin1String("...")));
+}
+
+// ---------------------------------------------------------------------------
+// Terminal screen model: the sequences that break silently
+// ---------------------------------------------------------------------------
+
+namespace {
+
+namespace Term = LightCpp::Workbench::Terminal;
+
+/// The first `count` screen lines, joined — the shape assertions read best in.
+QString screenText(const Term::Emulator& emulator, int count = -1)
+{
+    const QStringList lines = emulator.screenLines();
+    if (count < 0) {
+        return lines.join(QLatin1Char('\n'));
+    }
+    return QStringList(lines.mid(0, count)).join(QLatin1Char('\n'));
+}
+
+/// Feed text and drop the update: most tests care about the resulting screen,
+/// not about which rows the controller would repaint.
+void type(Term::Emulator& emulator, const QString& text)
+{
+    const Term::EmulatorUpdate update = emulator.feedText(text);
+    Q_UNUSED(update)
+}
+
+}  // namespace
+
+TEST(TerminalModel, PlainTextLandsOnTheGridAndTheCursorFollows)
+{
+    Term::Emulator emulator(10, 3);
+    type(emulator, QStringLiteral("hi"));
+    EXPECT_EQ(emulator.currentLine(), QStringLiteral("hi"));
+    EXPECT_EQ(emulator.cursorColumn(), 2);
+    EXPECT_EQ(emulator.cursorRow(), 0);
+}
+
+TEST(TerminalModel, AnSgrSequenceColoursWithoutPrintingItself)
+{
+    // The classic bug: a parser that consumes ESC but not the parameters
+    // prints "[1;32m" into the buffer. The text after it is all that may
+    // appear.
+    Term::Emulator emulator(20, 2);
+    type(emulator, QStringLiteral("\x1b[1;32mOK\x1b[0m done"));
+    EXPECT_EQ(emulator.currentLine(), QStringLiteral("OK done"));
+    const auto runs = emulator.screenRuns();
+    ASSERT_FALSE(runs.isEmpty());
+    ASSERT_FALSE(runs.first().isEmpty());
+    EXPECT_TRUE(runs.first().first().attributes.bold);
+    EXPECT_TRUE(runs.first().first().attributes.fgIsPalette);
+    EXPECT_EQ(runs.first().first().attributes.fg, 2u);
+    // The trailing " done" is back to the default attributes, so the row has
+    // two runs rather than one.
+    EXPECT_EQ(runs.first().size(), 2);
+    EXPECT_FALSE(runs.first().last().attributes.bold);
+}
+
+TEST(TerminalModel, TruecolorAnd256ColourBothDecode)
+{
+    Term::Emulator emulator(20, 1);
+    type(emulator, QStringLiteral("\x1b[38;2;18;52;86mX"));
+    auto runs = emulator.screenRuns();
+    ASSERT_FALSE(runs.first().isEmpty());
+    EXPECT_EQ(runs.first().first().attributes.fg, 0x123456u);
+    EXPECT_FALSE(runs.first().first().attributes.fgIsPalette);
+
+    Term::Emulator palette(20, 1);
+    type(palette, QStringLiteral("\x1b[48;5;208mX"));
+    runs = palette.screenRuns();
+    ASSERT_FALSE(runs.first().isEmpty());
+    EXPECT_EQ(runs.first().first().attributes.bg, 208u);
+    EXPECT_TRUE(runs.first().first().attributes.bgIsPalette);
+}
+
+TEST(TerminalModel, AutowrapWrapsOnTheNextGlyphNotOnTheLastCell)
+{
+    // Writing exactly to the last column must not scroll: the cursor parks
+    // on the last cell and only wraps when another glyph arrives. Getting
+    // this wrong adds a blank line after every full-width line.
+    Term::Emulator emulator(4, 3);
+    type(emulator, QStringLiteral("abcd"));
+    EXPECT_EQ(emulator.cursorRow(), 0);
+    EXPECT_EQ(emulator.cursorColumn(), 3);
+    type(emulator, QStringLiteral("e"));
+    EXPECT_EQ(emulator.cursorRow(), 1);
+    EXPECT_EQ(emulator.cursorColumn(), 1);
+    EXPECT_EQ(screenText(emulator, 3), QStringLiteral("abcd\ne\n"));
+}
+
+TEST(TerminalModel, CarriageReturnAndLineFeedDoDifferentThings)
+{
+    // A shell that sends only \n moves down without returning to column 0;
+    // a model that treats them as one thing produces stair-stepped output.
+    Term::Emulator emulator(20, 3);
+    type(emulator, QStringLiteral("abc\nXY"));
+    EXPECT_EQ(emulator.screenLines().at(0), QStringLiteral("abc"));
+
+    Term::Emulator crlf(20, 3);
+    type(crlf, QStringLiteral("abc\r\nXY"));
+    EXPECT_EQ(crlf.screenLines().at(1), QStringLiteral("XY"));
+}
+
+TEST(TerminalModel, CursorPositioningIsOneBased)
+{
+    // `CSI 2;3 H` is row 2, column 3 in terminal coordinates — the source of
+    // a whole family of off-by-one bugs.
+    Term::Emulator emulator(20, 5);
+    type(emulator, QStringLiteral("\x1b[2;3HX"));
+    EXPECT_EQ(emulator.screenLines().at(1).mid(2, 1), QStringLiteral("X"));
+    EXPECT_EQ(emulator.cursorRow(), 1);
+    EXPECT_EQ(emulator.cursorColumn(), 3);
+}
+
+TEST(TerminalModel, EraseInLineClearsFromTheCursorRightwards)
+{
+    Term::Emulator emulator(20, 2);
+    type(emulator, QStringLiteral("abcdef\x1b[1;4H\x1b[K"));
+    EXPECT_EQ(emulator.screenLines().at(0), QStringLiteral("abc"));
+
+    Term::Emulator whole(20, 2);
+    type(whole, QStringLiteral("abcdef\x1b[1;4H\x1b[2K"));
+    EXPECT_EQ(whole.screenLines().at(0), QString());
+}
+
+TEST(TerminalModel, ScrollRegionKeepsTheStatusLineInPlace)
+{
+    // A full-screen app puts its status bar in a scroll region's last row and
+    // expects the text above to scroll without touching it. Scrolling the
+    // whole screen moves the status bar off, which is what makes a
+    // mis-implemented region look broken.
+    Term::Emulator emulator(10, 4);
+    // Rows 1..3 scroll; row 4 is the status line.
+    type(emulator, QStringLiteral("\x1b[1;3r"));
+    type(emulator, QStringLiteral("\x1b[4;1HSTATUS"));
+    type(emulator, QStringLiteral("\x1b[1;1Ha\r\nb\r\nc\r\nd"));
+    EXPECT_EQ(emulator.screenLines().at(3), QStringLiteral("STATUS"));
+    EXPECT_EQ(emulator.screenLines().at(0), QStringLiteral("b"));
+}
+
+TEST(TerminalModel, ScrollbackKeepsWhatScrolledOffAndIgnoresWhatWasCleared)
+{
+    Term::Emulator emulator(10, 2, 100);
+    type(emulator, QStringLiteral("one\r\ntwo\r\nthree\r\n"));
+    // Two visible rows, three lines written: "one" and "two" have scrolled
+    // off and must be recoverable from the history.
+    EXPECT_EQ(emulator.screenLines().at(0), QStringLiteral("three"));
+    EXPECT_TRUE(emulator.scrollbackLines().contains(QStringLiteral("one")));
+
+    // `CSI 2 J` clears the screen but keeps the history: "clear" and
+    // "clear scrollback" are different requests.
+    const int before = emulator.scrollbackCount();
+    type(emulator, QStringLiteral("\x1b[2J"));
+    EXPECT_EQ(emulator.scrollbackCount(), before);
+
+    // `CSI 3 J` is the one that clears it.
+    type(emulator, QStringLiteral("\x1b[3J"));
+    EXPECT_EQ(emulator.scrollbackCount(), 0);
+}
+
+TEST(TerminalModel, ScrollbackIsCappedInsteadOfGrowingForever)
+{
+    Term::Emulator emulator(10, 2, 3);
+    for (int i = 0; i < 10; ++i) {
+        type(emulator, QStringLiteral("line%1\r\n").arg(i));
+    }
+    EXPECT_LE(emulator.scrollbackCount(), 3);
+    // The most recent lines are the ones kept.
+    const QStringList lines = emulator.scrollbackLines();
+    EXPECT_TRUE(lines.join(QLatin1Char('\n')).contains(QLatin1String("line8")));
+    EXPECT_FALSE(lines.join(QLatin1Char('\n')).contains(QLatin1String("line0")));
+}
+
+TEST(TerminalModel, AlternateScreenHidesTheShellAndRestoresIt)
+{
+    // `vim` switches to the alternate screen and back; getting the restore
+    // wrong leaves the user staring at a blank shell.
+    Term::Emulator emulator(10, 3);
+    type(emulator, QStringLiteral("$ ls"));
+    type(emulator, QStringLiteral("\x1b[?1049h"));
+    EXPECT_TRUE(emulator.isAlternateScreen());
+    EXPECT_EQ(screenText(emulator, 3).trimmed(), QString());
+    type(emulator, QStringLiteral("editor"));
+    type(emulator, QStringLiteral("\x1b[?1049l"));
+    EXPECT_FALSE(emulator.isAlternateScreen());
+    EXPECT_EQ(emulator.screenLines().at(0), QStringLiteral("$ ls"));
+}
+
+TEST(TerminalModel, AUtf8CharacterSplitAcrossChunksIsOneCharacter)
+{
+    // A PTY read boundary can fall inside a multi-byte character. Decoding
+    // each chunk independently turns "é" into two garbage cells.
+    Term::Emulator emulator(10, 2);
+    const QByteArray bytes = QStringLiteral("caf\u00e9").toUtf8();
+    ASSERT_EQ(bytes.size(), 5);
+    const Term::EmulatorUpdate partial = emulator.feed(bytes.left(4));
+    Q_UNUSED(partial)
+    EXPECT_EQ(emulator.currentLine(), QStringLiteral("caf"));
+    const Term::EmulatorUpdate rest = emulator.feed(bytes.mid(4));
+    Q_UNUSED(rest)
+    EXPECT_EQ(emulator.currentLine(), QStringLiteral("caf\u00e9"));
+}
+
+TEST(TerminalModel, AWideCharacterOccupiesTwoCells)
+{
+    Term::Emulator emulator(10, 2);
+    type(emulator, QStringLiteral("\u4f60a"));
+    // Two cells for the CJK glyph, one for the ASCII letter.
+    EXPECT_EQ(emulator.cursorColumn(), 3);
+    EXPECT_EQ(emulator.currentLine(), QStringLiteral("\u4f60a"));
+}
+
+TEST(TerminalModel, AnEscapeSequenceSplitAcrossChunksIsNotPrinted)
+{
+    Term::Emulator emulator(20, 2);
+    type(emulator, QStringLiteral("a\x1b[3"));
+    EXPECT_EQ(emulator.currentLine(), QStringLiteral("a"));
+    type(emulator, QStringLiteral("1mb"));
+    EXPECT_EQ(emulator.currentLine(), QStringLiteral("ab"));
+}
+
+TEST(TerminalModel, AnOscTitleNeverReachesTheGrid)
+{
+    // A window title is text; a model that only knows CSI prints
+    // "0;my title" at the cursor.
+    Term::Emulator emulator(30, 2);
+    const Term::EmulatorUpdate update =
+        emulator.feedText(QStringLiteral("\x1b]0;my title\x07ok"));
+    EXPECT_EQ(emulator.currentLine(), QStringLiteral("ok"));
+    EXPECT_EQ(update.title, QStringLiteral("my title"));
+}
+
+TEST(TerminalModel, ATabStopsAtTheNextMultipleOfEight)
+{
+    Term::Emulator emulator(30, 2);
+    type(emulator, QStringLiteral("ab\tc"));
+    EXPECT_EQ(emulator.currentLine(), QStringLiteral("ab      c"));
+}
+
+TEST(TerminalModel, UnhandledCsiStillConsumesItsBytes)
+{
+    // The failure mode this guards: an unknown sequence leaves its characters
+    // on the screen, so a program's output is littered with "[?25l".
+    Term::Emulator emulator(30, 2);
+    type(emulator, QStringLiteral("\x1b[?9999habc"));
+    EXPECT_EQ(emulator.currentLine(), QStringLiteral("abc"));
+}
+
+TEST(TerminalModel, ResizingSmallerPushesTheTopRowsIntoScrollback)
+{
+    // Losing the top rows on a shrink would lose the compiler error the user
+    // is looking at, which is exactly the moment a resize happens.
+    Term::Emulator emulator(20, 5, 100);
+    type(emulator, QStringLiteral("a\r\nb\r\nc\r\nd\r\ne"));
+    emulator.resize(20, 3);
+    EXPECT_EQ(emulator.screenLines().at(0), QStringLiteral("c"));
+    const QStringList all = emulator.scrollbackLines();
+    EXPECT_EQ(all.at(0), QStringLiteral("a"));
+    EXPECT_EQ(all.at(1), QStringLiteral("b"));
+}
+
+TEST(TerminalModel, CopyingASelectionJoinsRowsWithNewlines)
+{
+    Term::Emulator emulator(10, 3);
+    type(emulator, QStringLiteral("one\r\ntwo\r\nthree"));
+    // A selection from the start of row 0 to column 2 of row 1: the first
+    // row keeps its padding up to the line end (the selection is a
+    // rectangle-ish range, and a terminal pads every row), the last row
+    // stops at the given column.
+    EXPECT_EQ(emulator.textBetween(0, 0, 1, 2), QStringLiteral("one       \ntwo"));
+    // Reversed corners produce the same text.
+    EXPECT_EQ(emulator.textBetween(1, 2, 0, 0), QStringLiteral("one       \ntwo"));
+    // A single row is copied exactly, with the padding trimmed off the end.
+    EXPECT_EQ(emulator.textBetween(0, 0, 0, 9), QStringLiteral("one"));
+}
+
+TEST(TerminalModel, TheLineOnlyDrawingCharsetMapsToBoxCharacters)
+{
+    // `ESC ( 0` followed by `qq` is a horizontal rule in the DEC charset;
+    // printing "qq" instead makes every TUI's frame look wrong.
+    Term::Emulator emulator(10, 2);
+    type(emulator, QStringLiteral("\x1b(0qq\x1b(B q"));
+    EXPECT_EQ(emulator.currentLine(), QStringLiteral("\u2500\u2500 q"));
+}
+
+TEST(TerminalModel, TheCursorVisibilityModeIsTracked)
+{
+    Term::Emulator emulator(10, 2);
+    type(emulator, QStringLiteral("\x1b[?25l"));
+    EXPECT_FALSE(emulator.cursorVisible());
+    type(emulator, QStringLiteral("\x1b[?25h"));
+    EXPECT_TRUE(emulator.cursorVisible());
+}
+
+TEST(TerminalModel, BracketedPasteAndApplicationCursorKeysAreTracked)
+{
+    // The controller asks for these before sending input: bracketed paste
+    // tells the shell the text arrived as a paste, and the application
+    // cursor mode changes what an arrow key must send.
+    Term::Emulator emulator(10, 2);
+    EXPECT_FALSE(emulator.bracketedPaste());
+    type(emulator, QStringLiteral("\x1b[?2004h\x1b[?1h"));
+    EXPECT_TRUE(emulator.bracketedPaste());
+    EXPECT_TRUE(emulator.cursorKeysApplicationMode());
 }

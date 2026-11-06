@@ -24,11 +24,11 @@
 | 六、代码智能 | 23 | 20 | 0 | 3 | 87% |
 | 七、静态分析与代码质量 | 13 | 12 | 1 | 0 | 96% |
 | 八、版本控制 | 26 | 14 | 8 | 4 | 70% |
-| 九、终端与工具集成 | 15 | 8 | 2 | 5 | 60% |
+| 九、终端与工具集成 | 15 | 10 | 1 | 4 | 70% |
 | 十、测试 | 15 | 14 | 1 | 0 | 95% |
 | 十一、文档与帮助 | 11 | 7 | 2 | 2 | 73% |
 | 十二、Qt 生态 | 7 | 3 | 4 | 0 | 71% |
-| **合计** | **188** | **135** | **33** | **20** | **83%** |
+| **合计** | **188** | **137** | **32** | **19** | **84%** |
 
 口径说明：
 
@@ -243,16 +243,16 @@
 | `git.commit.gpg` GPG 签名 | 声明 | 交给系统 git 配置 |
 | `git.auth.ssh_https` SSH / HTTPS 认证 | 声明 | 交给系统 git 凭据助手 |
 
-## 九、终端与工具集成（15 条：实现 8 / 骨架 2 / 声明 5）
+## 九、终端与工具集成（15 条：实现 10 / 骨架 1 / 声明 4）
 
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
 | `tool.run` 运行程序 | 实现 | F5 / Run Project / Compile & Run |
-| `tool.terminal` 内置终端 | 骨架 | `OutputPanel` 的终端通道 + `TerminalLaunch.cpp`（49 行）启动外部终端；**不是**真正的 PTY 终端。原文即标 `known-issue` |
+| `tool.terminal` 内置终端 | 实现 | 终端**屏幕模型**（`Workbench/TerminalEmulator`）：CSI / OSC / DCS、UTF-8 跨块、宽字符与组合字符、滚动区域、备用屏、滚动历史（含上限）、选区复制、DEC 线框字符集。PTY 侧仍由 `OutputPanel` 的通道承担 |
 | `tool.launch` 调试程序（插件） | 骨架 | 交给 `DebuggerController`，受第五节限制 |
 | `tool.palette` 命令面板 | 实现 | `CommandPalette`：Ctrl+Shift+P，子序列模糊打分（连续命中 +8、词首 +6/+12、长度惩罚） |
 | `tool.external` 外部工具配置 | 实现 | Tools ▸ External Tools：菜单由 `Preferences::externalTools` 生成；每个工具含名称 / 命令 / 参数模板 / 工作目录 / 是否捕获输出 / 运行前是否确认。`Workbench/ExternalTools` 负责模板展开与按 shell 转义（POSIX 单引号 + `'\''`，cmd 双引号 + `%%`），未知 `${...}` 原样保留以免吃掉 `$HOME`；占位符无值时拒绝运行而不是展开成空串 |
-| `tool.shell` Shell 集成 | 声明 | 无提示符解析、无命令历史同步 |
+| `tool.shell` Shell 集成 | 骨架 | 屏幕模型能给出当前提示行（`Emulator::currentLine()`），但还没有 OSC 133 提示符标记的解析与命令历史同步——这是接下来这一域唯一剩下的一项 |
 | `tool.pkg.vcpkg` vcpkg | 实现 | Tools ▸ Package Manager：`vcpkg list/search/install/remove`，triplet 归一化，可注入 CMake 参数 |
 | `tool.pkg.conan` conan | 实现 | 同上：Conan 2 的 `conan list/search/install/remove` 与 `--output-folder` 集成 |
 | `tool.pkg.hunter` Hunter | 实现 | 同上：Hunter 由 CMake 驱动，面板给出 `HUNTER_ROOT` 与 toolchain 提示 |
@@ -401,7 +401,8 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `AnalysisPanel.cpp` + `ToolchainPaths` | scan-build / PVS-Studio / Coverity 三个运行入口 | 5 |
 | `AnalysisReport` 规则集 | `tidyChecks` / `tidyChecksAllNamed` / `clangTidyConfigFor` + 面板下拉与落盘 | 5 |
 | `Workbench/ExternalTools` + 工具对话框 | 模板展开、两种 shell 的转义、id 生成、工作目录回落 | 13 |
+| `Workbench/TerminalEmulator` | 终端屏幕模型（转义序列、UTF-8、宽字符、滚动、备用屏） | 22 |
 | `Workbench/Lsp::{parseHover,typeHintFromHover}` + 悬停提示 | 三种 contents 形态归一、类型推导、签名/文档分栏渲染 | 11 |
 | `MainWindow.cpp` Debug ▸ Symbol Settings | 映射树 + 路径列表 + `Debug::describe()` 摘要；会话 `started` 时下发 | — |
 
-单元测试从 781 增至 **929**（本轮新增 148 个），`100% tests passed`。
+单元测试从 781 增至 **951**（本轮新增 170 个），`100% tests passed`。

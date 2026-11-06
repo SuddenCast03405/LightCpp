@@ -28,6 +28,8 @@
 #   Source/DocsCatalog.cpp     the documentation catalogue (§十一).
 #   Source/ExternalTools.cpp   the user's own tools (§九): template expansion
 #                              and the quoting each shell needs.
+#   Source/TerminalEmulator.cpp the terminal's screen model (§九): CSI/OSC,
+#                              UTF-8 across chunks, scrollback.
 
 add_library(LightCppWorkbench STATIC
     Source/AnalysisReport.cpp
@@ -43,6 +45,7 @@ add_library(LightCppWorkbench STATIC
     Source/PackageManager.cpp
     Source/QtPreview.cpp
     Source/QtProjectFiles.cpp
+    Source/TerminalEmulator.cpp
     Source/Viewers.cpp
 )
 
