@@ -17,6 +17,16 @@ enum class Kind {
     DocumentSymbols,
     Rename,
     CodeActions,
+    /// textDocument/semanticTokens/* — what the semantic highlighter asks for.
+    SemanticTokens,
+    /// textDocument/prepareCallHierarchy and callHierarchy/incomingCalls,
+    /// callHierarchy/outgoingCalls.
+    CallHierarchy,
+    /// textDocument/prepareTypeHierarchy and typeHierarchy/supertypes,
+    /// typeHierarchy/subtypes.
+    TypeHierarchy,
+    /// textDocument/hover — the type / doc comment under the caret.
+    Hover,
 };
 
 /// What a response says when it reports a failure.

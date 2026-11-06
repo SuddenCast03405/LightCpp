@@ -47,6 +47,7 @@ add_executable(LightCppAppTests
     GitCommandPolicyTests.cpp
     KitToolchainOptionsTests.cpp
     LspResponseTests.cpp
+    SemanticTokensFlowTests.cpp
     MsvcNamesTests.cpp
     MsvcRegistryTests.cpp
     ProcessShutdownTests.cpp
@@ -67,6 +68,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/GitClient.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/GitCommandPolicy.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/KitToolchainOptions.cpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/LanguageServerClient.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/LspResponse.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/MsvcNames.cpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Source/MsvcToolchain.cpp
@@ -89,6 +91,7 @@ add_executable(LightCppAppTests
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/GitClient.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/GitCommandPolicy.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/KitToolchainOptions.hpp
+    ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/LanguageServerClient.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/LspResponse.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/MsvcNames.hpp
     ${CMAKE_SOURCE_DIR}/src/LightCppApp/Include/LightCpp/App/MsvcToolchain.hpp
@@ -115,6 +118,10 @@ target_link_libraries(LightCppAppTests PRIVATE
     Qt6::Core
     # GitClient's own header includes the status type it reports.
     LightCppProject
+    # LanguageServerClient carries the semantic-token legend and hands its
+    # answers to the Workbench decoders.
+    LightCppWorkbench
+    LightCppCore
     GTest::gtest
     LightCppWarnings
 )

@@ -11,6 +11,7 @@
 
 #include "LightCpp/App/LanguageServerClient.hpp"
 #include "LightCpp/Core/FoldModel.hpp"
+#include "LightCpp/Workbench/LspModel.hpp"
 
 class CppSyntaxHighlighter;
 class LineNumberArea;
@@ -113,6 +114,52 @@ public:
     /// Move the caret to (line, column) — both 0-based, as reported by the
     /// language server — scroll it into view and take focus.
     void gotoLocation(int line, int column);
+
+    // --- semantic highlighting -------------------------------------------
+    /// Semantic tokens from the language server, as plain spans.
+    ///
+    /// The IDE already colours text with a lexical highlighter, which gets
+    /// `#include`, string literals and keywords right without help. What it
+    /// cannot know is that `count` on this line is a member variable and
+    /// `count` on that one is a local — that is what the server answers, and
+    /// why these are applied *on top of* the lexical colours (foreground
+    /// only, so a token keeps its bold/italic and its diagnostic underline).
+    ///
+    /// Spans are (line, column) 0-based with UTF-16 columns, exactly as
+    /// LightCpp::Workbench::Lsp::decodeSemanticTokens returns them.
+    struct SemanticSpan {
+        int line = 0;
+        int column = 0;
+        int length = 0;
+        /// LightCpp::Workbench::Lsp::TokenRole. The enum lives in the
+        /// Workbench library, so the host fills this in with
+        /// `static_cast<int>(roleFor(...))` rather than the editor parsing
+        /// tokens itself.
+        LightCpp::Workbench::Lsp::TokenRole role =
+            LightCpp::Workbench::Lsp::TokenRole::Unknown;
+    };
+    /// Replace the semantic spans. Out-of-range spans are dropped, because the
+    /// server's answer is always one edit behind the buffer.
+    void setSemanticSpans(const QList<SemanticSpan>& spans);
+    void clearSemanticSpans();
+    [[nodiscard]] const QList<SemanticSpan>& semanticSpans() const noexcept
+    {
+        return semanticSpans_;
+    }
+    /// Paint the server's colours or fall back to the lexical ones.
+    void setSemanticHighlightingEnabled(bool enabled);
+    [[nodiscard]] bool semanticHighlightingEnabled() const noexcept
+    {
+        return semanticHighlighting_;
+    }
+
+    // --- gutter change marks ---------------------------------------------
+    /// Which lines differ from the version last written to disk, for the
+    /// gutter stripe: 0 none, 1 added, 2 modified, 3 deleted above.
+    /// Computed by the host (LightCpp::Workbench::Editor::diffLines) and
+    /// pushed here, so the editor never has to know about git.
+    void setLineMarks(const QList<int>& marks);
+    [[nodiscard]] const QList<int>& lineMarks() const noexcept { return lineMarks_; }
 
     // --- formatting -------------------------------------------------------
     /// Replace the buffer with `text` — the whole file, as a formatter would
@@ -349,6 +396,10 @@ private:
     QList<LightCpp::App::LspDiagnostic> diagnostics_;
     QSet<int> breakpointLines_;  // 0-based lines with breakpoints (gutter dots)
     QSet<int> bookmarkLines_;    // 0-based lines with bookmarks
+    QList<SemanticSpan> semanticSpans_;
+    bool semanticHighlighting_ = true;
+    /// One entry per line: 0 unchanged, 1 added, 2 modified, 3 deleted above.
+    QList<int> lineMarks_;
 
     QList<LightCpp::Core::Fold::FoldRegion> foldRegions_;
     QList<FoldAnchor> folded_;

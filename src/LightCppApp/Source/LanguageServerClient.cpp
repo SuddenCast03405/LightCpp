@@ -448,12 +448,57 @@ void LanguageServerClient::start()
     QJsonObject synchronization;
     synchronization.insert("dynamicRegistration", false);
 
+    // Semantic tokens: the client asks for the whole document in one go
+    // (`requests.full = true`) rather than a series of deltas, so a single
+    // textDocument/semanticTokens/full answer describes the visible state and
+    // there is no range bookkeeping to get wrong. The token types and
+    // modifiers are the ones LightCpp::Workbench::Lsp understands; clangd
+    // adapts to whatever list the client sends.
+    QJsonObject semanticTokens;
+    semanticTokens.insert("dynamicRegistration", false);
+    semanticTokens.insert("requests", QJsonObject{{"range", false}, {"full", true}});
+    // The list is what the client can *paint*, not the standard's full set:
+    // every entry here has a role in LightCpp::Workbench::Lsp::roleFor. A type
+    // the client cannot colour is one it should not ask the server to send.
+    semanticTokens.insert("tokenTypes", QJsonArray{
+        "variable", "parameter", "function", "method", "class", "struct",
+        "interface", "typeParameter", "enum", "enumerator", "namespace",
+        "macro", "comment", "keyword", "modifier", "operator", "bracket",
+        "string", "number", "regexp", "type"});
+    semanticTokens.insert("tokenModifiers", QJsonArray{
+        "declaration", "definition", "readonly", "static", "deprecated",
+        "abstract", "virtual", "template", "defaultLibrary", "header"});
+    semanticTokens.insert("formats", QJsonArray{"relative"});
+    semanticTokens.insert("overlappingTokenSupport", false);
+    semanticTokens.insert("multilineTokenSupport", false);
+    semanticTokens.insert("serverCancelSupport", false);
+    semanticTokens.insert("augmentsSyntaxTokens", true);
+
+    // Hierarchies: call and type. clangd implements both; declaring them is
+    // what makes prepareCallHierarchy et al. legal requests.
+    QJsonObject callHierarchy;
+    callHierarchy.insert("dynamicRegistration", false);
+    QJsonObject typeHierarchy;
+    typeHierarchy.insert("dynamicRegistration", false);
+    QJsonObject hover;
+    hover.insert("dynamicRegistration", false);
+    hover.insert("contentFormat", QJsonArray{"markdown", "plaintext"});
+
     QJsonObject textDocument;
     textDocument.insert("synchronization", synchronization);
     textDocument.insert("completion", completion);
+    textDocument.insert("semanticTokens", semanticTokens);
+    textDocument.insert("callHierarchy", callHierarchy);
+    textDocument.insert("typeHierarchy", typeHierarchy);
+    textDocument.insert("hover", hover);
+
+    QJsonObject workspace;
+    workspace.insert("workspaceEdit", QJsonObject{{"documentChanges", false}});
+    workspace.insert("workspaceFolders", false);
 
     QJsonObject capabilities;
     capabilities.insert("textDocument", textDocument);
+    capabilities.insert("workspace", workspace);
 
     QJsonObject params;
     params.insert("processId", QJsonValue::Null);
@@ -1091,6 +1136,131 @@ void LanguageServerClient::tryParseFrames()
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// Feature channel
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Name a raw request in the failure message. Kept next to the sender so the
+/// two cannot drift: a new method added here without a name still reports
+/// something.
+LspResponse::Kind rawKindOf(const QString& method)
+{
+    if (method.startsWith(QLatin1String("textDocument/semanticTokens"))) {
+        return LspResponse::Kind::SemanticTokens;
+    }
+    if (method.contains(QLatin1String("callHierarchy"))) {
+        return LspResponse::Kind::CallHierarchy;
+    }
+    if (method.contains(QLatin1String("typeHierarchy"))) {
+        return LspResponse::Kind::TypeHierarchy;
+    }
+    if (method.startsWith(QLatin1String("textDocument/hover"))) {
+        return LspResponse::Kind::Hover;
+    }
+    return LspResponse::Kind::Hover;  // generic; describe() prints "Hover info"
+}
+
+/// {"textDocument": {"uri": ...}} — the prefix every textDocument request
+/// spends its first two lines on.
+QJsonObject textDocumentParams(const QString& filePath)
+{
+    QJsonObject document;
+    document.insert(QStringLiteral("uri"),
+                    LanguageServerClient::toFileUri(filePath));
+    QJsonObject params;
+    params.insert(QStringLiteral("textDocument"), document);
+    return params;
+}
+
+QJsonObject positionParams(const QString& filePath, int line, int column)
+{
+    QJsonObject params = textDocumentParams(filePath);
+    QJsonObject position;
+    position.insert(QStringLiteral("line"), line);
+    position.insert(QStringLiteral("character"), column);
+    params.insert(QStringLiteral("position"), position);
+    return params;
+}
+
+}  // namespace
+
+int LanguageServerClient::requestRaw(const QString& method,
+                                     const QJsonObject& params,
+                                     LspResponse::Kind kind)
+{
+    // Unlike the typed requests, this one does not demand that the document
+    // was opened first: a hierarchy request answers about a *position*, and
+    // clangd is happy to serve one for an open file. Refusing here would make
+    // every caller repeat the same version-map check.
+    if (process_ == nullptr || !initialized_) {
+        return 0;
+    }
+    const int id = nextRequestId_++;
+    rawRequests_.insert(id, method);
+    QJsonObject request;
+    request.insert(QStringLiteral("jsonrpc"), QStringLiteral("2.0"));
+    request.insert(QStringLiteral("id"), id);
+    request.insert(QStringLiteral("method"), method);
+    request.insert(QStringLiteral("params"), params);
+    sendJsonRpc(request);
+    Q_UNUSED(kind);
+    return id;
+}
+
+int LanguageServerClient::requestSemanticTokens(const QString& filePath)
+{
+    return requestRaw(QStringLiteral("textDocument/semanticTokens/full"),
+                      textDocumentParams(filePath),
+                      LspResponse::Kind::SemanticTokens);
+}
+
+int LanguageServerClient::requestCallHierarchy(const QString& filePath,
+                                               int line, int column)
+{
+    return requestRaw(QStringLiteral("textDocument/prepareCallHierarchy"),
+                      positionParams(filePath, line, column),
+                      LspResponse::Kind::CallHierarchy);
+}
+
+int LanguageServerClient::requestOutgoingCalls(const QJsonObject& item)
+{
+    return requestRaw(QStringLiteral("callHierarchy/outgoingCalls"),
+                      QJsonObject{{QStringLiteral("item"), item}},
+                      LspResponse::Kind::CallHierarchy);
+}
+
+int LanguageServerClient::requestIncomingCalls(const QJsonObject& item)
+{
+    return requestRaw(QStringLiteral("callHierarchy/incomingCalls"),
+                      QJsonObject{{QStringLiteral("item"), item}},
+                      LspResponse::Kind::CallHierarchy);
+}
+
+int LanguageServerClient::requestTypeHierarchy(const QString& filePath,
+                                               int line, int column)
+{
+    return requestRaw(QStringLiteral("textDocument/prepareTypeHierarchy"),
+                      positionParams(filePath, line, column),
+                      LspResponse::Kind::TypeHierarchy);
+}
+
+int LanguageServerClient::requestSupertypes(const QJsonObject& item)
+{
+    return requestRaw(QStringLiteral("typeHierarchy/supertypes"),
+                      QJsonObject{{QStringLiteral("item"), item}},
+                      LspResponse::Kind::TypeHierarchy);
+}
+
+int LanguageServerClient::requestSubtypes(const QJsonObject& item)
+{
+    return requestRaw(QStringLiteral("typeHierarchy/subtypes"),
+                      QJsonObject{{QStringLiteral("item"), item}},
+                      LspResponse::Kind::TypeHierarchy);
+}
+
 void LanguageServerClient::handleMessage(const QJsonObject& message)
 {
     const QString method = message.value("method").toString();
@@ -1120,6 +1290,11 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
             initialized.insert("jsonrpc", "2.0");
             initialized.insert("method", "initialized");
             initialized.insert("params", QJsonObject());
+            // Cache the legend before announcing the handshake: whoever
+            // reacts to serverStarted() may immediately ask for tokens, and
+            // decoding them needs the names the indices refer to.
+            semanticLegend_ = LightCpp::Workbench::Lsp::parseLegend(
+                message.value(QStringLiteral("result")).toObject());
             sendJsonRpc(initialized);
             emit serverStarted();
             // Serve the callers that were waiting instead of polling: they run
@@ -1136,6 +1311,17 @@ void LanguageServerClient::handleMessage(const QJsonObject& message)
         // own, harsher handling (the server is unusable); for requests, name
         // what failed, unblock the waiter with the empty answer, and say why.
         const LspResponse::Error error = LspResponse::errorOf(message);
+        if (rawRequests_.contains(id)) {
+            // The generic channel: hand the `result` member over untouched.
+            // A failed request still answers (null result) so the caller is
+            // never left waiting; the reason goes out as requestFailed.
+            const QString method = rawRequests_.take(id);
+            if (error.present) {
+                emit requestFailed(LspResponse::describe(rawKindOf(method), error.message));
+            }
+            emit rawResponseReady(id, method, message.value(QStringLiteral("result")));
+            return;
+        }
         if (completionRequests_.contains(id)) {
             const QString filePath = completionRequests_.take(id);
             if (error.present) {

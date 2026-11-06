@@ -262,6 +262,9 @@ TokenRole roleFor(const QString& typeName)
         {QStringLiteral("variable"), TokenRole::Variable},
         {QStringLiteral("property"), TokenRole::Property},
         {QStringLiteral("enumMember"), TokenRole::EnumMember},
+        // clangd says "enumerator" where the LSP spec says "enumMember";
+        // both name the same thing and both appear depending on version.
+        {QStringLiteral("enumerator"), TokenRole::EnumMember},
         {QStringLiteral("function"), TokenRole::Function},
         {QStringLiteral("method"), TokenRole::Function},
         {QStringLiteral("macro"), TokenRole::Macro},

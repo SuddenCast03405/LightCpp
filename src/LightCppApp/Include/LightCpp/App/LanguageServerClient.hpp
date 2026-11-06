@@ -15,7 +15,11 @@
 #include <QString>
 #include <QList>
 #include <QMap>
+#include <QJsonObject>
+#include <QJsonValue>
 
+#include "LightCpp/App/LspResponse.hpp"
+#include "LightCpp/Workbench/LspModel.hpp"
 #include "LightCpp/App/ToolchainHeaders.hpp"
 #include "LightCpp/Core/ReadyGate.hpp"
 
@@ -270,6 +274,55 @@ public:
     int requestCodeActions(const QString& filePath, int line, int column,
                            const QList<LspDiagnostic>& diagnostics);
 
+    // --- feature channel ------------------------------------------------
+    //
+    // Everything above is a hand-written request with its own typed signal.
+    // That shape does not scale: semantic tokens, call/type hierarchy and
+    // hover all need the same three things (send a method with a JSON object,
+    // remember what the answer is for, hand the raw result back), and the
+    // alternative — a new signal, a new QMap and a new branch in
+    // handleMessage() per feature — is what made adding them feel expensive.
+    //
+    // requestRaw() is that shared channel. It is deliberately *raw*: the
+    // parsing lives in LightCpp::Workbench::Lsp, which is Qt-Core-only and
+    // unit-tested, so nothing here has to know what a semantic token is.
+
+    /// Send `method` with `params` and answer via rawResponseReady().
+    /// Returns the request id, or 0 if the server is not usable — in which
+    /// case no signal will follow and the caller must not wait.
+    ///
+    /// `kind` only names the request in the failure message; it does not
+    /// change how the answer is delivered.
+    int requestRaw(const QString& method, const QJsonObject& params,
+                   LspResponse::Kind kind);
+
+    /// The semantic-token legend the server advertised in its initialize
+    /// answer (token type and modifier names, in the order its token indices
+    /// refer to). Empty when the server does not support semantic tokens, or
+    /// before the handshake completed.
+    ///
+    /// It has to come from the handshake: the indices in a token stream are
+    /// positions in *this* list, which the client chose to send, and clangd
+    /// answers with the list it was given. Guessing it would paint the wrong
+    /// role on every token.
+    [[nodiscard]] const LightCpp::Workbench::Lsp::SemanticLegend& semanticTokenLegend() const noexcept
+    {
+        return semanticLegend_;
+    }
+
+    /// The answer to a requestRaw() call. `result` is exactly the server's
+    /// `result` member (any type, including null). When the server reported
+    /// an error, `result` is null and requestFailed() has been emitted with
+    /// the reason — so "null" here always means "the server said null", not
+    /// "the request broke".
+    int requestSemanticTokens(const QString& filePath);
+    int requestCallHierarchy(const QString& filePath, int line, int column);
+    int requestOutgoingCalls(const QJsonObject& item);
+    int requestIncomingCalls(const QJsonObject& item);
+    int requestTypeHierarchy(const QString& filePath, int line, int column);
+    int requestSupertypes(const QJsonObject& item);
+    int requestSubtypes(const QJsonObject& item);
+
     // --- URI helpers (LSP uses file:// URIs with percent encoding) ---
 
     [[nodiscard]] static QString toFileUri(const QString& filePath);
@@ -318,6 +371,11 @@ signals:
     /// means no fixes at that position.
     void codeActionsReady(int requestId,
                           const QList<LspCodeAction>& actions);
+
+    /// Answer to a requestRaw() call (and therefore to the semantic-token and
+    /// hierarchy helpers). `result` is the server's `result` member verbatim.
+    void rawResponseReady(int requestId, const QString& method,
+                          const QJsonValue& result);
 
     /// The initialize handshake completed; documents can now be opened.
     void serverStarted();
@@ -379,6 +437,12 @@ private:
     QMap<int, QString> documentSymbolRequests_;   // requestId -> fileUri
     QMap<int, int> renameRequests_;               // requestId -> 0 (pending)
     QMap<int, int> codeActionRequests_;           // requestId -> 0 (pending)
+    /// requestId -> method, for requestRaw() answers. The method is echoed back
+    /// so a caller that fires several features can tell them apart without
+    /// keeping its own table of ids.
+    QMap<int, QString> rawRequests_;
+    /// Token type/modifier names from the server's initialize answer.
+    LightCpp::Workbench::Lsp::SemanticLegend semanticLegend_;
     bool initialized_ = false;          // handshake done
     /// Callbacks waiting for the handshake to land (see whenReady). Opened by
     /// the initialize response, dropped by stop() / reportServerFailure() /

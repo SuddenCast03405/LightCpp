@@ -26,6 +26,14 @@ QString nameOf(Kind kind)
         return QStringLiteral("Rename");
     case Kind::CodeActions:
         return QStringLiteral("Quick fixes");
+    case Kind::SemanticTokens:
+        return QStringLiteral("Semantic highlighting");
+    case Kind::CallHierarchy:
+        return QStringLiteral("Call hierarchy");
+    case Kind::TypeHierarchy:
+        return QStringLiteral("Type hierarchy");
+    case Kind::Hover:
+        return QStringLiteral("Hover info");
     }
     return QStringLiteral("Request");
 }

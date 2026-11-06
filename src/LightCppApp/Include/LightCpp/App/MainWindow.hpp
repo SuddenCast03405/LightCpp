@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonValue>
 #include <QMainWindow>
 #include <QFont>
 #include <QElapsedTimer>
@@ -29,6 +30,8 @@
 #include "LightCpp/Settings/SettingsStore.hpp"
 #include "LightCpp/Text/Encoding.hpp"
 #include "LightCpp/Text/TextFile.hpp"
+#include "LightCpp/Workbench/EditorTools.hpp"
+#include "LightCpp/Workbench/LspModel.hpp"
 
 #include <memory>
 #include <optional>
@@ -733,6 +736,9 @@ private:
     QAction* actGoToSymbol_ = nullptr;         // Edit > Go to Symbol in File (Ctrl+Shift+O)
     QAction* actRenameSymbol_ = nullptr;       // Edit > Rename Symbol (Ctrl+Shift+R)
     QAction* actQuickFix_ = nullptr;           // Edit > Quick Fix (Ctrl+.)
+    QAction* actSortIncludes_ = nullptr;       // Edit > Sort Includes
+    QAction* actCallHierarchy_ = nullptr;      // Edit > Call Hierarchy
+    QAction* actTypeHierarchy_ = nullptr;      // Edit > Type Hierarchy
     QAction* actToggleBookmark_ = nullptr;     // Edit > Toggle Bookmark (Ctrl+F2)
     QAction* actNextBookmark_ = nullptr;       // Edit > Next Bookmark (F2)
     QAction* actPrevBookmark_ = nullptr;       // Edit > Previous Bookmark (Shift+F2)
@@ -836,6 +842,13 @@ private:
     int latestSignatureHelpId_ = 0;
     /// The newest in-flight documentSymbol request id (staleness guard).
     int latestOutlineRequestId_ = 0;
+    /// The newest in-flight semanticTokens request id. Semantic answers are
+    /// per-file and arrive out of order while typing; only the newest one may
+    /// repaint.
+    int latestSemanticTokensRequestId_ = 0;
+    /// Which file the in-flight semantic-token request described, so a late
+    /// answer for the previous tab does not colour the current one.
+    QString semanticTokensFilePath_;
     /// One flattened outline entry — the tree walked into a list so the
     /// Ctrl+Shift+O dialog can filter it without touching the tree widget.
     struct OutlineEntry {
@@ -870,6 +883,32 @@ private:
     /// Ask clangd for the active editor's symbol tree. No-op for
     /// non-C/C++-like files, unsaved-less paths or a stopped server.
     void requestOutline();
+    /// Ask for the active editor's semantic tokens and push the decoded
+    /// spans into it. Shares the outline's trigger (a settle after typing)
+    /// because both need the same thing: the buffer already known to the
+    /// server. A no-op when the server does not advertise the capability.
+    void requestSemanticTokens();
+    /// Decode one semanticTokens/full answer and hand it to the editor that
+    /// asked for it. Drops the answer when the tab has moved on.
+    void applySemanticTokens(const QString& filePath, const QJsonValue& result);
+
+    // --- include sorting ----------------------------------------------------
+    /// Rewrite the active buffer's top-level `#include` runs into the chosen
+    /// order, as one undo step. Sorts each contiguous run and never crosses a
+    /// blank line or a conditional, because those runs are usually deliberate
+    /// ("system headers last within this block"). Reports what changed.
+    void sortIncludesInEditor();
+    /// The include order used by the command. Read from the environment's
+    /// LIGHTCpp configuration when it names one, otherwise the C++ convention
+    /// of "own header first, then project, then system".
+    [[nodiscard]] LightCpp::Workbench::Editor::IncludeOrder includeOrderSetting() const;
+
+    // --- call / type hierarchy ---------------------------------------------
+    /// Ask the server for the call hierarchy of the symbol at the caret and
+    /// show it in a dialog; picking an entry jumps to it.
+    void showCallHierarchy();
+    /// The same for the type hierarchy (base types and derived types).
+    void showTypeHierarchy();
     /// Rebuild the outline tree and the flattened symbol cache from one
     /// documentSymbol answer — but only if it is the newest request AND
     /// still describes the active editor's document.

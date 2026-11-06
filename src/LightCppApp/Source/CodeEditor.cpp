@@ -30,6 +30,58 @@
 
 namespace {
 
+namespace {
+
+/// The colour a semantic role is drawn in. The lexical highlighter owns
+/// keywords and literals; these are the roles a lexer cannot distinguish, so
+/// the two sets deliberately overlap only on "type" and "function".
+QColor colourForRole(int role)
+{
+    using Role = LightCpp::Workbench::Lsp::TokenRole;
+    switch (static_cast<Role>(role)) {
+    case Role::Type:
+    case Role::TypeParameter:
+        return QColor(0x2A, 0x9D, 0x8F);   // teal
+    case Role::EnumMember:
+        return QColor(0x1E, 0x88, 0x5E);
+    case Role::Namespace:
+        return QColor(0x7A, 0x6A, 0xC0);
+    case Role::Function:
+        return QColor(0x79, 0x5E, 0x26);
+    case Role::Macro:
+        return QColor(0xB0, 0x50, 0x8A);
+    case Role::Parameter:
+        return QColor(0x9A, 0x67, 0x00);
+    case Role::Variable:
+    case Role::Property:
+        return QColor(0x1F, 0x5F, 0xA8);
+    case Role::Keyword:
+    case Role::Modifier:
+        return QColor(0x00, 0x33, 0x99);
+    case Role::Comment:
+        return QColor(0x60, 0x80, 0x60);
+    case Role::String:
+        return QColor(0xA3, 0x1D, 0x1D);
+    case Role::Number:
+        return QColor(0x17, 0x50, 0x8A);
+    case Role::Label:
+        return QColor(0x60, 0x60, 0x60);
+    // Operators, brackets, regexps and decorators keep the lexical colour:
+    // changing their hue makes dense code harder to read, not easier.
+    case Role::Operator:
+    case Role::Bracket:
+    case Role::Regexp:
+    case Role::Decorator:
+    case Role::Event:
+    case Role::Unknown:
+        return QColor();
+    }
+    return QColor();
+}
+
+}  // namespace
+
+
 /// The gutter is one column wider than the line numbers need, holding the
 /// fold markers to the left of the diagnostic dots.
 constexpr int kFoldColumnWidth = 12;
@@ -604,6 +656,39 @@ void CodeEditor::updateExtraSelections()
         selections.append(sel);
     }
 
+    // Semantic tokens, last so their foreground wins over the lexical colour
+    // of a keyword used as an identifier. Only the foreground is set: an
+    // existing bold/italic and the diagnostic underline stay, which is the
+    // whole point of layering instead of replacing.
+    if (semanticHighlighting_ && !semanticSpans_.isEmpty()) {
+        for (const SemanticSpan& span : std::as_const(semanticSpans_)) {
+            const QColor colour = colourForRole(static_cast<int>(span.role));
+            if (!colour.isValid() || span.length <= 0) {
+                continue;
+            }
+            const QTextBlock block = document()->findBlockByNumber(span.line);
+            if (!block.isValid()) {
+                continue;
+            }
+            // Trust the buffer for bounds: the server's answer is one edit
+            // behind, so a span can outlive the text it described.
+            const int lineLength = qMax(block.length() - 1, 0);
+            const int column = qBound(0, span.column, lineLength);
+            const int length = qBound(0, span.length, lineLength - column);
+            if (length <= 0) {
+                continue;
+            }
+            QTextCursor cursor(block);
+            cursor.setPosition(block.position() + column);
+            cursor.setPosition(block.position() + column + length,
+                               QTextCursor::KeepAnchor);
+            QTextEdit::ExtraSelection sel;
+            sel.format.setForeground(colour);
+            sel.cursor = cursor;
+            selections.append(sel);
+        }
+    }
+
     setExtraSelections(selections);
     lineNumberArea_->update();
 }
@@ -671,6 +756,39 @@ void CodeEditor::prevBookmark()
     QTextCursor cursor(block);
     setTextCursor(cursor);
     centerCursor();
+}
+
+void CodeEditor::setSemanticSpans(const QList<SemanticSpan>& spans)
+{
+    semanticSpans_ = spans;
+    updateExtraSelections();
+}
+
+void CodeEditor::clearSemanticSpans()
+{
+    if (semanticSpans_.isEmpty()) {
+        return;
+    }
+    semanticSpans_.clear();
+    updateExtraSelections();
+}
+
+void CodeEditor::setSemanticHighlightingEnabled(bool enabled)
+{
+    if (semanticHighlighting_ == enabled) {
+        return;
+    }
+    semanticHighlighting_ = enabled;
+    updateExtraSelections();
+}
+
+void CodeEditor::setLineMarks(const QList<int>& marks)
+{
+    if (lineMarks_ == marks) {
+        return;
+    }
+    lineMarks_ = marks;
+    lineNumberArea_->update();
 }
 
 void CodeEditor::setDiagnostics(const QList<LightCpp::App::LspDiagnostic>& diagnostics)
@@ -2204,6 +2322,26 @@ void CodeEditor::lineNumberAreaPaintEvent(QPaintEvent* event)
                                      8, 8);
                 }
                 painter.setBrush(Qt::NoBrush);
+            }
+
+            // Change stripe: a 3px bar at the very left of the gutter, the
+            // same place every editor puts it. Painted before the markers so
+            // a breakpoint dot still reads on top of it.
+            if (blockNumber < lineMarks_.size()) {
+                static const QColor kAdded(0x28, 0xA7, 0x45);
+                static const QColor kModified(0xE0, 0xA0, 0x00);
+                static const QColor kDeleted(0xD0, 0x40, 0x40);
+                const int mark = lineMarks_.at(blockNumber);
+                QColor colour;
+                switch (mark) {
+                case 1: colour = kAdded; break;
+                case 2: colour = kModified; break;
+                case 3: colour = kDeleted; break;
+                default: break;
+                }
+                if (colour.isValid()) {
+                    painter.fillRect(0, top, 3, qMax(bottom - top, 1), colour);
+                }
             }
 
             // Diagnostic marker, just right of the fold strip.

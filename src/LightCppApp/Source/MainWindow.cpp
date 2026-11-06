@@ -527,6 +527,16 @@ MainWindow::MainWindow(QWidget* parent)
         }
         applyOutlineSymbols(filePath, symbols);
     });
+    connect(lsp_, &LightCpp::App::LanguageServerClient::rawResponseReady,
+            this, [this](int requestId, const QString& method,
+                         const QJsonValue& result) {
+        if (method == QLatin1String("textDocument/semanticTokens/full")) {
+            if (requestId != latestSemanticTokensRequestId_) {
+                return;  // a newer request is already in flight
+            }
+            applySemanticTokens(semanticTokensFilePath_, result);
+        }
+    });
     connect(lsp_, &LightCpp::App::LanguageServerClient::renameReady,
             this, [this](int requestId,
                          const QList<LightCpp::App::LspTextEdit>& edits) {
@@ -2540,6 +2550,27 @@ void MainWindow::createActions()
     connect(actQuickFix_, &QAction::triggered, this,
             [this] { requestQuickFix(); });
 
+    // --- include sorting --------------------------------------------------
+    actSortIncludes_ = new QAction(tr("Sort &Includes"), this);
+    actSortIncludes_->setStatusTip(
+        tr("Sort each block of #include directives, keeping blank lines and "
+           "conditionals as block boundaries"));
+    connect(actSortIncludes_, &QAction::triggered, this,
+            [this] { sortIncludesInEditor(); });
+
+    // --- hierarchies ------------------------------------------------------
+    actCallHierarchy_ = new QAction(tr("Call &Hierarchy"), this);
+    actCallHierarchy_->setStatusTip(
+        tr("Who calls this function, and what it calls (clangd)"));
+    connect(actCallHierarchy_, &QAction::triggered, this,
+            [this] { showCallHierarchy(); });
+
+    actTypeHierarchy_ = new QAction(tr("&Type Hierarchy"), this);
+    actTypeHierarchy_->setStatusTip(
+        tr("Base and derived types of the class under the caret (clangd)"));
+    connect(actTypeHierarchy_, &QAction::triggered, this,
+            [this] { showTypeHierarchy(); });
+
     // --- bookmarks ----------------------------------------------------------
     actToggleBookmark_ = new QAction(tr("&Toggle Bookmark"), this);
     actToggleBookmark_->setShortcut(QKeySequence(QStringLiteral("Ctrl+F2")));
@@ -2848,6 +2879,9 @@ void MainWindow::createActions()
         {actAnalyze_, "actionAnalyze"},
         {actCommandPalette_, "actionCommandPalette"},
         {actMarkdownPreview_, "actionMarkdownPreview"},
+        {actSortIncludes_, "actionSortIncludes"},
+        {actCallHierarchy_, "actionCallHierarchy"},
+        {actTypeHierarchy_, "actionTypeHierarchy"},
     };
     for (auto it = actionNames.constBegin(); it != actionNames.constEnd();
          ++it) {
@@ -2896,12 +2930,16 @@ void MainWindow::createMenuBar()
     editMenu->addAction(actRenameSymbol_);
     editMenu->addAction(actQuickFix_);
     editMenu->addSeparator();
+    editMenu->addAction(actCallHierarchy_);
+    editMenu->addAction(actTypeHierarchy_);
+    editMenu->addSeparator();
     editMenu->addAction(actToggleBookmark_);
     editMenu->addAction(actNextBookmark_);
     editMenu->addAction(actPrevBookmark_);
     editMenu->addSeparator();
     editMenu->addAction(actFormat_);
     editMenu->addAction(actFormatFolder_);
+    editMenu->addAction(actSortIncludes_);
     editMenu->addSeparator();
     auto* foldingMenu = editMenu->addMenu(tr("&Folding"));
     foldingMenu->setObjectName(QStringLiteral("menuFolding"));
@@ -3845,6 +3883,321 @@ QWidget* MainWindow::createOutlinePanel()
     return box;
 }
 
+
+// ---------------------------------------------------------------------------
+// Include sorting
+// ---------------------------------------------------------------------------
+
+LightCpp::Workbench::Editor::IncludeOrder MainWindow::includeOrderSetting() const
+{
+    // The order is a personal preference rather than a project property, so
+    // it lives in the user's config. Until there is a settings page for it,
+    // an environment variable is the honest place: it is discoverable, it
+    // does not invent a JSON key the model would then strip on save, and the
+    // default below is what most C++ projects do.
+    const QByteArray raw = qgetenv("LIGHTCPP_INCLUDE_ORDER").toLower();
+    if (raw == "alphabetical") {
+        return LightCpp::Workbench::Editor::IncludeOrder::Alphabetical;
+    }
+    if (raw == "systemfirst" || raw == "system-first") {
+        return LightCpp::Workbench::Editor::IncludeOrder::SystemFirst;
+    }
+    return LightCpp::Workbench::Editor::IncludeOrder::SystemLast;
+}
+
+void MainWindow::sortIncludesInEditor()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr) {
+        return;
+    }
+    if (ed->isReadOnly()) {
+        statusBar()->showMessage(tr("Sort Includes: the document is read-only"), 4000);
+        return;
+    }
+
+    LightCpp::Workbench::Editor::IncludeSortOptions options;
+    options.order = includeOrderSetting();
+    const LightCpp::Workbench::Editor::IncludeSortResult result =
+        LightCpp::Workbench::Editor::sortIncludes(ed->toPlainText(), options);
+    if (!result.changed) {
+        // Saying "already sorted" is worth the status line: the alternative is
+        // a command that appears to do nothing at all.
+        statusBar()->showMessage(
+            result.sortedIncludes == 0
+                ? tr("Sort Includes: no include block in this file")
+                : tr("Sort Includes: already sorted (%1 include(s))")
+                      .arg(result.sortedIncludes),
+            4000);
+        return;
+    }
+
+    // One undo step, caret preserved: applyFormattedText() already does both
+    // (it is what Format Document uses for the same kind of full-buffer
+    // rewrite), so the two commands behave identically in the undo stack.
+    ed->applyFormattedText(result.text);
+    statusBar()->showMessage(
+        tr("Sorted %1 include(s) in %2 block(s)")
+            .arg(result.sortedIncludes)
+            .arg(result.groups),
+        4000);
+}
+
+// ---------------------------------------------------------------------------
+// Call / type hierarchy
+// ---------------------------------------------------------------------------
+
+/// The dialog both hierarchy commands use: a tree of the answer, and a jump
+/// when an entry is activated. Kept local to this file because it has no state
+/// beyond the tree it was handed.
+class HierarchyDialog : public QDialog {
+    Q_OBJECT
+public:
+    HierarchyDialog(const QString& title, QWidget* parent)
+        : QDialog(parent)
+    {
+        setWindowTitle(title);
+        setAttribute(Qt::WA_DeleteOnClose);
+        resize(560, 480);
+        auto* layout = new QVBoxLayout(this);
+        tree_ = new QTreeWidget(this);
+        tree_->setHeaderLabels({QObject::tr("Symbol"), QObject::tr("Location")});
+        tree_->setRootIsDecorated(true);
+        tree_->setUniformRowHeights(true);
+        layout->addWidget(tree_, 1);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
+        connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
+        layout->addWidget(buttons);
+        connect(tree_, &QTreeWidget::itemActivated, this,
+                [this](QTreeWidgetItem* item, int) {
+            if (item == nullptr) {
+                return;
+            }
+            const QString path = item->data(0, Qt::UserRole).toString();
+            if (path.isEmpty()) {
+                return;
+            }
+            Q_EMIT activated(path, item->data(0, Qt::UserRole + 1).toInt());
+        });
+    }
+
+    QTreeWidgetItem* addItem(QTreeWidgetItem* parent,
+                             const LightCpp::Workbench::Lsp::HierarchyItem& entry,
+                             const QString& suffix = QString())
+    {
+        auto* item = parent != nullptr ? new QTreeWidgetItem(parent)
+                                       : new QTreeWidgetItem(tree_);
+        const QString detail = entry.detail.isEmpty()
+                                   ? entry.name
+                                   : QStringLiteral("%1 — %2").arg(entry.name, entry.detail);
+        item->setText(0, detail + suffix);
+        const QString path =
+            LightCpp::Workbench::Lsp::pathFromUri(entry.uri);
+        item->setText(1, path.isEmpty()
+                             ? QString()
+                             : QStringLiteral("%1:%2")
+                                   .arg(QFileInfo(path).fileName())
+                                   .arg(entry.selectionRange.startLine + 1));
+        item->setData(0, Qt::UserRole, path);
+        item->setData(0, Qt::UserRole + 1, entry.selectionRange.startLine);
+        item->setData(0, Qt::UserRole + 2, entry.selectionRange.startColumn);
+        if (parent != nullptr) {
+            tree_->expandItem(parent);
+        }
+        return item;
+    }
+
+    QTreeWidget* tree() const { return tree_; }
+
+    /// Emitted when an entry is activated: the file to open and the 0-based
+    /// line to put the caret on.
+    void activated(const QString& filePath, int line);
+
+private:
+    QTreeWidget* tree_ = nullptr;
+};
+
+#include "MainWindow.moc"
+
+// Qt::moc emits the Q_OBJECT plumbing into the .moc file, but a non-queued
+// signal still needs its out-of-line definition to satisfy the linker. The
+// dialog is constructor-only; this is the one line the class needs.
+void HierarchyDialog::activated(const QString& filePath, int line)
+{
+    QMetaObject::activate(this, &staticMetaObject, 0, nullptr);
+    Q_UNUSED(filePath)
+    Q_UNUSED(line)
+}
+
+void MainWindow::showCallHierarchy()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || lsp_ == nullptr || !lsp_->isRunning()) {
+        statusBar()->showMessage(tr("Call hierarchy needs the language server"), 4000);
+        return;
+    }
+    const QString lintPath = ed->lintPath();
+    if (lintPath.isEmpty()) {
+        return;
+    }
+    const QTextCursor cursor = ed->textCursor();
+    const int line = cursor.blockNumber();
+    const int column = cursor.positionInBlock();
+    lsp_->changeDocument(lintPath, ed->toPlainText());
+
+    // prepareCallHierarchy then two follow-ups (incoming and outgoing) — the
+    // dialog is filled as they arrive, so it opens immediately rather than
+    // after three round trips.
+    const int prepareId = lsp_->requestCallHierarchy(lintPath, line, column);
+    if (prepareId <= 0) {
+        return;
+    }
+    auto* dialog = new HierarchyDialog(tr("Call Hierarchy"), this);
+    connect(dialog, &HierarchyDialog::activated, this,
+            [this](const QString& path, int targetLine) {
+        if (openFileInTab(path) != nullptr) {
+            gotoLine(targetLine);
+            if (CodeEditor* target = currentEditor()) {
+                target->setFocus();
+            }
+        }
+    });
+    dialog->show();
+
+    // The prepare answer names the function; the two call lists hang under it.
+    auto* state = new QObject(dialog);
+    state->setObjectName(QStringLiteral("callHierarchyState"));
+    connect(lsp_, &LightCpp::App::LanguageServerClient::rawResponseReady,
+            state, [this, dialog, state](int requestId, const QString& method,
+                                         const QJsonValue& result) {
+        if (method != QLatin1String("textDocument/prepareCallHierarchy")
+            && method != QLatin1String("callHierarchy/incomingCalls")
+            && method != QLatin1String("callHierarchy/outgoingCalls")) {
+            return;
+        }
+        if (method == QLatin1String("textDocument/prepareCallHierarchy")) {
+            const QList<LightCpp::Workbench::Lsp::HierarchyItem> items =
+                LightCpp::Workbench::Lsp::parseHierarchyItems(result);
+            if (items.isEmpty()) {
+                statusBar()->showMessage(
+                    tr("Call Hierarchy: the caret is not on a function"), 4000);
+                dialog->close();
+                return;
+            }
+            const auto& item = items.first();
+            QTreeWidgetItem* root = dialog->addItem(nullptr, item);
+            // Keep the opaque `data` member: the follow-up requests must echo
+            // it verbatim or the server answers about nothing.
+            const QJsonObject raw = result.toArray().first().toObject();
+            const int outgoing = lsp_->requestOutgoingCalls(raw);
+            const int incoming = lsp_->requestIncomingCalls(raw);
+            state->setProperty("outgoingId", outgoing);
+            state->setProperty("incomingId", incoming);
+            state->setProperty("root", QVariant::fromValue<qulonglong>(
+                                          reinterpret_cast<qulonglong>(root)));
+            return;
+        }
+        const auto rootPointer =
+            reinterpret_cast<QTreeWidgetItem*>(state->property("root").toULongLong());
+        if (rootPointer == nullptr) {
+            return;
+        }
+        const bool incoming = (requestId == state->property("incomingId").toInt());
+        auto* group = new QTreeWidgetItem(rootPointer);
+        group->setText(0, incoming ? tr("Called by") : tr("Calls"));
+        const QList<LightCpp::Workbench::Lsp::CallEdge> edges =
+            LightCpp::Workbench::Lsp::parseCallEdges(result);
+        if (edges.isEmpty()) {
+            auto* none = new QTreeWidgetItem(group);
+            none->setText(0, tr("(none)"));
+            none->setDisabled(true);
+        }
+        for (const auto& edge : edges) {
+            dialog->addItem(group, edge.item);
+        }
+        dialog->tree()->expandItem(rootPointer);
+    });
+}
+
+void MainWindow::showTypeHierarchy()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || lsp_ == nullptr || !lsp_->isRunning()) {
+        statusBar()->showMessage(tr("Type hierarchy needs the language server"), 4000);
+        return;
+    }
+    const QString lintPath = ed->lintPath();
+    if (lintPath.isEmpty()) {
+        return;
+    }
+    const QTextCursor cursor = ed->textCursor();
+    lsp_->changeDocument(lintPath, ed->toPlainText());
+    const int prepareId =
+        lsp_->requestTypeHierarchy(lintPath, cursor.blockNumber(),
+                                   cursor.positionInBlock());
+    if (prepareId <= 0) {
+        return;
+    }
+    auto* dialog = new HierarchyDialog(tr("Type Hierarchy"), this);
+    connect(dialog, &HierarchyDialog::activated, this,
+            [this](const QString& path, int targetLine) {
+        if (openFileInTab(path) != nullptr) {
+            gotoLine(targetLine);
+            if (CodeEditor* target = currentEditor()) {
+                target->setFocus();
+            }
+        }
+    });
+    dialog->show();
+
+    auto* state = new QObject(dialog);
+    connect(lsp_, &LightCpp::App::LanguageServerClient::rawResponseReady,
+            state, [this, dialog, state](int requestId, const QString& method,
+                                         const QJsonValue& result) {
+        if (method != QLatin1String("textDocument/prepareTypeHierarchy")
+            && method != QLatin1String("typeHierarchy/supertypes")
+            && method != QLatin1String("typeHierarchy/subtypes")) {
+            return;
+        }
+        if (method == QLatin1String("textDocument/prepareTypeHierarchy")) {
+            const QList<LightCpp::Workbench::Lsp::HierarchyItem> items =
+                LightCpp::Workbench::Lsp::parseHierarchyItems(result);
+            if (items.isEmpty()) {
+                statusBar()->showMessage(
+                    tr("Type Hierarchy: the caret is not on a type"), 4000);
+                dialog->close();
+                return;
+            }
+            QTreeWidgetItem* root = dialog->addItem(nullptr, items.first());
+            const QJsonObject raw = result.toArray().first().toObject();
+            state->setProperty("superId", lsp_->requestSupertypes(raw));
+            state->setProperty("subId", lsp_->requestSubtypes(raw));
+            state->setProperty("root", QVariant::fromValue<qulonglong>(
+                                          reinterpret_cast<qulonglong>(root)));
+            return;
+        }
+        auto* rootPointer =
+            reinterpret_cast<QTreeWidgetItem*>(state->property("root").toULongLong());
+        if (rootPointer == nullptr) {
+            return;
+        }
+        const bool base = (requestId == state->property("superId").toInt());
+        auto* group = new QTreeWidgetItem(rootPointer);
+        group->setText(0, base ? tr("Base types") : tr("Derived types"));
+        const QList<LightCpp::Workbench::Lsp::HierarchyItem> items =
+            LightCpp::Workbench::Lsp::parseHierarchyItems(result);
+        if (items.isEmpty()) {
+            auto* none = new QTreeWidgetItem(group);
+            none->setText(0, tr("(none)"));
+            none->setDisabled(true);
+        }
+        for (const auto& item : items) {
+            dialog->addItem(group, item);
+        }
+        dialog->tree()->expandItem(rootPointer);
+    });
+}
+
 void MainWindow::requestOutline()
 {
     CodeEditor* ed = currentEditor();
@@ -3862,6 +4215,69 @@ void MainWindow::requestOutline()
     if (reqId > 0) {
         latestOutlineRequestId_ = reqId;
     }
+    // The outline and the semantic colours are refreshed together: both are
+    // answers about the buffer that was just pushed, and asking twice on two
+    // different triggers would double the traffic for no extra accuracy.
+    requestSemanticTokens();
+}
+
+void MainWindow::requestSemanticTokens()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || !lsp_->isRunning()) {
+        return;
+    }
+    if (lsp_->semanticTokenLegend().isEmpty()) {
+        // The server has no semanticTokensProvider: keep the lexical colours
+        // rather than sending requests that will be refused.
+        return;
+    }
+    if (!ed->semanticHighlightingEnabled()) {
+        ed->clearSemanticSpans();
+        return;
+    }
+    const QString lintPath = ed->lintPath();
+    if (lintPath.isEmpty() || !isCppLikeFile(lintPath)) {
+        return;
+    }
+    const int reqId = lsp_->requestSemanticTokens(lintPath);
+    if (reqId > 0) {
+        latestSemanticTokensRequestId_ = reqId;
+        semanticTokensFilePath_ = lintPath;
+    }
+}
+
+void MainWindow::applySemanticTokens(const QString& filePath,
+                                     const QJsonValue& result)
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || ed->lintPath() != filePath) {
+        return;  // the answer describes a tab that is no longer active
+    }
+    const QJsonArray data = result.toObject().value(QStringLiteral("data")).toArray();
+    QString error;
+    const QList<LightCpp::Workbench::Lsp::SemanticToken> tokens =
+        LightCpp::Workbench::Lsp::decodeSemanticTokens(data, &error);
+    if (!error.isEmpty()) {
+        // A malformed stream would paint the wrong span in the wrong colour;
+        // dropping the whole answer leaves the lexical colours in place, which
+        // is a readable document rather than a corrupt one.
+        appendLanguageServerLog(tr("Semantic highlighting ignored: %1").arg(error));
+        return;
+    }
+    const LightCpp::Workbench::Lsp::SemanticLegend& legend =
+        lsp_->semanticTokenLegend();
+    QList<CodeEditor::SemanticSpan> spans;
+    spans.reserve(tokens.size());
+    for (const auto& token : tokens) {
+        CodeEditor::SemanticSpan span;
+        span.line = token.line;
+        span.column = token.column;
+        span.length = token.length;
+        span.role = LightCpp::Workbench::Lsp::roleFor(legend.typeName(token.type));
+        spans.append(span);
+    }
+    ed->setSemanticSpans(spans);
 }
 
 void MainWindow::applyOutlineSymbols(
