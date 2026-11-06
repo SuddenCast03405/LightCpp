@@ -59,6 +59,7 @@
 #include <QScrollArea>
 #include <QToolButton>
 #include <QFileDialog>
+#include <QFormLayout>
 #include <QDir>
 #include <QDirIterator>
 #include <QDateTime>
@@ -1356,7 +1357,7 @@ bool MainWindow::persistGeneralPrefs(const QStringList& recentFiles,
 
 
 bool MainWindow::persistPreferenceSection(const QString& key,
-                                          const QJsonObject& section)
+                                          const QJsonValue& section)
 {
     const QString path =
         QDir(LightCpp::Settings::SettingsStore::baseConfigDirectory())
@@ -3269,6 +3270,16 @@ void MainWindow::createMenuBar()
     toolsMenu->addAction(actCommandPalette_);
     toolsMenu->addSeparator();
     toolsMenu->addAction(actPackageManager_);
+    toolsMenu->addSeparator();
+    externalToolsMenu_ = toolsMenu->addMenu(tr("E&xternal Tools"));
+    externalToolsMenu_->setObjectName(QStringLiteral("menuExternalTools"));
+    actManageExternalTools_ = new QAction(tr("Manage External Tools..."), this);
+    actManageExternalTools_->setObjectName(QStringLiteral("actionManageExternalTools"));
+    actManageExternalTools_->setStatusTip(
+        tr("Define your own commands that run against the current file"));
+    connect(actManageExternalTools_, &QAction::triggered, this,
+            [this] { showExternalToolsDialog(); });
+    rebuildExternalToolMenu();
 
     auto* debugMenu = menuBar()->addMenu(tr("&Debug"));
     debugMenu->setObjectName(QStringLiteral("menuDebug"));
@@ -7067,6 +7078,14 @@ void MainWindow::openProjectFile(const QString& path, bool showInExplorer)
     syncSettingsOverlays();
 }
 
+QString MainWindow::buildDirectoryPath() const
+{
+    if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
+        return LightCpp::Project::buildDirectory(*cmakeProject_, buildConfiguration());
+    }
+    return {};
+}
+
 QString MainWindow::projectRootDirectory() const
 {
     if (projectKind_ == ProjectKind::CMake && cmakeProject_.has_value()) {
@@ -8054,6 +8073,317 @@ void MainWindow::showDebugSymbolSettings()
             tr("Symbol settings saved — they apply at the next session start"),
             5000);
     }
+}
+
+// --- external tools (§九 tool.external) ------------------------------------
+
+namespace {
+
+namespace ExtTools = LightCpp::Workbench::ExternalTools;
+
+/// Which shell a template will be expanded for on this host.
+ExtTools::Shell hostShell()
+{
+#ifdef Q_OS_WIN
+    return ExtTools::Shell::Windows;
+#else
+    return ExtTools::Shell::Posix;
+#endif
+}
+
+/// The editor's selection, or the whole line when nothing is selected. A tool
+/// that greps for `${selection}` is nearly always pointed at what the user
+/// highlighted; falling back to the line means a bare caret still runs.
+QString selectionForTool(CodeEditor* editor)
+{
+    if (editor == nullptr) {
+        return {};
+    }
+    const QTextCursor cursor = editor->textCursor();
+    if (cursor.hasSelection()) {
+        return cursor.selectedText();
+    }
+    const QTextBlock block = cursor.block();
+    return block.isValid() ? block.text() : QString();
+}
+
+}  // namespace
+
+void MainWindow::rebuildExternalToolMenu()
+{
+    if (externalToolsMenu_ == nullptr) {
+        return;
+    }
+    externalToolsMenu_->clear();
+    const QList<LightCpp::Settings::ExternalTool>& tools =
+        settings_->preferences().externalTools;
+    for (int i = 0; i < tools.size(); ++i) {
+        const auto& tool = tools.at(i);
+        auto* action = externalToolsMenu_->addAction(tool.name);
+        action->setObjectName(QStringLiteral("actionExternalTool_%1").arg(tool.id));
+        // The full command line as the tooltip: the menu entry has to stay
+        // one line, but the user needs to see what will actually run.
+        action->setStatusTip(ExtTools::describe(tool.command, tool.arguments, 200));
+        action->setToolTip(action->statusTip());
+        action->setEnabled(!tool.command.trimmed().isEmpty());
+        connect(action, &QAction::triggered, this,
+                [this, i] { runExternalTool(i); });
+    }
+    if (!tools.isEmpty()) {
+        externalToolsMenu_->addSeparator();
+    }
+    externalToolsMenu_->addAction(actManageExternalTools_);
+}
+
+void MainWindow::runExternalTool(int index)
+{
+    const QList<LightCpp::Settings::ExternalTool> tools =
+        settings_->preferences().externalTools;
+    if (index < 0 || index >= tools.size()) {
+        return;
+    }
+    const LightCpp::Settings::ExternalTool tool = tools.at(index);
+    CodeEditor* ed = currentEditor();
+    ExtTools::Context context;
+    context.file = ed != nullptr ? ed->filePath() : QString();
+    context.projectRoot = projectRootDirectory();
+    context.buildDir = buildDirectoryPath();
+    context.selection = selectionForTool(ed);
+
+    QStringList missing;
+    const QString command =
+        ExtTools::quoteForShell(tool.command.trimmed(), hostShell());
+    const QString arguments =
+        ExtTools::expand(tool.arguments, context, hostShell(), &missing);
+    if (!missing.isEmpty()) {
+        // Refusing beats running: `grep "" file` is not an error message a
+        // user can act on, and a silently empty argument list can mean the
+        // command does something destructive.
+        statusBar()->showMessage(
+            tr("%1 needs %2, which is not available here.")
+                .arg(tool.name, missing.join(QStringLiteral(", "))),
+            6000);
+        return;
+    }
+
+    if (tool.confirmBeforeRun) {
+        const auto answer = QMessageBox::question(
+            this, tr("Run %1").arg(tool.name),
+            tr("%1?\n\nWorking directory: %2")
+                .arg(ExtTools::describe(tool.command, arguments, 300),
+                     ExtTools::workingDirectoryFor(tool.workingDirectory, context,
+                                                   hostShell())));
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    auto* process = new QProcess(this);
+    process->setProgram(tool.command.trimmed());
+    // The template is a shell fragment by design (`&&`, redirection, pipes),
+    // so it is handed to the shell as one string rather than split on spaces.
+    process->setArguments({arguments});
+#ifdef Q_OS_WIN
+    process->setNativeArguments(arguments);
+    process->setProgram(QStringLiteral("cmd.exe"));
+    process->setArguments({QStringLiteral("/c"), tool.command.trimmed()});
+#endif
+    const QString workingDirectory =
+        ExtTools::workingDirectoryFor(tool.workingDirectory, context, hostShell());
+    if (!workingDirectory.isEmpty()) {
+        process->setWorkingDirectory(workingDirectory);
+    }
+    connect(process, &QProcess::readyReadStandardOutput, this, [this, process] {
+        outputPanel_->appendProgramOutput(QString::fromLocal8Bit(
+            process->readAllStandardOutput()));
+    });
+    connect(process, &QProcess::readyReadStandardError, this, [this, process] {
+        outputPanel_->appendProgramOutput(QString::fromLocal8Bit(
+            process->readAllStandardError()));
+    });
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, process, tool](int exitCode, QProcess::ExitStatus status) {
+        outputPanel_->appendProgramOutput(
+            status == QProcess::NormalExit
+                ? tr("[%1 finished, exit %2]").arg(tool.name).arg(exitCode)
+                : tr("[%1 crashed]").arg(tool.name));
+        process->deleteLater();
+    });
+    connect(process, &QProcess::errorOccurred, this,
+            [this, process, tool](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            outputPanel_->appendProgramOutput(
+                tr("[%1 could not start: %2]").arg(tool.name, process->errorString()));
+            process->deleteLater();
+        }
+    });
+    outputPanel_->appendProgramOutput(
+        tr("$ %1 %2").arg(tool.command, arguments).trimmed());
+    process->start();
+}
+
+void MainWindow::showExternalToolsDialog()
+{
+    namespace ExtTools = LightCpp::Workbench::ExternalTools;
+
+    // A local copy: the dialog may be cancelled, and a half-edited list must
+    // not reach the settings store.
+    QList<LightCpp::Settings::ExternalTool> tools =
+        settings_->preferences().externalTools;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("External Tools"));
+    auto* layout = new QVBoxLayout(&dialog);
+
+    auto* list = new QListWidget(&dialog);
+    list->setObjectName(QStringLiteral("externalToolsList"));
+    for (const auto& tool : tools) {
+        auto* row = new QListWidgetItem(tool.name, list);
+        row->setToolTip(ExtTools::describe(tool.command, tool.arguments, 200));
+    }
+    layout->addWidget(list, 1);
+
+    auto* editorBox = new QGroupBox(tr("Selected tool"), &dialog);
+    auto* form = new QFormLayout(editorBox);
+    auto* nameEdit = new QLineEdit(editorBox);
+    auto* commandEdit = new QLineEdit(editorBox);
+    auto* argumentsEdit = new QLineEdit(editorBox);
+    auto* workDirEdit = new QLineEdit(editorBox);
+    auto* captureCheck = new QCheckBox(tr("Capture output in the Output panel"), editorBox);
+    auto* confirmCheck = new QCheckBox(tr("Ask before running"), editorBox);
+    argumentsEdit->setPlaceholderText(
+        tr("--dry-run ${file}   (placeholders listed below)"));
+    form->addRow(tr("Name:"), nameEdit);
+    form->addRow(tr("Command:"), commandEdit);
+    form->addRow(tr("Arguments:"), argumentsEdit);
+    form->addRow(tr("Working directory:"), workDirEdit);
+    form->addRow(QString(), captureCheck);
+    form->addRow(QString(), confirmCheck);
+    auto* help = new QLabel(
+        tr("Placeholders: %1").arg(ExtTools::placeholderNames().join(QStringLiteral("  "))),
+        editorBox);
+    help->setWordWrap(true);
+    form->addRow(QString(), help);
+    layout->addWidget(editorBox);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel,
+                                         &dialog);
+    auto* addButton = buttons->addButton(tr("Add"), QDialogButtonBox::ActionRole);
+    auto* removeButton = buttons->addButton(tr("Remove"), QDialogButtonBox::ActionRole);
+    layout->addWidget(buttons);
+
+    // Loading a row into the form and reading it back is the only way the
+    // dialog and the list can disagree — so both directions go through these
+    // two lambdas and nothing else touches the widgets.
+    auto loadRow = [&](int index) {
+        const bool valid = index >= 0 && index < tools.size();
+        editorBox->setEnabled(valid);
+        if (!valid) {
+            nameEdit->clear();
+            commandEdit->clear();
+            argumentsEdit->clear();
+            workDirEdit->clear();
+            return;
+        }
+        const auto& tool = tools.at(index);
+        nameEdit->setText(tool.name);
+        commandEdit->setText(tool.command);
+        argumentsEdit->setText(tool.arguments);
+        workDirEdit->setText(tool.workingDirectory);
+        captureCheck->setChecked(tool.captureOutput);
+        confirmCheck->setChecked(tool.confirmBeforeRun);
+    };
+    auto storeRow = [&](int index) {
+        if (index < 0 || index >= tools.size()) {
+            return;
+        }
+        auto& tool = tools[index];
+        tool.name = nameEdit->text().trimmed();
+        tool.command = commandEdit->text().trimmed();
+        tool.arguments = argumentsEdit->text();
+        tool.workingDirectory = workDirEdit->text().trimmed();
+        tool.captureOutput = captureCheck->isChecked();
+        tool.confirmBeforeRun = confirmCheck->isChecked();
+        if (tool.name.isEmpty()) {
+            tool.name = tool.command;
+        }
+        if (auto* row = list->item(index)) {
+            row->setText(tool.name);
+            row->setToolTip(ExtTools::describe(tool.command, tool.arguments, 200));
+        }
+    };
+
+    connect(list, &QListWidget::currentRowChanged, &dialog, [&](int row) {
+        loadRow(row);
+    });
+    connect(addButton, &QPushButton::clicked, &dialog, [&] {
+        LightCpp::Settings::ExternalTool tool;
+        QStringList existing;
+        for (const auto& item : tools) {
+            existing << item.id;
+        }
+        tool.id = ExtTools::makeId(tr("New tool"), existing);
+        tool.name = tr("New tool");
+        tool.command.clear();
+        tools.append(tool);
+        list->addItem(tool.name);
+        list->setCurrentRow(list->count() - 1);
+        commandEdit->setFocus();
+    });
+    connect(removeButton, &QPushButton::clicked, &dialog, [&] {
+        const int row = list->currentRow();
+        if (row < 0) {
+            return;
+        }
+        tools.removeAt(row);
+        delete list->takeItem(row);
+        loadRow(qMin(row, list->count() - 1));
+    });
+    // Every keystroke updates the model: there is no OK/Cancel pair for the
+    // fields, only for the dialog, so an edit must not be lost by clicking
+    // another row first.
+    for (QLineEdit* edit : {nameEdit, commandEdit, argumentsEdit, workDirEdit}) {
+        connect(edit, &QLineEdit::textChanged, &dialog, [&, edit] {
+            Q_UNUSED(edit)
+            storeRow(list->currentRow());
+        });
+    }
+    for (QCheckBox* box : {captureCheck, confirmCheck}) {
+        connect(box, &QCheckBox::toggled, &dialog, [&, box] {
+            Q_UNUSED(box)
+            storeRow(list->currentRow());
+        });
+    }
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        // A tool with no command cannot run; dropping it on save is kinder
+        // than saving an entry that silently does nothing.
+        QJsonArray written;
+        for (const auto& tool : tools) {
+            if (tool.command.trimmed().isEmpty()) {
+                continue;
+            }
+            written.append(QJsonObject{
+                {QStringLiteral("id"), tool.id},
+                {QStringLiteral("name"), tool.name},
+                {QStringLiteral("command"), tool.command},
+                {QStringLiteral("arguments"), tool.arguments},
+                {QStringLiteral("workingDirectory"), tool.workingDirectory},
+                {QStringLiteral("captureOutput"), tool.captureOutput},
+                {QStringLiteral("confirmBeforeRun"), tool.confirmBeforeRun},
+            });
+        }
+        persistPreferenceSection(QStringLiteral("externalTools"), written);
+        dialog.accept();
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (list->count() > 0) {
+        list->setCurrentRow(0);
+    } else {
+        loadRow(-1);
+    }
+    dialog.exec();
+    rebuildExternalToolMenu();
 }
 
 void MainWindow::showPackageManager()

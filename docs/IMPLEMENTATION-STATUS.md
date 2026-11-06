@@ -24,11 +24,11 @@
 | 六、代码智能 | 23 | 20 | 0 | 3 | 87% |
 | 七、静态分析与代码质量 | 13 | 12 | 1 | 0 | 96% |
 | 八、版本控制 | 26 | 14 | 8 | 4 | 70% |
-| 九、终端与工具集成 | 15 | 2 | 2 | 11 | 20% |
+| 九、终端与工具集成 | 15 | 8 | 2 | 5 | 60% |
 | 十、测试 | 15 | 14 | 1 | 0 | 95% |
 | 十一、文档与帮助 | 11 | 7 | 2 | 2 | 73% |
 | 十二、Qt 生态 | 7 | 3 | 4 | 0 | 71% |
-| **合计** | **188** | **129** | **33** | **26** | **82%** |
+| **合计** | **188** | **135** | **33** | **20** | **83%** |
 
 口径说明：
 
@@ -243,7 +243,7 @@
 | `git.commit.gpg` GPG 签名 | 声明 | 交给系统 git 配置 |
 | `git.auth.ssh_https` SSH / HTTPS 认证 | 声明 | 交给系统 git 凭据助手 |
 
-## 九、终端与工具集成（15 条：实现 2 / 骨架 2 / 声明 11）
+## 九、终端与工具集成（15 条：实现 8 / 骨架 2 / 声明 5）
 
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
@@ -251,17 +251,17 @@
 | `tool.terminal` 内置终端 | 骨架 | `OutputPanel` 的终端通道 + `TerminalLaunch.cpp`（49 行）启动外部终端；**不是**真正的 PTY 终端。原文即标 `known-issue` |
 | `tool.launch` 调试程序（插件） | 骨架 | 交给 `DebuggerController`，受第五节限制 |
 | `tool.palette` 命令面板 | 实现 | `CommandPalette`：Ctrl+Shift+P，子序列模糊打分（连续命中 +8、词首 +6/+12、长度惩罚） |
-| `tool.external` 外部工具配置 | 声明 | 无 |
+| `tool.external` 外部工具配置 | 实现 | Tools ▸ External Tools：菜单由 `Preferences::externalTools` 生成；每个工具含名称 / 命令 / 参数模板 / 工作目录 / 是否捕获输出 / 运行前是否确认。`Workbench/ExternalTools` 负责模板展开与按 shell 转义（POSIX 单引号 + `'\''`，cmd 双引号 + `%%`），未知 `${...}` 原样保留以免吃掉 `$HOME`；占位符无值时拒绝运行而不是展开成空串 |
 | `tool.shell` Shell 集成 | 声明 | 无提示符解析、无命令历史同步 |
-| `tool.pkg.vcpkg` vcpkg | 声明 | 全仓库无 `vcpkg` 引用 |
-| `tool.pkg.conan` conan | 声明 | 无 `conan` 引用 |
-| `tool.pkg.hunter` Hunter | 声明 | 无引用 |
-| `tool.pkg.system` apt / brew / winget | 声明 | 无引用 |
+| `tool.pkg.vcpkg` vcpkg | 实现 | Tools ▸ Package Manager：`vcpkg list/search/install/remove`，triplet 归一化，可注入 CMake 参数 |
+| `tool.pkg.conan` conan | 实现 | 同上：Conan 2 的 `conan list/search/install/remove` 与 `--output-folder` 集成 |
+| `tool.pkg.hunter` Hunter | 实现 | 同上：Hunter 由 CMake 驱动，面板给出 `HUNTER_ROOT` 与 toolchain 提示 |
+| `tool.pkg.system` apt / brew / winget | 实现 | 同上：按平台选 apt / brew / winget，安装与搜索都走同一套 `PackageManager` 命令 |
 | `tool.wsl` WSL 集成 | 声明 | `wsl` 纯清单插件 |
 | `tool.serial` 串口终端 | 声明 | `serial-terminal` 纯清单插件 |
-| `tool.log` 日志查看器 | 声明 | `log-viewer` 纯清单插件 |
-| `tool.hex` Hex 查看器 | 声明 | `hex-viewer` 纯清单插件 |
-| `tool.media` 图像 / 资源预览 | 声明 | `media-preview` 纯清单插件 |
+| `tool.log` 日志查看器 | 实现 | `openInViewer` 按内容分派：`Workbench/Viewer::parseLog` 分级（trace…fatal）+ 时间戳提取 + 级别过滤条 |
+| `tool.hex` Hex 查看器 | 实现 | 同上：16 字节一行、绝对偏移、ASCII 列、Go to offset、字节搜索 |
+| `tool.media` 图像 / 资源预览 | 实现 | 同上：PNG/JPEG/GIF/BMP/WebP 按嗅探结果决定，缩放适配、显示尺寸与文件大小 |
 
 ## 十、测试（15 条：实现 14 / 骨架 1 / 声明 0）
 
@@ -400,7 +400,8 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `MainWindow.cpp` View ▸ Call Graph | 逐层走调用、实时进度、DOT 剪贴板/落盘、双击跳转 | 5 |
 | `AnalysisPanel.cpp` + `ToolchainPaths` | scan-build / PVS-Studio / Coverity 三个运行入口 | 5 |
 | `AnalysisReport` 规则集 | `tidyChecks` / `tidyChecksAllNamed` / `clangTidyConfigFor` + 面板下拉与落盘 | 5 |
+| `Workbench/ExternalTools` + 工具对话框 | 模板展开、两种 shell 的转义、id 生成、工作目录回落 | 13 |
 | `Workbench/Lsp::{parseHover,typeHintFromHover}` + 悬停提示 | 三种 contents 形态归一、类型推导、签名/文档分栏渲染 | 11 |
 | `MainWindow.cpp` Debug ▸ Symbol Settings | 映射树 + 路径列表 + `Debug::describe()` 摘要；会话 `started` 时下发 | — |
 
-单元测试从 781 增至 **916**（本轮新增 135 个），`100% tests passed`。
+单元测试从 781 增至 **929**（本轮新增 148 个），`100% tests passed`。

@@ -398,6 +398,23 @@ QJsonObject toJson(const Preferences& prefs)
     run.insert(QStringLiteral("terminals"), terminals);
     object.insert(QStringLiteral("run"), run);
 
+    // The user's own tools get their own top-level key rather than living
+    // inside "run": the two are edited by different dialogs, and a section
+    // that one dialog owns can be rewritten without touching the other's.
+    QJsonArray tools;
+    for (const ExternalTool& tool : prefs.externalTools) {
+        tools.append(QJsonObject{
+            {QStringLiteral("id"), tool.id},
+            {QStringLiteral("name"), tool.name},
+            {QStringLiteral("command"), tool.command},
+            {QStringLiteral("arguments"), tool.arguments},
+            {QStringLiteral("workingDirectory"), tool.workingDirectory},
+            {QStringLiteral("captureOutput"), tool.captureOutput},
+            {QStringLiteral("confirmBeforeRun"), tool.confirmBeforeRun},
+        });
+    }
+    object.insert(QStringLiteral("externalTools"), tools);
+
     QJsonArray disabled;
     for (const QString& path : prefs.disabledPlugins) {
         disabled.append(path);
@@ -686,6 +703,41 @@ void fromJson(const QJsonObject& object, Preferences& out)
                         out.terminals.append(parsed);
                     }
                 }
+            }
+        }
+    }
+
+    // External tools have no seeded defaults, so an absent key simply means
+    // "none yet" — unlike terminals, there is nothing to preserve.
+    out.externalTools.clear();
+    {
+        const QJsonValue toolsValue = object.value(QLatin1String("externalTools"));
+        if (toolsValue.isArray()) {
+            QStringList seenIds;
+            for (const QJsonValue& item : toolsValue.toArray()) {
+                if (!item.isObject()) {
+                    continue;
+                }
+                const QJsonObject tool = item.toObject();
+                ExternalTool parsed;
+                readString(tool, "id", parsed.id);
+                readString(tool, "name", parsed.name);
+                readString(tool, "command", parsed.command);
+                readString(tool, "arguments", parsed.arguments);
+                readString(tool, "workingDirectory", parsed.workingDirectory);
+                readBool(tool, "captureOutput", parsed.captureOutput);
+                readBool(tool, "confirmBeforeRun", parsed.confirmBeforeRun);
+                // A tool with no command cannot run, and a duplicate id would
+                // make "which one did I just run" unanswerable.
+                if (parsed.command.trimmed().isEmpty() || parsed.id.isEmpty()
+                    || seenIds.contains(parsed.id)) {
+                    continue;
+                }
+                seenIds.append(parsed.id);
+                if (parsed.name.isEmpty()) {
+                    parsed.name = parsed.command;
+                }
+                out.externalTools.append(parsed);
             }
         }
     }

@@ -236,6 +236,41 @@ struct RunTerminal {
     bool embedded = true; ///< true: captured in the Program Output channel
 };
 
+/// One entry of the user's own "external tools" list (lightcpp.1.md §九
+/// `tool.external`): a command the IDE did not ship, run against the current
+/// file or project.
+///
+/// The arguments are stored as a template rather than a list so a tool can
+/// be pointed at what the user is looking at. The substitutions are
+/// deliberately few and explicit; anything else is the shell's job.
+struct ExternalTool {
+    QString id;              ///< stable key, generated when empty
+    QString name;            ///< "Clang-format check"
+    QString command;         ///< executable, resolved like any other tool
+    /// Space-separated template. `${file}`, `${fileDir}`, `${fileName}`,
+    /// `${projectRoot}`, `${buildDir}` and `${selection}` are substituted;
+    /// everything else is passed through untouched.
+    QString arguments;
+    /// Working directory template, with the same substitutions. Empty means
+    /// the project root, then the file's directory.
+    QString workingDirectory;
+    /// Capture into the Output panel (true) or hand to the system terminal
+    /// (false), for tools that are interactive.
+    bool captureOutput = true;
+    /// Ask before running. On by default: an external tool is user-defined
+    /// and may well rewrite files.
+    bool confirmBeforeRun = true;
+};
+
+/// The substitutions available in ExternalTool templates, for the editor's
+/// help text and for tests. One place, so the help cannot drift.
+inline QStringList externalToolPlaceholders()
+{
+    return {QStringLiteral("${file}"), QStringLiteral("${fileDir}"),
+            QStringLiteral("${fileName}"), QStringLiteral("${projectRoot}"),
+            QStringLiteral("${buildDir}"), QStringLiteral("${selection}")};
+}
+
 /// Two host-native shells every configuration starts with (deletable
 /// copies in the user's list; the function returns fresh values each call).
 inline QList<RunTerminal> defaultRunTerminals()
@@ -330,6 +365,9 @@ struct Preferences {
     /// fixed options outside it; every entry here can be edited, added or
     /// removed. Seeded with the host's two native shells on first run.
     QList<RunTerminal> terminals = defaultRunTerminals();
+    /// Tools the user added themselves (§九 tool.external). Empty by
+    /// default: unlike the shells, there is nothing sensible to seed.
+    QList<ExternalTool> externalTools;
 
     /// Plugins the user disabled, as paths relative to the plugins
     /// directory ("hello.dll", "lua/timer.lua"). Skipped at load time; a

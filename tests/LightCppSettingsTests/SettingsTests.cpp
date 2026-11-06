@@ -1797,3 +1797,63 @@ TEST(SettingsJson, DebuggerWrongTypesKeepDefaults)
     EXPECT_TRUE(prefs.debugger.sourceMappings.isEmpty());
     EXPECT_TRUE(prefs.debugger.symbolSearchPaths.isEmpty());
 }
+
+TEST(SettingsJson, ExternalToolsRoundTripAndDropUnrunnableEntries)
+{
+    // Empty by default: unlike the shells there is nothing to seed.
+    Preferences fresh;
+    fromJson(QJsonObject{{"type", "preferences"}}, fresh);
+    EXPECT_TRUE(fresh.externalTools.isEmpty());
+
+    ExternalTool tool;
+    tool.id = QStringLiteral("clang-format-check");
+    tool.name = QStringLiteral("clang-format check");
+    tool.command = QStringLiteral("clang-format");
+    tool.arguments = QStringLiteral("--dry-run ${file}");
+    tool.workingDirectory = QStringLiteral("${projectRoot}");
+    tool.captureOutput = true;
+    tool.confirmBeforeRun = false;
+
+    Preferences written;
+    written.externalTools.append(tool);
+    Preferences back;
+    fromJson(toJson(written), back);
+    ASSERT_EQ(back.externalTools.size(), 1);
+    EXPECT_EQ(back.externalTools.first().id, tool.id);
+    EXPECT_EQ(back.externalTools.first().arguments, tool.arguments);
+    EXPECT_FALSE(back.externalTools.first().confirmBeforeRun);
+
+    // A tool with no command cannot run, and a duplicate id makes "which one
+    // did I just run" unanswerable — both are dropped on read.
+    const QJsonObject document{
+        {"type", "preferences"},
+        {"externalTools",
+         QJsonArray{
+             QJsonObject{{"id", "a"}, {"name", "A"}, {"command", ""}},
+             QJsonObject{{"id", "b"}, {"name", "B"}, {"command", "tool"}},
+             QJsonObject{{"id", "b"}, {"name", "B2"}, {"command", "tool2"}},
+         }},
+    };
+    Preferences filtered;
+    fromJson(document, filtered);
+    ASSERT_EQ(filtered.externalTools.size(), 1);
+    EXPECT_EQ(filtered.externalTools.first().id, QStringLiteral("b"));
+    EXPECT_EQ(filtered.externalTools.first().name, QStringLiteral("B"));
+}
+
+TEST(SettingsJson, ExternalToolsLiveOutsideTheRunSection)
+{
+    // The two are edited by different dialogs. If the tools lived under
+    // "run", saving the tools would rewrite the terminal list as well.
+    Preferences written;
+    ExternalTool tool;
+    tool.id = QStringLiteral("t");
+    tool.name = QStringLiteral("T");
+    tool.command = QStringLiteral("tool");
+    written.externalTools.append(tool);
+    const QJsonObject document = toJson(written);
+    EXPECT_TRUE(document.contains(QLatin1String("externalTools")));
+    EXPECT_FALSE(document.value(QLatin1String("run"))
+                     .toObject()
+                     .contains(QLatin1String("externalTools")));
+}

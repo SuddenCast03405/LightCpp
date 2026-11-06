@@ -32,6 +32,7 @@
 #include "LightCpp/Text/Encoding.hpp"
 #include "LightCpp/Text/TextFile.hpp"
 #include "LightCpp/Workbench/EditorTools.hpp"
+#include "LightCpp/Workbench/ExternalTools.hpp"
 #include "LightCpp/Workbench/GitExtra.hpp"
 #include "LightCpp/Workbench/PackageManager.hpp"
 #include "LightCpp/Workbench/Viewers.hpp"
@@ -55,6 +56,7 @@ class QLabel;
 class QListWidget;
 class QDockWidget;
 class QLineEdit;
+class QMenu;
 class QTreeWidget;
 class QTabWidget;
 class QComboBox;
@@ -481,6 +483,9 @@ private:
     /// The directory the project lives in — what the Explorer shows while a
     /// project is open. Falls back to the descriptor's own directory.
     [[nodiscard]] QString projectRootDirectory() const;
+    /// The active build tree, for tools that need to find compile_commands.json
+    /// or write output next to the build. Empty when there is no CMake project.
+    [[nodiscard]] QString buildDirectoryPath() const;
     /// Forget the open project and put the window back to having none. The
     /// Explorer is deliberately left alone: it is showing a directory the user
     /// chose, which outlives whichever project happened to be inside it.
@@ -765,6 +770,9 @@ private:
     QAction* actCallHierarchy_ = nullptr;      // Edit > Call Hierarchy
     QAction* actTypeHierarchy_ = nullptr;      // Edit > Type Hierarchy
     QAction* actPackageManager_ = nullptr;     // Tools > Package Manager
+    /// Tools ▸ External Tools: generated from Preferences::externalTools.
+    QMenu* externalToolsMenu_ = nullptr;
+    QAction* actManageExternalTools_ = nullptr;
     QAction* actBlameFile_ = nullptr;          // Git > Blame File
     QAction* actDebugSymbols_ = nullptr;       // Debug > Symbol Settings...
     QAction* actToggleBookmark_ = nullptr;     // Edit > Toggle Bookmark (Ctrl+F2)
@@ -1267,7 +1275,9 @@ private:
     /// every other key untouched — the same surgical update
     /// persistGeneralPrefs() does, generalised so the debugger block does not
     /// need a second copy of the array-or-object dance.
-    bool persistPreferenceSection(const QString& key, const QJsonObject& section);
+    /// `section` may be an object or an array; the settings document is
+    /// shallow-merged at the top level, so both shapes work the same way.
+    bool persistPreferenceSection(const QString& key, const QJsonValue& section);
     /// Tools > Debugger Symbol Settings...: the form for the switches above.
     void showDebugSymbolSettings();
     /// Push the symbol-layer commands for the current backend into the live
@@ -1280,6 +1290,17 @@ private:
     /// Tools > Package Manager...: pick a manager, search/install/remove a
     /// package, and copy the CMake flag that makes the build find it.
     void showPackageManager();
+
+    // --- external tools (§九 tool.external) --------------------------------
+    /// Rebuild the Tools ▸ External Tools submenu from the preferences. The
+    /// list is user-editable, so the menu is generated rather than declared.
+    void rebuildExternalToolMenu();
+    /// Run one configured tool against the active file and selection.
+    /// Asks first when the tool says so, and reports an unresolvable
+    /// placeholder instead of running a command with a hole in it.
+    void runExternalTool(int index);
+    /// The dialog that adds, edits, reorders and removes tools.
+    void showExternalToolsDialog();
 
     // --- hex / log / image viewers -----------------------------------------
     /// Open `path` in a read-only viewer tab when its content is better read

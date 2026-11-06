@@ -26,6 +26,8 @@
 #   Source/BuildOptions.cpp    cross toolchain, ccache, targets, compile
 #                              commands (§三).
 #   Source/DocsCatalog.cpp     the documentation catalogue (§十一).
+#   Source/ExternalTools.cpp   the user's own tools (§九): template expansion
+#                              and the quoting each shell needs.
 
 add_library(LightCppWorkbench STATIC
     Source/AnalysisReport.cpp
@@ -33,6 +35,7 @@ add_library(LightCppWorkbench STATIC
     Source/DebugSymbols.cpp
     Source/DocsCatalog.cpp
     Source/EditorTools.cpp
+    Source/ExternalTools.cpp
     Source/GitExtra.cpp
     Source/GitModel.cpp
     Source/LspModel.cpp

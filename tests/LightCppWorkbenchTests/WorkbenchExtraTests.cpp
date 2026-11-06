@@ -12,6 +12,7 @@
 #include "LightCpp/Workbench/DebugSymbols.hpp"
 #include "LightCpp/Workbench/DocsCatalog.hpp"
 #include "LightCpp/Workbench/EditorTools.hpp"
+#include "LightCpp/Workbench/ExternalTools.hpp"
 #include "LightCpp/Workbench/GitExtra.hpp"
 #include "LightCpp/Workbench/GitModel.hpp"
 #include "LightCpp/Workbench/LspModel.hpp"
@@ -1732,4 +1733,174 @@ TEST(Hover, ACommentBlockIsDocumentationNotASignature)
     Lsp::HoverInfo prose;
     prose.markdown = QStringLiteral("line one\nline two");
     EXPECT_TRUE(prose.hasDocumentation());
+}
+
+// ---------------------------------------------------------------------------
+// External tools: the template is the whole contract
+// ---------------------------------------------------------------------------
+
+namespace {
+
+namespace Ext = LightCpp::Workbench::ExternalTools;
+
+Ext::Context toolContext()
+{
+    Ext::Context context;
+    context.file = QStringLiteral("/home/me/My Code/main.cpp");
+    context.projectRoot = QStringLiteral("/home/me/My Code");
+    context.buildDir = QStringLiteral("/home/me/My Code/build");
+    context.selection = QStringLiteral("Widget");
+    return context;
+}
+
+}  // namespace
+
+TEST(ExternalTools, APathWithASpaceIsQuotedForTheShell)
+{
+    // The reason quoting exists. Unquoted, `clang-format /home/me/My Code/x`
+    // is two arguments and clang-format reports a file that does not exist.
+    const QString expanded =
+        Ext::expand(QStringLiteral("--dry-run ${file}"), toolContext(),
+                    Ext::Shell::Posix);
+    EXPECT_EQ(expanded,
+              QStringLiteral("--dry-run '/home/me/My Code/main.cpp'"));
+}
+
+TEST(ExternalTools, APathThatNeedsNoQuotingIsLeftAlone)
+{
+    // Quoting everything would be correct but unreadable in the command echo,
+    // and a path without spaces is the common case.
+    Ext::Context context;
+    context.file = QStringLiteral("/src/a.cpp");
+    EXPECT_EQ(Ext::expand(QStringLiteral("${file}"), context, Ext::Shell::Posix),
+              QStringLiteral("/src/a.cpp"));
+}
+
+TEST(ExternalTools, ASingleQuoteInAPathIsEscapedNotDropped)
+{
+    // `it's.cpp` is a legal file name. Inside single quotes it would end the
+    // quoting and the rest of the command would be interpreted.
+    Ext::Context context;
+    context.file = QStringLiteral("/tmp/it's.cpp");
+    const QString expanded =
+        Ext::expand(QStringLiteral("${file}"), context, Ext::Shell::Posix);
+    EXPECT_EQ(expanded, QStringLiteral("'/tmp/it'\\''s.cpp'"));
+    // And the result really is one shell word: count unescaped quotes.
+    int quotes = 0;
+    for (int i = 0; i < expanded.size(); ++i) {
+        if (expanded.at(i) == QLatin1Char('\'')
+            && (i == 0 || expanded.at(i - 1) != QLatin1Char('\\'))) {
+            ++quotes;
+        }
+    }
+    EXPECT_EQ(quotes % 2, 0);
+}
+
+TEST(ExternalTools, WindowsQuotingDoublesPercentAndQuote)
+{
+    Ext::Context context;
+    context.file = QStringLiteral("C:\\Users\\me\\100% done\\a.cpp");
+    const QString expanded =
+        Ext::expand(QStringLiteral("${file}"), context, Ext::Shell::Windows);
+    // A single `%` in cmd.exe starts a variable expansion; `%%` is a literal.
+    EXPECT_TRUE(expanded.contains(QLatin1String("100%% done"))) << expanded.toStdString();
+    EXPECT_TRUE(expanded.startsWith(QLatin1Char('"')));
+}
+
+TEST(ExternalTools, UnknownPlaceholdersAndShellVariablesPassThrough)
+{
+    // A template is often a shell fragment: `$HOME`, `$?`, `$$` all mean
+    // something to the shell, and eating them would break the tool.
+    const QString expanded = Ext::expand(
+        QStringLiteral("echo $HOME && cat ${file} | grep ${unknown}"),
+        toolContext(), Ext::Shell::Posix);
+    EXPECT_TRUE(expanded.contains(QLatin1String("$HOME")));
+    EXPECT_TRUE(expanded.contains(QLatin1String("${unknown}")));
+    EXPECT_TRUE(expanded.contains(QLatin1String("main.cpp")));
+}
+
+TEST(ExternalTools, AMissingValueIsReportedInsteadOfExpandingToNothing)
+{
+    // `grep "" file` is not an error the user can act on. The caller is told
+    // which placeholder was empty so it can refuse to run.
+    Ext::Context context;  // no file, no project, no selection
+    QStringList missing;
+    const QString expanded =
+        Ext::expand(QStringLiteral("${file} ${selection}"), context,
+                    Ext::Shell::Posix, &missing);
+    EXPECT_EQ(expanded.trimmed(), QString());
+    EXPECT_TRUE(missing.contains(QStringLiteral("${file}")));
+    EXPECT_TRUE(missing.contains(QStringLiteral("${selection}")));
+    // And a placeholder that is not used is not reported.
+    EXPECT_FALSE(missing.contains(QStringLiteral("${buildDir}")));
+}
+
+TEST(ExternalTools, TheSelectionIsNotQuotedBecauseItIsUsuallySeveralWords)
+{
+    Ext::Context context;
+    context.selection = QStringLiteral("a.cpp b.cpp");
+    EXPECT_EQ(Ext::expand(QStringLiteral("${selection}"), context,
+                          Ext::Shell::Posix),
+              QStringLiteral("a.cpp b.cpp"));
+}
+
+TEST(ExternalTools, DerivationsUseThePathsTheyAreGiven)
+{
+    Ext::Context context;
+    context.file = QStringLiteral("/p/src/deep/a.cpp");
+    EXPECT_EQ(Ext::expand(QStringLiteral("${fileDir}"), context, Ext::Shell::Posix),
+              QStringLiteral("/p/src/deep"));
+    EXPECT_EQ(Ext::expand(QStringLiteral("${fileName}"), context, Ext::Shell::Posix),
+              QStringLiteral("a.cpp"));
+    // A bare name has no directory; "." would be a working directory the
+    // caller did not ask for.
+    Ext::Context bare;
+    bare.file = QStringLiteral("a.cpp");
+    EXPECT_TRUE(Ext::directoryOf(bare.file).isEmpty());
+}
+
+TEST(ExternalTools, IdsAreStableAndUnique)
+{
+    EXPECT_EQ(Ext::makeId(QStringLiteral("Clang-format check"), {}),
+              QStringLiteral("clang-format-check"));
+    // Same name twice must not collide: the id is how "the one I ran last"
+    // is remembered.
+    const QStringList existing{QStringLiteral("clang-format-check")};
+    EXPECT_EQ(Ext::makeId(QStringLiteral("Clang-format check"), existing),
+              QStringLiteral("clang-format-check-2"));
+    // A name with no alphanumerics still gets a usable id.
+    EXPECT_EQ(Ext::makeId(QStringLiteral("***"), {}), QStringLiteral("tool"));
+}
+
+TEST(ExternalTools, WorkingDirectoryFallsBackInAUsefulOrder)
+{
+    const Ext::Context context = toolContext();
+    // The tool's own template wins.
+    EXPECT_EQ(Ext::workingDirectoryFor(QStringLiteral("${buildDir}"), context,
+                                       Ext::Shell::Posix),
+              context.buildDir);
+    // Then the project root.
+    EXPECT_EQ(Ext::workingDirectoryFor(QString(), context, Ext::Shell::Posix),
+              context.projectRoot);
+    // Then the file's directory.
+    Ext::Context noProject = context;
+    noProject.projectRoot.clear();
+    EXPECT_EQ(Ext::workingDirectoryFor(QString(), noProject, Ext::Shell::Posix),
+              QStringLiteral("/home/me/My Code"));
+}
+
+TEST(ExternalTools, DescribeRefusesAToolWithNoCommand)
+{
+    // An empty description is the caller's signal that the tool cannot run.
+    EXPECT_TRUE(Ext::describe(QString(), QStringLiteral("--x")).isEmpty());
+    EXPECT_TRUE(Ext::describe(QStringLiteral("   "), {}).isEmpty());
+    EXPECT_EQ(Ext::describe(QStringLiteral("clang-format"),
+                            QStringLiteral("--dry-run   ${file}"), 200),
+              QStringLiteral("clang-format --dry-run ${file}"));
+    // Long command lines are trimmed for a menu entry.
+    const QString longText =
+        Ext::describe(QStringLiteral("tool"),
+                      QStringLiteral("--aaaaaaaa --bbbbbbbb --cccccccc"), 20);
+    EXPECT_EQ(longText.size(), 20);
+    EXPECT_TRUE(longText.endsWith(QLatin1String("...")));
 }
