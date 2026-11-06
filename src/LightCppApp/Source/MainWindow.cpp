@@ -802,6 +802,10 @@ MainWindow::MainWindow(QWidget* parent)
     // so the transcript needs no manual echo).
     connect(outputPanel_, &OutputPanel::terminalInputSubmitted,
             this, [this](const QString& text) {
+        if (ptySessionRunning()) {
+            ptySession_->write(text.toLocal8Bit() + QByteArray("\r\n"));
+            return;
+        }
         if (terminalRunner_ == nullptr
             || terminalRunner_->state() == QProcess::NotRunning) {
             outputPanel_->appendTerminalOutput(
@@ -2428,6 +2432,11 @@ LightCpp::App::ProcessShutdownReport MainWindow::stopChildProcesses()
                 processes, static_cast<unsigned long>(process->processId()));
         }
     }
+    // The pty session is not a QProcess, so it is stopped by hand. Its
+    // stop() hangs the session up and reaps the child; doing it here rather
+    // than in the destructor keeps the wait off the teardown path where a
+    // slow shell would look like a crash.
+    closeTerminalSession();
     return LightCpp::App::stopProcesses(
         {handle(compiler_), handle(runner_), handle(projectProcess_),
          handle(terminalRunner_)},
@@ -9724,8 +9733,9 @@ void MainWindow::onStopProgram()
 {
     const bool programRunning = runner_ != nullptr
         && runner_->state() != QProcess::NotRunning;
-    const bool terminalRunning = terminalRunner_ != nullptr
-        && terminalRunner_->state() != QProcess::NotRunning;
+    const bool terminalRunning = ptySessionRunning()
+        || (terminalRunner_ != nullptr
+            && terminalRunner_->state() != QProcess::NotRunning);
     if (!programRunning && !terminalRunning) {
         return;
     }
@@ -9761,7 +9771,13 @@ void MainWindow::onStopProgram()
         // the program, and terminating the shell does not touch it. Stopping
         // the tree first is what makes "stopped" true.
         stopTerminalProgram();
-        terminalRunner_->kill();
+        if (ptySessionRunning()) {
+            // A pty session ends the way a closed window does: SIGHUP to the
+            // session, which is what lets a program with a trap clean up.
+            closeTerminalSession();
+        } else if (terminalRunner_ != nullptr) {
+            terminalRunner_->kill();
+        }
     }
 }
 
@@ -9832,6 +9848,16 @@ TerminalWidget* MainWindow::ensureTerminalWidget(const QString& title)
     // translation that is not there.
     connect(terminalWidget_, &TerminalWidget::bytesTyped, this,
             [this](const QByteArray& bytes) {
+                if (bytes.isEmpty()) {
+                    return;
+                }
+                // A pty session receives the keys as the bytes a keyboard
+                // would send: that is what lets the shell's own line editor
+                // and a full-screen program like vim react to them.
+                if (ptySessionRunning()) {
+                    ptySession_->write(bytes);
+                    return;
+                }
                 if (terminalRunner_ == nullptr
                     || terminalRunner_->state() == QProcess::NotRunning
                     || bytes.isEmpty()) {
@@ -9854,6 +9880,15 @@ TerminalWidget* MainWindow::ensureTerminalWidget(const QString& title)
                     }
                 }
                 terminalHistoryCursor_ = -1;
+            });
+    connect(terminalWidget_, &TerminalWidget::gridResized, this,
+            [this](int columns, int rows) {
+                if (!ptySessionRunning()) {
+                    return;
+                }
+                // Both calls are cheap; the ioctl is what makes the kernel
+                // raise SIGWINCH, so the child does not have to poll.
+                ptySession_->resize(columns, rows);
             });
     connect(terminalWidget_, &TerminalWidget::titleChanged, this,
             [this](const QString& newTitle) {
@@ -10055,12 +10090,21 @@ void MainWindow::pollTerminalProgram()
 
 void MainWindow::stopTerminalProgram()
 {
-    if (terminalRunner_ == nullptr) {
+    // Which process heads the tree differs between the two sessions: the pty
+    // shell is a QProcess-free child of the IDE, the pipe shell is not. The
+    // tree walk is the same once the root is known, and the root is the one
+    // that answers "what did that shell start".
+    unsigned long root = 0;
+    if (ptySessionRunning()) {
+        root = static_cast<unsigned long>(ptySession_->processId());
+    } else if (terminalRunner_ != nullptr) {
+        root = static_cast<unsigned long>(terminalRunner_->processId());
+    }
+    if (root == 0) {
         return;
     }
     const QStringList stayed = LightCpp::App::stopProcessTree(
-        LightCpp::App::snapshotProcesses(),
-        static_cast<unsigned long>(terminalRunner_->processId()));
+        LightCpp::App::snapshotProcesses(), root);
     if (stayed.isEmpty()) {
         return;
     }
@@ -10184,6 +10228,103 @@ QString MainWindow::resolveConsolePauser(const QString& exePath) const
     return found;
 }
 
+bool MainWindow::ptySessionRunning() const
+{
+    return ptySession_ != nullptr && ptySession_->isRunning();
+}
+
+void MainWindow::closeTerminalSession()
+{
+    if (ptySession_ == nullptr) {
+        return;
+    }
+    // Handlers first: the session calls them from a queued relay, and the
+    // grid they write into must not be reached after this returns.
+    ptySession_->setDataHandler({});
+    ptySession_->setFinishHandler({});
+    ptySession_->setFailureHandler({});
+    // The destructor stops the child and joins the reader; there is nothing
+    // left to do by hand.
+    ptySession_.reset();
+    ptyPending_.clear();
+}
+
+bool MainWindow::startTerminalSession(const QString& program,
+                                      const QStringList& arguments,
+                                      const QString& workDir,
+                                      const QProcessEnvironment& env)
+{
+    using LightCpp::Workbench::Terminal::PtyCommand;
+    using LightCpp::Workbench::Terminal::PtyProcess;
+
+    if (!PtyProcess::isSupported()) {
+        return false;
+    }
+    closeTerminalSession();
+
+    PtyCommand command;
+    command.program = program;
+    command.arguments = arguments;
+    command.workingDirectory = workDir;
+    // The environment the rest of the IDE just built (the toolchain's bin
+    // directory on PATH, first) is the one the user's program must see.
+    if (!env.isEmpty()) {
+        command.environment.clear();
+        const QStringList names = env.keys();
+        for (const QString& name : names) {
+            command.environment.append(name + QLatin1Char('=') + env.value(name));
+        }
+    }
+
+    const QSize cells = terminalWidget_ != nullptr ? terminalWidget_->gridSize()
+                                                   : QSize(80, 24);
+    auto session = std::make_unique<PtyProcess>();
+    PtyProcess* raw = session.get();
+
+    raw->setDataHandler([this](const QByteArray& chunk) {
+        // Decode across chunk boundaries: an escape sequence or a multi-byte
+        // character can be split by the pty, and decoding each half on its own
+        // prints a replacement glyph where the program expected a cursor move.
+        ptyPending_ += chunk;
+        const QString text = terminalStreamDecoder_.decode(ptyPending_);
+        ptyPending_.clear();
+        if (!text.isEmpty()) {
+            feedTerminalGrid(text);
+        }
+    });
+    raw->setFinishHandler([this](int code) {
+        const QString tail = terminalStreamDecoder_.flush();
+        if (!tail.isEmpty()) {
+            feedTerminalGrid(tail);
+        }
+        if (terminalWidget_ != nullptr) {
+            terminalWidget_->setExited(code);
+        }
+        outputPanel_->appendTerminalOutput(
+            code < 0 ? tr("\n--- Terminal ended on signal %1 ---\n").arg(-code)
+                     : tr("\n--- Terminal exited with code %1 ---\n").arg(code));
+        outputPanel_->setTerminalInputEnabled(false);
+        updateRunActionStates();
+    });
+    raw->setFailureHandler([this](const QString& reason) {
+        if (terminalWidget_ != nullptr) {
+            terminalWidget_->setExitedWithError(reason);
+        }
+        outputPanel_->appendTerminalOutput(reason + QLatin1Char('\n'));
+        outputPanel_->setTerminalInputEnabled(false);
+        updateRunActionStates();
+    });
+
+    if (!raw->start(command, cells.width(), cells.height())) {
+        outputPanel_->appendTerminalOutput(raw->lastError() + QLatin1Char('\n'));
+        return false;
+    }
+    ptySession_ = std::move(session);
+    ptyPending_.clear();
+    outputPanel_->setTerminalInputEnabled(true);
+    return true;
+}
+
 void MainWindow::startInTerminal(const QString& exePath, const QString& workDir,
                                  const QStringList& arguments)
 {
@@ -10226,8 +10367,9 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir,
         // no line reassembly — so an unfinished prompt such as "D:\>" shows
         // up exactly the way a real console prints it, including the one
         // after the program exits.
-        const bool shellUp = terminalRunner_ != nullptr
-            && terminalRunner_->state() != QProcess::NotRunning;
+        const bool shellUp = ptySessionRunning()
+            || (terminalRunner_ != nullptr
+                && terminalRunner_->state() != QProcess::NotRunning);
         // Only a live *program* blocks a run: the shell (cmd /k, pwsh …)
         // intentionally outlives the program, and typing the program path
         // again into the same session is the natural rerun.
@@ -10236,8 +10378,9 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir,
                 tr("A program is already running in the terminal.\n"));
             return;
         }
+        const bool reopen = !shellUp && !ptySessionRunning();
         ensureTerminalWidget(terminalLabel);
-        if (!shellUp) {
+        if (reopen) {
             terminalChannel_ = outputPanel_->openTerminalChannel(terminalLabel);
         } else {
             // Reusing the session: keep the previous output visible.
@@ -10265,6 +10408,38 @@ void MainWindow::startInTerminal(const QString& exePath, const QString& workDir,
         const QString firstInput =
             LightCpp::App::TerminalLaunch::programCommandLine(exePath, needsCallOperator,
                                                               arguments);
+        // On a host with a pty there is only one honest way to run a shell:
+        // in a pty, so the program it starts sees isatty() true, gets
+        // SIGWINCH when the grid is resized, and stops on Ctrl+C because the
+        // terminal delivers a signal rather than a byte into a buffer.
+        if (LightCpp::Workbench::Terminal::PtyProcess::isSupported()
+            && (ptySessionRunning() || !shellUp)) {
+            if (!ptySessionRunning()) {
+                if (!startTerminalSession(program, args, workDir, env)) {
+                    // The pty could not be opened; the pipe is still a
+                    // terminal the user can type into, so fall through to it
+                    // rather than leaving the channel dead.
+                    outputPanel_->appendTerminalOutput(
+                        tr("--- Falling back to a pipe session ---\n"));
+                } else {
+                    outputPanel_->appendTerminalOutput(
+                        tr("--- Running in %1: %2 ---\n")
+                            .arg(terminalLabel, QFileInfo(exePath).absoluteFilePath()));
+                    startTerminalProgramWatch(exePath);
+                    ptySession_->write(firstInput.toLocal8Bit() + QByteArray("\r\n"));
+                    updateRunActionStates();
+                    return;
+                }
+            } else {
+                outputPanel_->appendTerminalOutput(
+                    tr("--- Running in %1: %2 ---\n")
+                        .arg(terminalLabel, QFileInfo(exePath).absoluteFilePath()));
+                startTerminalProgramWatch(exePath);
+                ptySession_->write(firstInput.toLocal8Bit() + QByteArray("\r\n"));
+                updateRunActionStates();
+                return;
+            }
+        }
         runner->setProcessEnvironment(env);
         runner->setWorkingDirectory(workDir);
         outputPanel_->appendTerminalOutput(

@@ -228,6 +228,7 @@ void TerminalWidget::resizeEmulatorToViewport()
     emulator_->resize(grid.width(), grid.height());
     updateScrollBar();
     scheduleRepaint();
+    Q_EMIT gridResized(grid.width(), grid.height());
 }
 
 void TerminalWidget::resizeEvent(QResizeEvent* event)

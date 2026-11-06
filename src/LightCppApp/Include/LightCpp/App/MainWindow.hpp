@@ -20,6 +20,7 @@
 #include "LightCpp/App/MsvcToolchain.hpp"
 #include "LightCpp/App/OutputPanel.hpp"
 #include "LightCpp/App/TerminalWidget.hpp"
+#include "LightCpp/Workbench/PtyProcess.hpp"
 #include "LightCpp/App/ProcessShutdown.hpp"
 #include "LightCpp/App/ProcessTree.hpp"
 #include "LightCpp/App/StartupPage.hpp"
@@ -111,6 +112,7 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 
 private slots:
+
     void onNewFile();
     void onOpenFile();
     void onSaveFile();
@@ -530,6 +532,17 @@ private:
     /// lazily created and separate from runner_: its raw bytes land in the
     /// dedicated terminal channel, not in Program Output.
     QProcess* ensureTerminalRunner();
+    /// On a host with a pty the terminal is a real terminal: a shell in a
+    /// pty process group, which is what makes isatty() true, SIGWINCH mean
+    /// something and Ctrl+C reach the program. Off that path (Windows) the
+    /// QProcess above is still the session, because there a pipe plus the
+    /// IDE's own keystroke handling is all there is.
+    bool startTerminalSession(const QString& program, const QStringList& arguments,
+                              const QString& workDir, const QProcessEnvironment& env);
+    /// Tear the pty session down (it will not be restarted by itself).
+    void closeTerminalSession();
+    /// True while a pty session owns the terminal channel.
+    [[nodiscard]] bool ptySessionRunning() const;
     /// Begin watching the user program launched inside the embedded
     /// terminal: a Toolhelp32 poll finds the program among the shell's
     /// descendants and pins the pid it found, so "can run again" follows the
@@ -1047,6 +1060,15 @@ private:
     /// The embedded terminal session's shell, separate from runner_: its
     /// raw output goes to the dedicated terminal channel.
     QProcess* terminalRunner_ = nullptr;
+    /// The pty session, when the host has one. Owning the real terminal
+    /// means the shell's own job control and line editor work, which a pipe
+    /// cannot provide.
+    std::unique_ptr<LightCpp::Workbench::Terminal::PtyProcess> ptySession_;
+    /// Bytes already handed to the grid but not yet a whole character: the
+    /// pty delivers arbitrary slices (an escape sequence can be split across
+    /// two reads), and decoding each slice on its own would print garbage at
+    /// the seams.
+    QByteArray ptyPending_;
     /// Terminal-program lifetime watch: image name of the exe typed into
     /// the shell, the pid it was pinned to, the current aliveness, and the
     /// launch-time grace timer source. There is no "seen it once" flag any

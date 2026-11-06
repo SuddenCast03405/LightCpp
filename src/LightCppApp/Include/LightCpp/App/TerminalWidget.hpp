@@ -94,6 +94,11 @@ signals:
     void titleChanged(const QString& title);
     /// The user cleared the screen or the scrollback.
     void cleared();
+    /// The visible grid changed size (the window was resized, or the font
+    /// was). The owner forwards it to the pty so the child gets SIGWINCH and
+    /// a full-screen program re-lays itself out instead of drawing past the
+    /// edge of a screen it thinks is still 80 columns wide.
+    void gridResized(int columns, int rows);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;

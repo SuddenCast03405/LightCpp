@@ -3,6 +3,8 @@
 add_executable(LightCppWorkbenchTests
     WorkbenchTests.cpp
     WorkbenchExtraTests.cpp
+    PtyProcessTests.cpp
+    PtySessionTests.cpp
 )
 
 target_include_directories(LightCppWorkbenchTests PRIVATE

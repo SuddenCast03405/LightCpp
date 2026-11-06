@@ -32,6 +32,8 @@
 #                              UTF-8 across chunks, scrollback.
 #   Source/ShellIntegration.cpp the prompt marks (§九): OSC 133 parsing and
 #                              the command history it produces.
+#   Source/PtySession.cpp        the real-terminal half of §九: shell choice,
+#                              winsize payload, control codes, TERM.
 #   Source/GitDiff.cpp         inline character spans, side-by-side alignment
 #                              and the blame gutter lookup (§八).
 
@@ -48,6 +50,8 @@ add_library(LightCppWorkbench STATIC
     Source/LspModel.cpp
     Source/MarkupRender.cpp
     Source/PackageManager.cpp
+    Source/PtySession.cpp
+    Source/PtyProcess.cpp
     Source/QtPreview.cpp
     Source/QtProjectFiles.cpp
     Source/ShellIntegration.cpp
@@ -65,6 +69,9 @@ target_include_directories(LightCppWorkbench PUBLIC
 target_compile_features(LightCppWorkbench PUBLIC cxx_std_20)
 
 target_link_libraries(LightCppWorkbench
+    PUBLIC Qt6::Core
+    # QMetaObject::invokeMethod is used to hand reader-thread work to the
+    # Qt thread; no moc is generated for this library.
     PUBLIC Qt6::Core
     PRIVATE Qt6::Xml
     PRIVATE LightCppWarnings

@@ -248,7 +248,7 @@
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
 | `tool.run` 运行程序 | 实现 | F5 / Run Project / Compile & Run |
-| `tool.terminal` 内置终端 | 实现 | 两层。**屏幕模型**（`Workbench/TerminalEmulator`）：CSI / OSC / DCS、UTF-8 跨块、宽字符与组合字符、滚动区域、备用屏、滚动历史（含上限）、选区复制、DEC 线框字符集、xterm 256 色调色板；**渲染器**（`App/TerminalWidget`）：按 `screenRuns()` 把属性映射成字符格式（16 色 / 256 色 / 真彩、粗体斜体下划线删除线、dim 混色、inverse 换色、hidden）、等宽网格与固定行高、零时延迟合并重绘、滚轮回看历史（回看时不跟随尾部）、右键菜单（Copy / Paste / Select All / Clear Screen / Clear Scrollback）、`Ctrl+Shift+C/V` 复制粘贴、`Ctrl+L` 本地清屏（不进 shell）、括号粘贴模式、应用光标键模式（`ESC O A` vs `ESC [ A`）、`Alt+x` → `ESC x`、`Ctrl+字母` → 控制码。PTY 仍由 `QProcess` 的二进制管道承担（不是真 `posix_openpt`，见缺口） |
+| `tool.terminal` 内置终端 | 实现 | 两层。**屏幕模型**（`Workbench/TerminalEmulator`）：CSI / OSC / DCS、UTF-8 跨块、宽字符与组合字符、滚动区域、备用屏、滚动历史（含上限）、选区复制、DEC 线框字符集、xterm 256 色调色板；**渲染器**（`App/TerminalWidget`）：按 `screenRuns()` 把属性映射成字符格式（16 色 / 256 色 / 真彩、粗体斜体下划线删除线、dim 混色、inverse 换色、hidden）、等宽网格与固定行高、零时延迟合并重绘、滚轮回看历史（回看时不跟随尾部）、右键菜单（Copy / Paste / Select All / Clear Screen / Clear Scrollback）、`Ctrl+Shift+C/V` 复制粘贴、`Ctrl+L` 本地清屏（不进 shell）、括号粘贴模式、应用光标键模式（`ESC O A` vs `ESC [ A`）、`Alt+x` → `ESC x`、`Ctrl+字母` → 控制码。**传输层**（`Workbench/PtySession` + `Workbench/PtyProcess`）：Linux/macOS 上 `posix_openpt`/`grantpt`/`unlockpt`/`ptsname_r` 真 pty（macOS 走 `openpty`）、`fork` + `setsid` + `TIOCSCTTY` + `dup2`，子进程拿到控制终端，所以 `isatty()` 为真；启动前 `TIOCSWINSZ` 把网格尺寸设好、之后 resize 直接 `ioctl`（内核自己发 `SIGWINCH`）；`Ctrl+C` 写 `0x03` 由线路规程翻译成 `SIGINT` 送到前台进程组，`sendSignal()` 也可以 `kill(-pid, sig)`；读者线程用 `poll` + 队列投递，跨线程不碰控件。Windows 仍走 `QProcess` 管道（没有 conpty 绑定），见缺口 |
 | `tool.launch` 调试程序（插件） | 骨架 | 交给 `DebuggerController`，受第五节限制 |
 | `tool.palette` 命令面板 | 实现 | `CommandPalette`：Ctrl+Shift+P，子序列模糊打分（连续命中 +8、词首 +6/+12、长度惩罚） |
 | `tool.external` 外部工具配置 | 实现 | Tools ▸ External Tools：菜单由 `Preferences::externalTools` 生成；每个工具含名称 / 命令 / 参数模板 / 工作目录 / 是否捕获输出 / 运行前是否确认。`Workbench/ExternalTools` 负责模板展开与按 shell 转义（POSIX 单引号 + `'\''`，cmd 双引号 + `%%`），未知 `${...}` 原样保留以免吃掉 `$HOME`；占位符无值时拒绝运行而不是展开成空串 |
@@ -334,7 +334,7 @@ lightcpp-pm info <plugin-id>         # 单个插件的贡献点与能力集
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
       -DCMAKE_PREFIX_PATH=/opt/Qt/6.8.3/gcc_64 -DLLVM_ROOT=/usr/lib/llvm-18
 cmake --build build -j"$(nproc)"     # 0 error
-ctest --test-dir build -j"$(nproc)"  # 781/781 passed（6 个 GBK 用例因 locale 跳过）
+ctest --test-dir build -j"$(nproc)"  # 1033/1033 passed（6 个 GBK/locale 用例跳过）
 
 # 4. 代码侧证据（下列文件都在仓库里，可直接 wc -l）
 wc -l src/LightCppApp/Source/Debug/GdbMi.cpp                 # MI 文法
@@ -365,7 +365,7 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 
 1. **Qt 渲染端**：`.ui` / `.qrc` 已有 HTML 预览（`Workbench/QtPreview`），QML 有对象树结构视图但没有渲染器——那需要 QML 引擎与场景图，是这个仓库刻意不链接的东西。真正的所见即所得（拖动 widget 改 geometry）也还没有。
 1.5 **合并/变基编辑器与 rebase -i**：冲突清单与 abort/continue 有，三方合并的模型（`parseConflictFile` / `resolve`）也有并有单测，缺的是把 hunks 做成可点击三栏的编辑器；`rebase -i` 需要 todo 列表编辑器，目前只能跑非交互 rebase。
-2. **远程与终端**：远程构建（distcc/icecc）、WSL 与串口集成仍是清单。终端已经从「追加文本」换成真正的屏幕模型 + 渲染器，全屏程序（`vim`、`top`、`less`）能正确重绘；但传输层仍是 `QProcess` 的管道而非 `posix_openpt`/`conpty`，所以 `isatty()` 为假、窗口大小协商（`TIOCSWINSZ`）与 `SIGWINCH` 缺失——依赖终端尺寸的程序会退化成 80x24 的默认值。
+2. **远程与终端**：远程构建（distcc/icecc）、WSL 与串口集成仍是清单。终端在 Linux/macOS 上已经是**真终端**（屏幕模型 → 渲染器 → `posix_openpt` 三层），`isatty()` 为真、`stty size` 报的是网格尺寸、resize 触发 `SIGWINCH`、`Ctrl+C` 停掉不读输入的 `sleep`——这四条都有跑真实子进程的集成用例钉住（`PtyProcessTests.cpp`）。剩下的缺口只有 Windows：那里没有 conpty 绑定，`QProcess` 管道下的 `isatty()` 仍为假。
 
 调试器的符号层现在连 natvis 的**搜索顺序**都建模了：`Debug::orderNatvis()` 按 toolchain → public → private → project → user 分层、同级按路径、再按输入位置稳定排序（加载顺序即优先级，后者覆盖前者），`Debug::natvisConflicts()` 把「同一类型被多个文件定义」连同两者的路径按「输家在前」列出，`Debug::natvisTypesIn()` 用扫描而非 DOM 解析（调试器要拒绝的文件，IDE 必须仍能读），会话开始时把冲突打进行调试控制台。pretty-printer、STL / 智能指针展开、枚举显示、动态类型、源码映射、符号路径、`reload /f` 早就有界面、有落盘、有断言。§五 除一条 `tool.launch` 的插件化声明外已无缺口。
 
@@ -398,6 +398,13 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `src/LightCppTesting/{TestModel,TestRunner,CoverageReport}.hpp` | 补回分支上缺失、导致无法编译的三个头 | — |
 | `src/LightCppSettings/` | `Preferences::debugger` + `"debugger"` 块的读写（含孤立 from 丢弃） | 3 |
 | `MainWindow.cpp` View ▸ Class Browser | 类型列表 + 过滤 + 成员树 + 定位；随标签页/lint 刷新 | 5 |
+| `src/LightCppWorkbench/{Include,Source}/TerminalEmulator` (屏幕模型) + `TerminalWidget` (渲染器) | 单元格模型重绘、滚动区域、备用屏、滚动历史、256 色/真彩、应用光标键、括号粘贴、`Ctrl+L`；resize 时空白尾部从底部裁掉、整屏仍从顶部进历史 | 26 |
+| `src/LightCppWorkbench/{Include,Source}/PtySession` + `PtyProcess` | 真 pty：`posix_openpt` + `fork`/`setsid`/`TIOCSCTTY`、`TIOCSWINSZ`、前台组信号、`poll` 读者线程、唤醒式 `stop()` | 35 |
+| `src/LightCppApp/Source/MainWindow.cpp` | 终端通道改由 pty 会话驱动（打字、输入框、停止、关窗、`stopTerminalProgram` 都以 pty 会话为根） | — |
+| `src/LightCppWorkbench/{Include,Source}/DebugSymbols` | natvis 搜索顺序（toolchain → public → private → project → user）与冲突报告 | 8 |
+| `src/LightCppWorkbench/{Include,Source}/GitDiff` | 字符级 inline diff + 并排对齐 + blame 列模型 | 17 |
+| `src/LightCppApp/Source/CodeEditor.cpp` | blame 侧栏（12 色着色 + 作者/短 sha） | — |
+| `src/LightCppApp/Source/MainWindow.cpp` | 并排 diff（delegate 画字符级高亮）、Clone 对话框 | — |
 | `MainWindow.cpp` View ▸ Call Graph | 逐层走调用、实时进度、DOT 剪贴板/落盘、双击跳转 | 5 |
 | `AnalysisPanel.cpp` + `ToolchainPaths` | scan-build / PVS-Studio / Coverity 三个运行入口 | 5 |
 | `AnalysisReport` 规则集 | `tidyChecks` / `tidyChecksAllNamed` / `clangTidyConfigFor` + 面板下拉与落盘 | 5 |
