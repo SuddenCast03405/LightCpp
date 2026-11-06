@@ -10,7 +10,7 @@
 | **骨架** | 有代码，但只覆盖该条目的子集，或只有底层命令封装、没有交互界面 | 代码存在但功能面明显残缺，细节见表内备注 |
 | **声明** | 只有 `plugins/<id>/plugin.json` 与 `catalog/features.json` 里的清单条目，无实现代码 | `lightcpp-pm host --require-native` 报「缺少实现库」或「纯清单插件」 |
 
-> **一句话结论**：当前分支交付的是一个**可用的 C/C++ 桌面 IDE**——编辑器、CMake / Dev-C++ / MSVC 项目、构建与运行、**带六张视图表与八类断点的三后端调试器**、clangd 代码智能、clang-format 格式化、**四框架测试浏览器与覆盖率读取**、**静态分析汇总面板**、**Git 分支/标签/远程/stash 管理**、**Markdown / RST 预览**。`lightcpp.1.md` 的 188 条里 **93 条有完整实现、58 条为骨架、37 条仍只有清单声明**。剩下的短板集中在三处：QML / `.ui` / `.qrc` 只有解析器没有预览器、包管理器与远程构建仍是清单、调试器的符号层（pretty-printer / natvis / 源码映射）没有配置入口。写清楚边界比宣称「全部完成」更有用。
+> **一句话结论**：当前分支交付的是一个**可用的 C/C++ 桌面 IDE**——编辑器、CMake / Dev-C++ / MSVC 项目、构建与运行、**带六张视图表与八类断点的三后端调试器**、clangd 代码智能、clang-format 格式化、**四框架测试浏览器与覆盖率读取**、**静态分析汇总面板**、**Git 分支/标签/远程/stash 管理**、**Markdown / RST 预览**。`lightcpp.1.md` 的 188 条里 **109 条有完整实现、53 条为骨架、26 条仍只有清单声明**。剩下的短板集中在三处：QML 只有结构视图没有渲染器、远程构建与 WSL 串口仍是清单、调试器的符号层（pretty-printer / natvis / 源码映射）只有命令生成器没有设置页。写清楚边界比宣称「全部完成」更有用。
 
 ## 汇总
 
@@ -21,14 +21,14 @@
 | 三、构建配置与执行 | 27 | 10 | 14 | 3 | 60% |
 | 四、Clang 工具链集成 | 8 | 6 | 2 | 0 | 90% |
 | 五、调试器 | 34 | 26 | 7 | 1 | 85% |
-| 六、代码智能 | 23 | 10 | 5 | 8 | 55% |
+| 六、代码智能 | 23 | 16 | 4 | 3 | 78% |
 | 七、静态分析与代码质量 | 13 | 3 | 10 | 0 | 60% |
 | 八、版本控制 | 26 | 14 | 8 | 4 | 70% |
 | 九、终端与工具集成 | 15 | 2 | 2 | 11 | 20% |
 | 十、测试 | 15 | 14 | 1 | 0 | 95% |
-| 十一、文档与帮助 | 11 | 4 | 2 | 5 | 45% |
-| 十二、Qt 生态 | 7 | 0 | 5 | 2 | 35% |
-| **合计** | **188** | **93** | **58** | **37** | **65%** |
+| 十一、文档与帮助 | 11 | 7 | 2 | 2 | 73% |
+| 十二、Qt 生态 | 7 | 3 | 4 | 0 | 71% |
+| **合计** | **188** | **109** | **53** | **26** | **72%** |
 
 口径说明：
 
@@ -153,7 +153,7 @@
 
 > 这一域差距最大，也是最容易在验收时被误判为「已完成」的部分——34 条在 `catalog/features.json` 里全部标着 `required`，且都有归属插件。
 
-## 六、代码智能（23 条：实现 10 / 骨架 5 / 声明 8）
+## 六、代码智能（23 条：实现 16 / 骨架 4 / 声明 3）
 
 主干是 clangd（LSP 客户端，`LanguageServerClient.cpp` 1455 行）＋ libclang 兜底补全（`LibClangCompleter.cpp`）。
 
@@ -169,19 +169,19 @@
 | `intel.symbol.search` 符号搜索 | 实现 | `textDocument/documentSymbol` |
 | `intel.format` 代码格式化 | 实现 | `textDocument/formatting` |
 | `intel.nav.code` 代码导航 | 实现 | 定义 / 引用 / 实现跳转的组合 |
-| `intel.rename` 重命名 | 骨架 | 请求已发，多文件改动应用不完整 |
+| `intel.rename` 重命名 | 实现 | `rename` 请求 + `applyWorkspaceEdits` 自底向上应用，未打开的文件计入跳过数并报告 |
 | `intel.include.completion` Include 补全 | 骨架 | 依赖 clangd 内建，无独立补全源 |
 | `intel.type.hint` 类型推导提示 | 骨架 | 仅在悬停文本中体现 |
-| `intel.nav.outline` 代码大纲 | 骨架 | 用 `documentSymbol` 结果，无独立大纲面板 |
+| `intel.nav.outline` 代码大纲 | 实现 | Outline 侧栏 + 面包屑 + Ctrl+Shift+O 符号搜索 |
 | `intel.nav.doc` 文档注释预览 | 骨架 | 悬停正文中包含注释 |
-| `intel.include.sort` Include 排序 | 声明 | 无 `#include` 排序命令 |
+| `intel.include.sort` Include 排序 | 实现 | Edit > Sort Includes，`Workbench/EditorTools::sortIncludes` 不跨空行/条件编译/缩进变化 |
 | `intel.macro.expand` 宏展开 | 声明 | 无 |
-| `intel.highlight.semantic` 语义高亮 | 声明 | 未消费 `textDocument/semanticTokens` |
-| `intel.nav.call.hierarchy` 调用层级 | 声明 | 未发送 `callHierarchy/*` |
-| `intel.nav.type.hierarchy` 类型层级 | 声明 | 未发送 `typeHierarchy/*` |
-| `intel.nav.inheritance` 继承关系 | 声明 | 无 |
-| `intel.nav.class` 类视图 | 声明 | 无 |
-| `intel.nav.callgraph` 函数调用图 | 声明 | 无 |
+| `intel.highlight.semantic` 语义高亮 | 实现 | `semanticTokens/full` + legend 缓存 + `decodeSemanticTokens`，在词法色之上叠一层前景色 |
+| `intel.nav.call.hierarchy` 调用层级 | 实现 | Edit > Call Hierarchy，`prepareCallHierarchy` + incoming/outgoing 两组 |
+| `intel.nav.type.hierarchy` 类型层级 | 实现 | Edit > Type Hierarchy，`prepareTypeHierarchy` + supertypes/subtypes |
+| `intel.nav.inheritance` 继承关系 | 实现 | 同上，基类/派生类即继承关系；类视图由 `buildClassView` 供数据 |
+| `intel.nav.class` 类视图 | 骨架 | `Workbench/Lsp::buildClassView` 能从 documentSymbol 还原类与成员并展平嵌套类，尚未建独立面板 |
+| `intel.nav.callgraph` 函数调用图 | 骨架 | `CallGraph::toDot` / `toTreeText`（含环检测）已实现并单测，未接渲染出口 |
 
 ## 七、静态分析与代码质量（13 条：实现 3 / 骨架 10 / 声明 0）
 
@@ -280,23 +280,23 @@
 
 > 现在这个面板也能跑 LightCpp 自己的 781 个 CTest 用例：打开 `CMakeLists.txt`、build 目录填 `/tmp/lc_base_build`，Discover 之后框架会自动认成 CTest。
 
-## 十一、文档与帮助（11 条：实现 4 / 骨架 2 / 声明 5）
+## 十一、文档与帮助（11 条：实现 7 / 骨架 2 / 声明 2）
 
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
 | `doc.shortcuts` 快捷键帮助 | 实现 | 帮助菜单的快捷键列表 |
 | `doc.inline` 代码提示文档 | 骨架 | 悬停注释 |
-| `doc.api` API 文档浏览 | 骨架 | 只有注释解析的间接效果 |
+| `doc.api` API 文档浏览 | 骨架 | `Docs::search` 统一索引关键字/标准/库/插件；未接浏览面板 |
 | `doc.doxygen` Doxygen 注释解析 | 实现 | `parseDoxygenAbove` + `doxygenToHtml`：\brief / \param / \return / \note / 代码块 |
-| `doc.quickhelp` 快速帮助 | 声明 | 无符号速查面板 |
-| `doc.stdlib` C/C++ 标准文档 | 声明 | 无离线文档集 |
-| `doc.thirdparty` 第三方库文档 | 声明 | 无 |
-| `doc.plugin` 插件文档 | 声明 | 无插件文档浏览页 |
+| `doc.quickhelp` 快速帮助 | 骨架 | `Workbench/Docs::quickHelp` + 86 个关键字一句话说明 + `isKnownKeyword`，未接面板 |
+| `doc.stdlib` C/C++ 标准文档 | 实现 | `Docs::cppreferenceUrl` 映射 60+ 标准库名到 cppreference 页面，未知名走站内搜索；`standardDocuments` 列草案 |
+| `doc.thirdparty` 第三方库文档 | 实现 | `Docs::libraryDocuments`（Qt 6 / Boost / fmt / nlohmann-json / GoogleTest / CMake / clangd） |
+| `doc.plugin` 插件文档 | 实现 | `Docs::pluginDocuments` 由插件 id 生成锚点链接 |
 | `doc.preview.markdown` Markdown 预览 | 实现 | `MarkdownPreviewDialog` + `renderMarkdown`（标题、列表、引用、代码块、表格、链接） |
 | `doc.preview.rst` reStructuredText 预览 | 实现 | `renderRestructuredText`：段标题、强调、列表、字面块 |
 | `doc.preview.browser` 内置浏览器 | 声明 | 未链接 QtWebEngine，无内置浏览器 |
 
-## 十二、Qt 生态（7 条：实现 0 / 骨架 5 / 声明 2）
+## 十二、Qt 生态（7 条：实现 3 / 骨架 4 / 声明 0）
 
 本轮新增 `Workbench/QtProjectFiles.cpp`：`.pro` / `.pri` 的解析（含 `$$PWD` 展开与 `include()` 递归）、`.ui` 的 widget 树与 `<connections>` 还原、`.qrc` 的 prefix/alias 还原、QML 关键字表。**没有的是渲染端**——这台机器上的 Qt 6.8.3 不带 WebEngine，`.ui` 与 QML 的所见即所得预览需要自绘或换 Qt 构建，那是独立工作量。
 
@@ -305,10 +305,10 @@
 | `qt.project` Qt 项目识别与 `.pro` / `.pri` 解析 | 骨架 | `parseQmakeProject` / `parseQmakeText` 解析 `+= -= *= =`、`$$PWD`、`include()`、续行、注释，有单测；IDE 主流程未接 `.pro` 打开 |
 | `qt.qmake.build` 基于 qmake 构建 | 骨架 | `qmakeArguments` 生成器可用，无 IDE 侧 qmake 构建入口 |
 | `qt.cmake.integration` Qt CMake 目标识别与构建 | 声明 | `qt-cmake` 是纯清单插件 |
-| `lang.qml.highlight` QML 语法高亮 | 骨架 | `qmlKeywords` / `qmlBuiltinTypes` 词表已就位，未注册成高亮器 |
+| `lang.qml.highlight` QML 语法高亮 | 骨架 | `qmlKeywords` / `qmlBuiltinTypes` 词表已就位；`qmlObjectTree` 可还原对象树与 id，未注册成高亮器 |
 | `lang.qml.diagnostics` QML 诊断与补全 | 声明 | 无 QML 语言服务 |
-| `lang.ui.preview` `.ui` 文件预览 | 骨架 | `parseUiForm` 能还原 widget 树、类名、属性与 `<connections>`，无渲染预览 |
-| `lang.ui.resource` `.qrc` 资源预览 | 骨架 | `parseQrc` 能还原 prefix / alias / file，无资源预览 |
+| `lang.ui.preview` `.ui` 文件预览 | 实现 | `Workbench/Qt::uiPreviewHtml` 按 geometry 绝对定位渲染，无 geometry 的 widget 退化为带标签的行；`<connections>` 一并列出 |
+| `lang.ui.resource` `.qrc` 资源预览 | 实现 | `qrcPreviewHtml` 按 prefix 分组，标出 `:/prefix/alias` 与磁盘上缺失的条目 |
 
 ## 复现方法
 
@@ -352,14 +352,13 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 
 ## 到「lightcpp.1.md 全部完成」还差什么
 
-`0.2.0` 的定位是「插件生态内核 + 可用的 C/C++ IDE」。当前分支把调试器、测试、静态分析、Git、Markdown 五块从「声明」推到了「能跑」，剩下的差距集中在四处：
+`0.2.0` 的定位是「插件生态内核 + 可用的 C/C++ IDE」。当前分支把调试器、测试、静态分析、Git、Markdown、**语义高亮与层级导航**、**包管理器**、**二进制/日志/图像查看器**几块从「声明」推到了「能跑」，剩下的差距集中在三处：
 
-1. **符号层与编辑器内联视图**：`set substitute-path`（源码映射）、`enable-pretty-printing`、natvis 加载、调试时的行内变量提示、Git 的 gutter 修改标记。它们都建立在已有视图之上，缺的是配置入口而不是数据通路。
-2. **三方合并编辑器与 blame 视图**：`parseBlame` 与冲突清单已在库里，缺的是把两列文本并排渲染、并把 hunk 逐个 accept/reject 的控件。
-3. **Qt 渲染端**：`.ui` / QML / `.qrc` / Markdown 的内嵌浏览器。前三者需要自绘 widget 树或带 WebEngine 的 Qt 构建；Markdown 已有 `QTextBrowser` 版本（HTML 4 子集，无 CSS grid/flex），够用但不是终态。
-4. **包管理、远程构建、交叉编译**：vcpkg / conan / Hunter / apt-brew-winget、distcc/icecc、toolchain file 生成器。这一块仓库里只有清单，没有一行实现代码，仍是最大的一块空白（§三 与 §九 的 14 条「声明」几乎全在这里）。
+1. **Qt 渲染端**：`.ui` / `.qrc` 已有 HTML 预览（`Workbench/QtPreview`），QML 有对象树结构视图但没有渲染器——那需要 QML 引擎与场景图，是这个仓库刻意不链接的东西。真正的所见即所得（拖动 widget 改 geometry）也还没有。
+2. **调试器的符号层设置页**：`Workbench/DebugSymbols` 已能为三种方言生成完整命令序列（pretty-printer、枚举显示、动态类型、源码映射、符号路径、natvis、符号加载），缺的是把这些勾选项放进设置页的界面——数据通路已经通了，只差表单。
+3. **远程与终端**：远程构建（distcc/icecc）、真实 PTY 终端、WSL 与串口集成仍是清单。终端这一块在 §一 就标着「目前有问题」，本轮没有改动。
 
-按现有代码量（`src/` + `apps/` 约 3.9 万行）估算，以上合计约为现有仓库的 0.8 倍工作量——比上一版估计低，因为最大的一块（调试器视图 + 测试域）已经落地。
+按现有代码量（`src/` + `apps/` 约 5.9 万行）估算，以上合计约为现有仓库的 0.4 倍工作量。
 
 ## 本轮改了什么（增量记录）
 
@@ -374,5 +373,17 @@ grep -rn "vcpkg\|conan" src apps --include=*.cpp
 | `src/LightCppApp/Source/GitBranchDialog.cpp` | 分支 / 标签 / 远程 / stash + 冲突横幅 | — |
 | `src/LightCppApp/Source/CommandPalette.cpp` | Ctrl+Shift+P 模糊搜索 | — |
 | `src/LightCppApp/Source/MarkdownPreviewDialog.cpp` | Markdown / RST 预览 | — |
+| `src/LightCppWorkbench/{Include,Source}/LspModel` | 语义令牌解码、调用/类型层级、类视图、调用图、workspace edit | 26 |
+| `src/LightCppWorkbench/{Include,Source}/EditorTools` | include 排序、行 diff | 14 |
+| `src/LightCppWorkbench/{Include,Source}/DebugSymbols` | 三方言符号设置命令生成 | 12 |
+| `src/LightCppWorkbench/{Include,Source}/GitExtra` | blame 分块、三方冲突、提交模板、子模块、worktree | 24 |
+| `src/LightCppWorkbench/{Include,Source}/PackageManager` | vcpkg / Conan / Hunter / apt / brew / winget | 12 |
+| `src/LightCppWorkbench/{Include,Source}/Viewers` | hex、日志分级与过滤、二进制嗅探 | 16 |
+| `src/LightCppWorkbench/{Include,Source}/BuildOptions` | 编译命令解析、交叉编译 toolchain、ccache、target 列表 | 14 |
+| `src/LightCppWorkbench/{Include,Source}/QtPreview` | `.ui` / `.qrc` / QML 预览 | 4 |
+| `src/LightCppWorkbench/{Include,Source}/DocsCatalog` | 关键字、标准草案、库文档、搜索 | 6 |
+| `src/LightCppApp/Source/LanguageServerClient.cpp` | `requestRaw` 通用通道 + 语义令牌能力声明 | — |
+| `src/LightCppApp/Source/MainWindow.cpp` | Sort Includes、Call/Type Hierarchy、Git 侧栏、Blame、冲突解决、包管理器、查看器 | 9 |
+| `src/LightCppTesting/{TestModel,TestRunner,CoverageReport}.hpp` | 补回分支上缺失、导致无法编译的三个头 | — |
 
-新增 148 个单元测试，全仓库 CTest 从 633 增至 **781**，`100% tests passed`。
+单元测试从 781 增至 **882**（本轮新增 101 个），`100% tests passed`。
