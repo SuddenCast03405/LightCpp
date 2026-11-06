@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonObject>
 #include <QJsonValue>
 #include <QMainWindow>
 #include <QFont>
@@ -35,6 +36,7 @@
 #include "LightCpp/Workbench/PackageManager.hpp"
 #include "LightCpp/Workbench/Viewers.hpp"
 #include "LightCpp/Workbench/LspModel.hpp"
+#include "LightCpp/Workbench/DebugSymbols.hpp"
 
 #include <memory>
 #include <optional>
@@ -744,6 +746,7 @@ private:
     QAction* actTypeHierarchy_ = nullptr;      // Edit > Type Hierarchy
     QAction* actPackageManager_ = nullptr;     // Tools > Package Manager
     QAction* actBlameFile_ = nullptr;          // Git > Blame File
+    QAction* actDebugSymbols_ = nullptr;       // Debug > Symbol Settings...
     QAction* actToggleBookmark_ = nullptr;     // Edit > Toggle Bookmark (Ctrl+F2)
     QAction* actNextBookmark_ = nullptr;       // Edit > Next Bookmark (F2)
     QAction* actPrevBookmark_ = nullptr;       // Edit > Previous Bookmark (Shift+F2)
@@ -1195,6 +1198,24 @@ private:
     /// Open the three-way conflict editor for `path` when git left markers in
     /// it; a no-op (with a status message) when the file has none.
     void openConflictResolution(const QString& path);
+
+    // --- debugger symbol layer ----------------------------------------------
+    /// The user's symbol settings, converted to the Workbench model. Read
+    /// fresh each time so a settings change applies to the next session
+    /// without a restart.
+    [[nodiscard]] LightCpp::Workbench::Debug::SymbolSettings symbolSettings() const;
+    /// Write one sub-object of the preferences document back to disk, leaving
+    /// every other key untouched — the same surgical update
+    /// persistGeneralPrefs() does, generalised so the debugger block does not
+    /// need a second copy of the array-or-object dance.
+    bool persistPreferenceSection(const QString& key, const QJsonObject& section);
+    /// Tools > Debugger Symbol Settings...: the form for the switches above.
+    void showDebugSymbolSettings();
+    /// Push the symbol-layer commands for the current backend into the live
+    /// session. Called right after a session starts — after the inferior
+    /// exists, before the first frame is read, which is the only window where
+    /// pretty-printing takes effect on what the user is about to see.
+    void applySymbolSettings();
 
     // --- package managers ---------------------------------------------------
     /// Tools > Package Manager...: pick a manager, search/install/remove a

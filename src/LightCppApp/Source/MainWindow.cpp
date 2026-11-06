@@ -31,6 +31,7 @@
 
 #include "LightCpp/Text/Converter.hpp"
 #include "LightCpp/Text/Encoding.hpp"
+#include "LightCpp/Settings/SettingsJson.hpp"
 #include "LightCpp/Text/TextFile.hpp"
 
 #include "LightCpp/Lua/LuaPluginHost.hpp"
@@ -51,6 +52,7 @@
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDialog>
+#include <QCheckBox>
 #include <QGroupBox>
 #include <QPlainTextEdit>
 #include <QSaveFile>
@@ -704,6 +706,7 @@ MainWindow::MainWindow(QWidget* parent)
         debugViews_->setBackend(backend);
         debugViews_->setTokenAllocator([this] { return debugger_->allocateMiToken(); });
         debugPanel_->sessionStarted();
+        applySymbolSettings();
         updateRunActionStates();
     });
     connect(debugger_, &LightCpp::App::DebuggerController::paused,
@@ -1316,6 +1319,53 @@ bool MainWindow::persistGeneralPrefs(const QStringList& recentFiles,
     QJsonObject obj;
     obj.insert(QStringLiteral("type"), QStringLiteral("preferences"));
     return save(QJsonDocument(apply(obj)));
+}
+
+
+bool MainWindow::persistPreferenceSection(const QString& key,
+                                          const QJsonObject& section)
+{
+    const QString path =
+        QDir(LightCpp::Settings::SettingsStore::baseConfigDirectory())
+            .filePath(QStringLiteral("preferences.json"));
+    const QJsonDocument doc = QJsonDocument::fromJson(readDocumentBytes(path));
+    const auto apply = [&key, &section](const QJsonObject& obj) {
+        QJsonObject out = obj;
+        out.insert(QStringLiteral("type"), QStringLiteral("preferences"));
+        out.insert(key, section);
+        return out;
+    };
+    const auto save = [this, &path](const QJsonDocument& document) {
+        const bool ok =
+            LightCpp::Settings::SettingsStore::writeDocument(path, document);
+        if (ok && settings_ != nullptr) {
+            // Reload so the in-memory model agrees with the file: the next
+            // symbolSettings() call reads from the store, and a stale store
+            // would silently undo the edit at the next session start.
+            settings_->reload();
+        }
+        return ok;
+    };
+    if (doc.isArray()) {
+        QJsonArray arr = doc.array();
+        bool replaced = false;
+        for (int i = 0; i < arr.size(); ++i) {
+            const QJsonObject obj = arr.at(i).toObject();
+            if (obj.value(QStringLiteral("type")).toString()
+                == QLatin1String("preferences")) {
+                arr[i] = apply(obj);
+                replaced = true;
+            }
+        }
+        if (!replaced) {
+            arr.append(apply(QJsonObject()));
+        }
+        return save(QJsonDocument(arr));
+    }
+    if (doc.isObject()) {
+        return save(QJsonDocument(apply(doc.object())));
+    }
+    return save(QJsonDocument(apply(QJsonObject())));
 }
 
 QList<MainWindow::PluginCandidate> MainWindow::pluginCandidates() const
@@ -2739,6 +2789,14 @@ void MainWindow::createActions()
     connect(actBlameFile_, &QAction::triggered, this,
             [this] { showBlameForActiveFile(); });
 
+    // --- debugger symbols --------------------------------------------------
+    actDebugSymbols_ = new QAction(tr("Symbol &Settings..."), this);
+    actDebugSymbols_->setStatusTip(
+        tr("How the debugger shows values: pretty printers, enumerators, "
+           "dynamic types, source maps, symbol search paths and Natvis files"));
+    connect(actDebugSymbols_, &QAction::triggered, this,
+            [this] { showDebugSymbolSettings(); });
+
     // --- hierarchies ------------------------------------------------------
     actCallHierarchy_ = new QAction(tr("Call &Hierarchy"), this);
     actCallHierarchy_->setStatusTip(
@@ -3065,6 +3123,7 @@ void MainWindow::createActions()
         {actTypeHierarchy_, "actionTypeHierarchy"},
         {actPackageManager_, "actionPackageManager"},
         {actBlameFile_, "actionBlameFile"},
+        {actDebugSymbols_, "actionDebugSymbols"},
     };
     for (auto it = actionNames.constBegin(); it != actionNames.constEnd();
          ++it) {
@@ -3174,6 +3233,8 @@ void MainWindow::createMenuBar()
     debugMenu->addAction(actDebugStepOver_);
     debugMenu->addAction(actDebugStepInto_);
     debugMenu->addAction(actDebugStepOut_);
+    debugMenu->addSeparator();
+    debugMenu->addAction(actDebugSymbols_);
 
     auto* viewMenu = menuBar()->addMenu(tr("&View"));
     viewMenu->setObjectName(QStringLiteral("menuView"));
@@ -7007,6 +7068,247 @@ QWidget* MainWindow::openInViewer(const QString& path)
         view, this);
     tabWidget_->addTab(tab, QFileInfo(path).fileName());
     return tab;
+}
+
+
+// ---------------------------------------------------------------------------
+// Debugger symbol layer
+// ---------------------------------------------------------------------------
+
+LightCpp::Workbench::Debug::SymbolSettings MainWindow::symbolSettings() const
+{
+    using LightCpp::Workbench::Debug::PathMapping;
+    using LightCpp::Workbench::Debug::SymbolSettings;
+
+    SymbolSettings settings;
+    const LightCpp::Settings::Preferences prefs = settings_->preferences();
+    settings.prettyPrinting = prefs.debugger.prettyPrinting;
+    settings.showEnumerators = prefs.debugger.showEnumerators;
+    settings.dynamicType = prefs.debugger.dynamicType;
+
+    // The settings store alternating from/to entries; the model wants pairs.
+    // A dangling `from` is dropped rather than paired with an empty `to`,
+    // which would rewrite every path under the source root onto the root
+    // itself — a mapping that "works" and points at the wrong files.
+    const QStringList& flat = prefs.debugger.sourceMappings;
+    for (qsizetype i = 0; i + 1 < flat.size(); i += 2) {
+        PathMapping mapping;
+        mapping.from = flat.at(i).trimmed();
+        mapping.to = flat.at(i + 1).trimmed();
+        if (mapping.isValid() && settings.sourceMappings.size() < SymbolSettings::kMaxMappings) {
+            settings.sourceMappings.append(mapping);
+        }
+    }
+    for (const QString& path : prefs.debugger.symbolSearchPaths) {
+        if (!path.trimmed().isEmpty()
+            && settings.symbolSearchPaths.size() < SymbolSettings::kMaxPaths) {
+            settings.symbolSearchPaths.append(path.trimmed());
+        }
+    }
+    for (const QString& path : prefs.debugger.natvisFiles) {
+        if (!path.trimmed().isEmpty() && settings.natvisFiles.size() < SymbolSettings::kMaxPaths) {
+            settings.natvisFiles.append(path.trimmed());
+        }
+    }
+    return settings;
+}
+
+void MainWindow::applySymbolSettings()
+{
+    if (debugger_ == nullptr) {
+        return;
+    }
+    using LightCpp::Workbench::Debug::Backend;
+    const LightCpp::App::DebuggerController::Backend raw = debugger_->backend();
+    Backend backend = Backend::Unknown;
+    switch (raw) {
+    case LightCpp::App::DebuggerController::Backend::Gdb:
+        backend = Backend::Gdb;
+        break;
+    case LightCpp::App::DebuggerController::Backend::Lldb:
+        backend = Backend::Lldb;
+        break;
+    case LightCpp::App::DebuggerController::Backend::Cdb:
+        backend = Backend::Cdb;
+        break;
+    case LightCpp::App::DebuggerController::Backend::Unknown:
+        break;
+    }
+    if (backend == Backend::Unknown) {
+        return;
+    }
+    const LightCpp::Workbench::Debug::SymbolSettings settings = symbolSettings();
+    const QStringList commands =
+        LightCpp::Workbench::Debug::startupCommands(backend, settings);
+    if (commands.isEmpty()) {
+        return;
+    }
+    outputPanel_->appendDebugOutput(
+        tr("--- symbol settings (%1) ---")
+            .arg(LightCpp::Workbench::Debug::backendName(backend)));
+    outputPanel_->appendDebugOutput(
+        LightCpp::Workbench::Debug::describe(settings));
+    // Through the controller, so the single owner of the process is still the
+    // only thing writing to it, and the commands land in the log in order.
+    debugger_->sendCommands(commands);
+}
+
+void MainWindow::showDebugSymbolSettings()
+{
+    using LightCpp::Workbench::Debug::PathMapping;
+    using namespace LightCpp::Workbench;
+
+    const LightCpp::Settings::Preferences prefs = settings_->preferences();
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Debugger Symbol Settings"));
+    dialog.resize(700, 560);
+    auto* layout = new QVBoxLayout(&dialog);
+
+    auto* pretty = new QCheckBox(
+        tr("Pretty-print containers and smart pointers"), &dialog);
+    pretty->setToolTip(tr(
+        "Off: a std::vector prints as its internal pointers.\n"
+        "On: it prints as {1, 2, 3}."));
+    pretty->setChecked(prefs.debugger.prettyPrinting);
+    layout->addWidget(pretty);
+
+    auto* enumerators = new QCheckBox(tr("Show enumerators by name"), &dialog);
+    enumerators->setToolTip(tr("Print Color::Red rather than 1."));
+    enumerators->setChecked(prefs.debugger.showEnumerators);
+    layout->addWidget(enumerators);
+
+    auto* dynamicType = new QCheckBox(
+        tr("Resolve dynamic types of polymorphic objects"), &dialog);
+    dynamicType->setToolTip(tr(
+        "A Base* pointing at a Derived prints its Derived members.\n"
+        "Costs a lookup per frame."));
+    dynamicType->setChecked(prefs.debugger.dynamicType);
+    layout->addWidget(dynamicType);
+
+    // Source mappings: the pair is the whole point, so it is edited as one
+    // row. A list of single paths would let the two halves of a rule drift
+    // apart, which is the failure this replaces.
+    auto* mappingGroup = new QGroupBox(tr("Source path mapping"), &dialog);
+    auto* mappingLayout = new QVBoxLayout(mappingGroup);
+    auto* mappingHint = new QLabel(
+        tr("For binaries built elsewhere: what the debug info says → where the "
+           "file is on this machine."),
+        mappingGroup);
+    mappingHint->setWordWrap(true);
+    mappingLayout->addWidget(mappingHint);
+    auto* mappingTree = new QTreeWidget(mappingGroup);
+    mappingTree->setObjectName(QStringLiteral("debugSourceMappings"));
+    mappingTree->setHeaderLabels({tr("Debug info says"), tr("Real path")});
+    mappingTree->setRootIsDecorated(false);
+    mappingTree->setUniformRowHeights(true);
+    const QStringList& flat = prefs.debugger.sourceMappings;
+    for (qsizetype i = 0; i + 1 < flat.size(); i += 2) {
+        auto* item = new QTreeWidgetItem(mappingTree);
+        item->setText(0, flat.at(i));
+        item->setText(1, flat.at(i + 1));
+        item->setFlags(item->flags() | Qt::ItemIsEditable);
+    }
+    mappingLayout->addWidget(mappingTree, 1);
+    auto* mappingButtons = new QHBoxLayout();
+    auto* addMapping = new QPushButton(tr("Add"), mappingGroup);
+    auto* removeMapping = new QPushButton(tr("Remove"), mappingGroup);
+    mappingButtons->addWidget(addMapping);
+    mappingButtons->addWidget(removeMapping);
+    mappingButtons->addStretch(1);
+    mappingLayout->addLayout(mappingButtons);
+    connect(addMapping, &QPushButton::clicked, mappingGroup, [mappingTree] {
+        auto* item = new QTreeWidgetItem(mappingTree);
+        item->setFlags(item->flags() | Qt::ItemIsEditable);
+        mappingTree->editItem(item, 0);
+    });
+    connect(removeMapping, &QPushButton::clicked, mappingGroup, [mappingTree] {
+        delete mappingTree->currentItem();
+    });
+    layout->addWidget(mappingGroup, 1);
+
+    // Symbol search paths and natvis: one path per line. A file dialog per
+    // row would be slower than pasting a list for the case these exist for
+    // (a build server's symbol directory).
+    auto* pathsGroup = new QGroupBox(tr("Extra symbol locations"), &dialog);
+    auto* pathsLayout = new QVBoxLayout(pathsGroup);
+    pathsLayout->addWidget(new QLabel(
+        tr("Directories searched for separate debug information (.debug / .pdb), "
+           "one per line:"), pathsGroup));
+    auto* symbolPaths = new QPlainTextEdit(
+        prefs.debugger.symbolSearchPaths.join(QLatin1Char('\n')), pathsGroup);
+    symbolPaths->setMaximumHeight(80);
+    pathsLayout->addWidget(symbolPaths);
+    pathsLayout->addWidget(new QLabel(
+        tr("natvis visualiser files (cdb only), one per line:"), pathsGroup));
+    auto* natvis = new QPlainTextEdit(
+        prefs.debugger.natvisFiles.join(QLatin1Char('\n')), pathsGroup);
+    natvis->setMaximumHeight(80);
+    pathsLayout->addWidget(natvis);
+    layout->addWidget(pathsGroup, 1);
+
+    auto* summary = new QLabel(&dialog);
+    summary->setWordWrap(true);
+    summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addWidget(summary);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        LightCpp::Settings::Preferences updated = prefs;
+        updated.debugger.prettyPrinting = pretty->isChecked();
+        updated.debugger.showEnumerators = enumerators->isChecked();
+        updated.debugger.dynamicType = dynamicType->isChecked();
+        updated.debugger.sourceMappings.clear();
+        for (int i = 0; i < mappingTree->topLevelItemCount(); ++i) {
+            const QTreeWidgetItem* item = mappingTree->topLevelItem(i);
+            const QString from = item->text(0).trimmed();
+            const QString to = item->text(1).trimmed();
+            if (from.isEmpty() || to.isEmpty()) {
+                continue;  // half a rule: drop it rather than store it
+            }
+            updated.debugger.sourceMappings << from << to;
+        }
+        const auto lines = [](const QPlainTextEdit* edit) {
+            QStringList out;
+            for (const QString& line : edit->toPlainText().split(QLatin1Char('\n'))) {
+                if (!line.trimmed().isEmpty()) {
+                    out.append(line.trimmed());
+                }
+            }
+            return out;
+        };
+        updated.debugger.symbolSearchPaths = lines(symbolPaths);
+        updated.debugger.natvisFiles = lines(natvis);
+
+        // Serialise the whole preferences document with the new values (that
+        // is what keeps the JSON shape in one place) and take only the
+        // "debugger" subtree out of it — the rest of the file may hold keys
+        // this build does not model, and writing them back would either drop
+        // them or resurrect stale values.
+        const QJsonObject full =
+            LightCpp::Settings::toJson(updated);
+        const QJsonObject debuggerSection =
+            full.value(QStringLiteral("debugger")).toObject();
+        if (!persistPreferenceSection(QStringLiteral("debugger"), debuggerSection)) {
+            QMessageBox::warning(
+                this, tr("Debugger Symbol Settings"),
+                tr("Could not write the settings file."));
+        }
+        dialog.accept();
+    });
+    layout->addWidget(buttons);
+
+    // The summary is generated from the model, not written by hand, so the
+    // dialog cannot describe behaviour the commands do not implement.
+    summary->setText(Debug::describe(symbolSettings()));
+
+    if (dialog.exec() == QDialog::Accepted) {
+        statusBar()->showMessage(
+            tr("Symbol settings saved — they apply at the next session start"),
+            5000);
+    }
 }
 
 void MainWindow::showPackageManager()

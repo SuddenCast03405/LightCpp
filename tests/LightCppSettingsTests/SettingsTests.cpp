@@ -1721,3 +1721,79 @@ TEST(SettingsStore, RebindsMissingAbsoluteCompilerPathThroughPath)
     ASSERT_EQ(loaded.size(), 1);
     EXPECT_EQ(loaded.first().compilers.value(QStringLiteral("g++")), hostGpp);
 }
+
+TEST(SettingsJson, DebuggerSymbolsDefaultToOnAndRoundTrip)
+{
+    // A preferences file without a debugger block must not turn the debugger
+    // into a wall of struct members: pretty printing is on by default.
+    Preferences fresh;
+    fromJson(QJsonObject{{"type", "preferences"}}, fresh);
+    EXPECT_TRUE(fresh.debugger.prettyPrinting);
+    EXPECT_TRUE(fresh.debugger.showEnumerators);
+    EXPECT_TRUE(fresh.debugger.dynamicType);
+    EXPECT_TRUE(fresh.debugger.sourceMappings.isEmpty());
+    EXPECT_TRUE(fresh.debugger.symbolSearchPaths.isEmpty());
+    EXPECT_TRUE(fresh.debugger.natvisFiles.isEmpty());
+
+    Preferences written;
+    written.debugger.prettyPrinting = false;
+    written.debugger.showEnumerators = false;
+    written.debugger.dynamicType = false;
+    written.debugger.sourceMappings = {"/build/src", "/home/me/src"};
+    written.debugger.symbolSearchPaths = {"/usr/lib/debug"};
+    written.debugger.natvisFiles = {"qt6.natvis"};
+
+    Preferences back;
+    fromJson(toJson(written), back);
+    EXPECT_FALSE(back.debugger.prettyPrinting);
+    EXPECT_FALSE(back.debugger.showEnumerators);
+    EXPECT_FALSE(back.debugger.dynamicType);
+    EXPECT_EQ(back.debugger.sourceMappings,
+              QStringList({"/build/src", "/home/me/src"}));
+    EXPECT_EQ(back.debugger.symbolSearchPaths, QStringList{"/usr/lib/debug"});
+    EXPECT_EQ(back.debugger.natvisFiles, QStringList{"qt6.natvis"});
+}
+
+TEST(SettingsJson, DebuggerSourceMappingWithoutDestinationIsDropped)
+{
+    // Pairs are stored flat. An odd trailing entry would pair a real source
+    // root with an empty destination, which rewrites every path under it to
+    // nothing — so the tail is dropped instead.
+    const QJsonObject document{
+        {"type", "preferences"},
+        {"debugger",
+         QJsonObject{
+             {"sourceMappings",
+              QJsonArray{QStringLiteral("/build"), QStringLiteral("/src"),
+                         QStringLiteral("/orphan")}},
+         }},
+    };
+
+    Preferences prefs;
+    fromJson(document, prefs);
+    EXPECT_EQ(prefs.debugger.sourceMappings,
+              QStringList({"/build", "/src"}));
+}
+
+TEST(SettingsJson, DebuggerWrongTypesKeepDefaults)
+{
+    const QJsonObject document{
+        {"type", "preferences"},
+        {"debugger",
+         QJsonObject{
+             {"prettyPrinting", "off"},          // string where bool belongs
+             {"showEnumerators", 0},             // number where bool belongs
+             {"sourceMappings", "/build"},       // string where array belongs
+             {"symbolSearchPaths", QJsonArray{1, 2}},
+         }},
+    };
+
+    Preferences prefs;
+    prefs.debugger.dynamicType = false;
+    fromJson(document, prefs);
+    EXPECT_TRUE(prefs.debugger.prettyPrinting);
+    EXPECT_TRUE(prefs.debugger.showEnumerators);
+    EXPECT_FALSE(prefs.debugger.dynamicType);  // absent -> untouched
+    EXPECT_TRUE(prefs.debugger.sourceMappings.isEmpty());
+    EXPECT_TRUE(prefs.debugger.symbolSearchPaths.isEmpty());
+}

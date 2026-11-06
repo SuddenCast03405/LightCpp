@@ -345,6 +345,21 @@ QJsonObject toJson(const Preferences& prefs)
     performance.insert(QStringLiteral("largeFile"), largeFile);
     object.insert(QStringLiteral("performance"), performance);
 
+    // The debugger block sits next to "performance" rather than inside
+    // "languageService": the debugger is not a language service, and grouping
+    // it there is how it ended up with nowhere to live at all.
+    QJsonObject debugger;
+    debugger.insert(QStringLiteral("prettyPrinting"), prefs.debugger.prettyPrinting);
+    debugger.insert(QStringLiteral("showEnumerators"), prefs.debugger.showEnumerators);
+    debugger.insert(QStringLiteral("dynamicType"), prefs.debugger.dynamicType);
+    debugger.insert(QStringLiteral("sourceMappings"),
+                    fromStringList(prefs.debugger.sourceMappings));
+    debugger.insert(QStringLiteral("symbolSearchPaths"),
+                    fromStringList(prefs.debugger.symbolSearchPaths));
+    debugger.insert(QStringLiteral("natvisFiles"),
+                    fromStringList(prefs.debugger.natvisFiles));
+    object.insert(QStringLiteral("debugger"), debugger);
+
     QJsonObject languageService;
     QJsonObject clangd;
     clangd.insert(QStringLiteral("enabledByDefault"), prefs.clangd.enabledByDefault);
@@ -570,6 +585,23 @@ void fromJson(const QJsonObject& object, Preferences& out)
             out.autoSaveSeconds = qBound(5, v, 3600);
         }
         readStringList(general, "recentFiles", out.recentFiles);
+    }
+
+    const QJsonValue debuggerValue = object.value(QLatin1String("debugger"));
+    if (debuggerValue.isObject()) {
+        const QJsonObject debugger = debuggerValue.toObject();
+        readBool(debugger, "prettyPrinting", out.debugger.prettyPrinting);
+        readBool(debugger, "showEnumerators", out.debugger.showEnumerators);
+        readBool(debugger, "dynamicType", out.debugger.dynamicType);
+        readStringList(debugger, "sourceMappings", out.debugger.sourceMappings);
+        readStringList(debugger, "symbolSearchPaths", out.debugger.symbolSearchPaths);
+        readStringList(debugger, "natvisFiles", out.debugger.natvisFiles);
+        // A from without its to is half a rule; dropping the tail is better
+        // than pairing it with an empty path, which would rewrite everything
+        // under the source root to the root itself.
+        if (out.debugger.sourceMappings.size() % 2 != 0) {
+            out.debugger.sourceMappings.removeLast();
+        }
     }
 
     const QJsonValue shortcutsValue = object.value(QLatin1String("shortcuts"));

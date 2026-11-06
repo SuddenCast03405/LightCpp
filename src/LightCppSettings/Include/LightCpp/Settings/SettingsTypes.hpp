@@ -194,6 +194,34 @@ struct ClangFormatService {
     QString style;
 };
 
+/// The debugger's symbol layer (lightcpp.1.md §五: pretty-printer, STL and
+/// smart-pointer expansion, enumerator display, source mapping, natvis,
+/// separate debug info).
+///
+/// The same three switches mean different things to gdb, lldb and cdb, and
+/// each backend has its own spelling for them (see
+/// LightCpp::Workbench::Debug). They are stored here as intent, not as
+/// commands, so switching kits — and therefore debuggers — keeps the intent.
+struct DebuggerService {
+    /// STL containers and smart pointers printed as their contents instead of
+    /// as their members.
+    bool prettyPrinting = true;
+    /// `Color::Red` rather than `1`.
+    bool showEnumerators = true;
+    /// Resolve the real type of a polymorphic object rather than the static
+    /// type of the pointer/reference.
+    bool dynamicType = true;
+    /// Where the debug info claims a source file is → where it really is.
+    /// Stored as alternating from/to entries so the JSON stays a plain array
+    /// and one bad pair cannot shift the rest.
+    QStringList sourceMappings;
+    /// Extra directories for .debug / .pdb files.
+    QStringList symbolSearchPaths;
+    /// natvis visualiser files (cdb only; kept for the other backends so a
+    /// project that targets MSVC and gdb both keeps one settings block).
+    QStringList natvisFiles;
+};
+
 /// One user-editable "run program in ..." terminal from the run.output
 /// list. The launcher `command` is split command-line style and the program
 /// path is appended as one final (quoted as needed) argument, e.g.
@@ -278,6 +306,9 @@ struct Preferences {
     QString shortcutClangFormat; ///< Format Document; empty = built-ins
 
     LargeFileLimits largeFile;
+    /// The debugger's symbol layer: pretty-printing, enum and dynamic-type
+    /// display, source maps, extra symbol paths, natvis.
+    DebuggerService debugger;
     ClangdService clangd;
     ClangFormatService clangFormat;
     /// Code-completion engine selection + failure retry policy.
