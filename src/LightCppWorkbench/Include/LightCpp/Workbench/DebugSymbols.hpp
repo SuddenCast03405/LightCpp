@@ -98,10 +98,77 @@ struct SymbolSettings {
 [[nodiscard]] QStringList symbolPathCommands(Backend backend,
                                              const QStringList& paths);
 
+/// One natvis file, once the search order has been applied.
+struct NatvisFile {
+    QString path;
+    /// True when this file shadows a visualiser an earlier file already
+    /// defined for the same type.
+    bool overrides = false;
+
+    [[nodiscard]] bool operator==(const NatvisFile& other) const
+    {
+        return path == other.path && overrides == other.overrides;
+    }
+};
+
+/// Where a natvis file came from. The order below is the precedence order,
+/// lowest first: a user's file beats a project's, which beats the one the
+/// toolchain ships, and a private file beats a public one at every level —
+/// the same rule Visual Studio documents (`/public` then `/private`, with
+/// later files winning), and the reason it matters is that the *winner* is
+/// what a developer sees when they are debugging why their visualiser is
+/// ignored.
+enum class NatvisOrigin {
+    Toolchain = 0,  ///< the debugger's own autoexp.dat / *.natvis directory
+    Public,         ///< shared with the team, checked in
+    Private,        ///< the viewer's own, not to be shared
+    Project,        ///< declared by the project file
+    User,           ///< the user's IDE settings
+};
+
+[[nodiscard]] QString natvisOriginName(NatvisOrigin origin);
+
+/// A file plus what it claims: its origin and the types it defines.
+struct NatvisCandidate {
+    QString path;
+    NatvisOrigin origin = NatvisOrigin::User;
+    /// Fully qualified type names the file has a `<Type Name="…">` for. Empty
+    /// is allowed and means "unknown", which sorts *below* a known claim:
+    /// a file that says it handles `std::vector<int>` beats one that might.
+    QStringList types;
+};
+
+/// Apply the search order to `candidates`.
+///
+/// Sorting is stable on origin (lowest first), then on path, then on input
+/// position, so the result is deterministic regardless of how the settings
+/// were assembled. Types a later file redefines mark that file `overrides`,
+/// which is what the UI shows next to it — a silent shadowing is the single
+/// most confusing thing about natvis.
+[[nodiscard]] QList<NatvisFile> orderNatvis(const QList<NatvisCandidate>& candidates);
+
+/// The types in `candidates` that more than one file defines, each mapped to
+/// the paths that define it, in precedence order. For the "your file is
+/// being overridden" warning.
+[[nodiscard]] QList<QPair<QString, QStringList>> natvisConflicts(
+    const QList<NatvisCandidate>& candidates);
+
+/// The type names a natvis document defines (`<Type Name="…">`). A best
+/// effort: the format is XML and the parser here is a scan, because the file
+/// may be malformed and a debugger must not refuse to start over it.
+[[nodiscard]] QStringList natvisTypesIn(const QString& xml);
+
 /// natvis visualisers (cdb: `.nvload <file>`; lldb has type summaries instead,
-/// gdb has neither).
+/// gdb has neither). Files are loaded in `orderNatvis` order when the caller
+/// passes candidates through `natvisCommands(candidates)`.
 [[nodiscard]] QStringList natvisCommands(Backend backend,
                                          const QStringList& files);
+
+/// The same, applying the search order first. This is the overload the
+/// startup path uses, because loading the user's file before the toolchain's
+/// would let the toolchain win.
+[[nodiscard]] QStringList natvisCommands(Backend backend,
+                                         const QList<NatvisCandidate>& candidates);
 
 /// Load symbols from an extra binary: `add-symbol-file` (gdb),
 /// `target symbols add` (lldb), `.reload /f` (cdb).

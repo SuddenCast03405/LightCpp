@@ -2441,3 +2441,123 @@ TEST(TerminalEmulator, TheTitleIsReadableAfterTheUpdateThatSetIt)
     EXPECT_EQ(empty.title, QString());
     EXPECT_EQ(emulator.title(), QStringLiteral("bash"));
 }
+
+TEST(NatvisOrder, AUserFileLoadsAfterTheToolchainAndThereforeWins)
+{
+    // Loading order *is* precedence for .natvis: the last file loaded owns
+    // the type. Getting this backwards means the toolchain silently beats
+    // the visualiser the developer just wrote.
+    QList<Debug::NatvisCandidate> candidates;
+    candidates.append({QStringLiteral("C:/ide/autoexp.natvis"), Debug::NatvisOrigin::Toolchain, {}});
+    candidates.append({QStringLiteral("D:/proj/mine.natvis"), Debug::NatvisOrigin::User, {}});
+    candidates.append({QStringLiteral("D:/proj/team.natvis"), Debug::NatvisOrigin::Public, {}});
+    const auto ordered = Debug::orderNatvis(candidates);
+    ASSERT_EQ(ordered.size(), 3);
+    EXPECT_EQ(ordered.at(0).path, QStringLiteral("C:/ide/autoexp.natvis"));
+    EXPECT_EQ(ordered.at(1).path, QStringLiteral("D:/proj/team.natvis"));
+    EXPECT_EQ(ordered.at(2).path, QStringLiteral("D:/proj/mine.natvis"));
+}
+
+TEST(NatvisOrder, PrivateBeatsPublicAtTheSameLevel)
+{
+    // The documented rule: /public is the shared half, /private the local
+    // half, and the local one is what a developer debugging their own
+    // visualiser expects to see take effect.
+    QList<Debug::NatvisCandidate> candidates;
+    candidates.append({QStringLiteral("b.natvis"), Debug::NatvisOrigin::Private, {}});
+    candidates.append({QStringLiteral("a.natvis"), Debug::NatvisOrigin::Public, {}});
+    const auto ordered = Debug::orderNatvis(candidates);
+    ASSERT_EQ(ordered.size(), 2);
+    EXPECT_EQ(ordered.at(0).path, QStringLiteral("a.natvis"));
+    EXPECT_EQ(ordered.at(1).path, QStringLiteral("b.natvis"));
+}
+
+TEST(NatvisOrder, RedefiningATypeMarksTheLaterFileAsAnOverride)
+{
+    QList<Debug::NatvisCandidate> candidates;
+    candidates.append({QStringLiteral("tool.natvis"), Debug::NatvisOrigin::Toolchain,
+                       {QStringLiteral("std::vector<int>")}});
+    candidates.append({QStringLiteral("mine.natvis"), Debug::NatvisOrigin::User,
+                       {QStringLiteral("std::vector<int>"), QStringLiteral("MyType")}});
+    const auto ordered = Debug::orderNatvis(candidates);
+    ASSERT_EQ(ordered.size(), 2);
+    EXPECT_FALSE(ordered.at(0).overrides);
+    EXPECT_TRUE(ordered.at(1).overrides);
+}
+
+TEST(NatvisOrder, AFileWithNoDeclaredTypesNeverClaimsAnOverride)
+{
+    // Without a parse there is nothing to claim, and a false "overrides"
+    // badge is worse than a missing one: it sends the reader looking for a
+    // conflict that does not exist.
+    QList<Debug::NatvisCandidate> candidates;
+    candidates.append({QStringLiteral("tool.natvis"), Debug::NatvisOrigin::Toolchain, {}});
+    candidates.append({QStringLiteral("mine.natvis"), Debug::NatvisOrigin::User, {}});
+    const auto ordered = Debug::orderNatvis(candidates);
+    ASSERT_EQ(ordered.size(), 2);
+    EXPECT_FALSE(ordered.at(1).overrides);
+}
+
+TEST(NatvisOrder, EmptyPathsAreDroppedRatherThanSendingADotCommand)
+{
+    QList<Debug::NatvisCandidate> candidates;
+    candidates.append({QStringLiteral("   "), Debug::NatvisOrigin::User, {}});
+    candidates.append({QStringLiteral("ok.natvis"), Debug::NatvisOrigin::User, {}});
+    EXPECT_EQ(Debug::orderNatvis(candidates).size(), 1);
+    EXPECT_TRUE(Debug::natvisCommands(Debug::Backend::Cdb,
+                                      {Debug::NatvisCandidate{QString(), Debug::NatvisOrigin::User, {}}})
+                    .isEmpty());
+}
+
+TEST(NatvisOrder, TheCdbCommandsFollowTheSameOrder)
+{
+    QList<Debug::NatvisCandidate> candidates;
+    candidates.append({QStringLiteral("mine.natvis"), Debug::NatvisOrigin::User, {}});
+    candidates.append({QStringLiteral("tool.natvis"), Debug::NatvisOrigin::Toolchain, {}});
+    const auto commands = Debug::natvisCommands(Debug::Backend::Cdb, candidates);
+    ASSERT_EQ(commands.size(), 2);
+    EXPECT_EQ(commands.at(0), QStringLiteral(".nvload tool.natvis"));
+    EXPECT_EQ(commands.at(1), QStringLiteral(".nvload mine.natvis"));
+}
+
+TEST(NatvisOrder, ATypeTwoFilesDefineIsReportedWithBothFilesLoserFirst)
+{
+    QList<Debug::NatvisCandidate> candidates;
+    candidates.append({QStringLiteral("mine.natvis"), Debug::NatvisOrigin::User,
+                       {QStringLiteral("Foo"), QStringLiteral("OnlyMine")}});
+    candidates.append({QStringLiteral("tool.natvis"), Debug::NatvisOrigin::Toolchain,
+                       {QStringLiteral("Foo")}});
+    const auto conflicts = Debug::natvisConflicts(candidates);
+    ASSERT_EQ(conflicts.size(), 1);
+    EXPECT_EQ(conflicts.at(0).first, QStringLiteral("Foo"));
+    ASSERT_EQ(conflicts.at(0).second.size(), 2);
+    EXPECT_EQ(conflicts.at(0).second.at(0), QStringLiteral("tool.natvis"));
+    EXPECT_EQ(conflicts.at(0).second.at(1), QStringLiteral("mine.natvis"));
+}
+
+TEST(NatvisOrder, TypesAreScannedOutOfARealDocument)
+{
+    const QString xml = QStringLiteral(
+        "<?xml version=\"1.0\"?>\n"
+        "<AutoVisualizer xmlns=\"http://schemas.microsoft.com/vstudio/debugger/natvis/2010\">\n"
+        "  <Type Name=\"Widget\">\n"
+        "    <DisplayString>{id}</DisplayString>\n"
+        "  </Type>\n"
+        "  <Type Name=\"std::vector&lt;*\">\n"
+        "    <DisplayString>size {_M_finish - _M_start}</DisplayString>\n"
+        "  </Type>\n"
+        "</AutoVisualizer>\n");
+    const auto types = Debug::natvisTypesIn(xml);
+    ASSERT_EQ(types.size(), 2);
+    EXPECT_EQ(types.at(0), QStringLiteral("Widget"));
+    // A wildcard is part of the claim, so it is kept verbatim.
+    EXPECT_EQ(types.at(1), QStringLiteral("std::vector&lt;*"));
+}
+
+TEST(NatvisOrder, AMalformedDocumentYieldsWhatCouldBeReadAndNoCrash)
+{
+    // The debugger is about to reject this file; the IDE must not die first.
+    EXPECT_TRUE(Debug::natvisTypesIn(QStringLiteral("<Type Name=\"Unclosed")).isEmpty());
+    EXPECT_TRUE(Debug::natvisTypesIn(QString()).isEmpty());
+    EXPECT_EQ(Debug::natvisTypesIn(QStringLiteral("<Type Name=\"A\"><Type Name=\"B\">")).size(), 2);
+}

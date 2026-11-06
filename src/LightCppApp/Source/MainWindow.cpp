@@ -7901,7 +7901,35 @@ void MainWindow::applySymbolSettings()
     if (backend == Backend::Unknown) {
         return;
     }
-    const LightCpp::Workbench::Debug::SymbolSettings settings = symbolSettings();
+    LightCpp::Workbench::Debug::SymbolSettings settings = symbolSettings();
+    // natvis is loaded in precedence order, not list order: the last file
+    // loaded owns the type, so the user's file has to come after the
+    // toolchain's or their visualiser is silently ignored. Origin is decided
+    // here because only the IDE knows which list an entry came from.
+    QList<LightCpp::Workbench::Debug::NatvisCandidate> candidates;
+    for (const QString& path : settings.natvisFiles) {
+        LightCpp::Workbench::Debug::NatvisCandidate candidate;
+        candidate.path = path;
+        candidate.origin = LightCpp::Workbench::Debug::NatvisOrigin::User;
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly)) {
+            candidate.types = LightCpp::Workbench::Debug::natvisTypesIn(
+                QString::fromUtf8(file.readAll()));
+        }
+        candidates.append(candidate);
+    }
+    const QList<LightCpp::Workbench::Debug::NatvisFile> ordered =
+        LightCpp::Workbench::Debug::orderNatvis(candidates);
+    settings.natvisFiles.clear();
+    for (const auto& file : ordered) {
+        settings.natvisFiles.append(file.path);
+    }
+    const auto conflicts = LightCpp::Workbench::Debug::natvisConflicts(candidates);
+    for (const auto& conflict : conflicts) {
+        outputPanel_->appendDebugOutput(
+            tr("natvis: %1 is defined in %2 — the last one wins")
+                .arg(conflict.first, conflict.second.join(QStringLiteral(", "))));
+    }
     const QStringList commands =
         LightCpp::Workbench::Debug::startupCommands(backend, settings);
     if (commands.isEmpty()) {

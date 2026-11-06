@@ -2,6 +2,11 @@
 
 #include "LightCpp/Workbench/DebugSymbols.hpp"
 
+#include <QHash>
+#include <QSet>
+
+#include <algorithm>
+
 namespace LightCpp::Workbench::Debug {
 
 QString backendName(Backend backend)
@@ -200,6 +205,140 @@ QStringList symbolPathCommands(Backend backend, const QStringList& paths)
         break;
     }
     return {};
+}
+
+QString natvisOriginName(NatvisOrigin origin)
+{
+    switch (origin) {
+    case NatvisOrigin::Toolchain: return QStringLiteral("toolchain");
+    case NatvisOrigin::Public:    return QStringLiteral("public");
+    case NatvisOrigin::Private:   return QStringLiteral("private");
+    case NatvisOrigin::Project:   return QStringLiteral("project");
+    case NatvisOrigin::User:      return QStringLiteral("user");
+    }
+    return QStringLiteral("unknown");
+}
+
+QList<NatvisFile> orderNatvis(const QList<NatvisCandidate>& candidates)
+{
+    QList<NatvisCandidate> sorted;
+    sorted.reserve(candidates.size());
+    for (const NatvisCandidate& candidate : candidates) {
+        if (!candidate.path.trimmed().isEmpty()) {
+            sorted.append(candidate);
+        }
+    }
+    // Lowest precedence first, so "later wins" is plain forward iteration.
+    std::stable_sort(sorted.begin(), sorted.end(),
+                     [](const NatvisCandidate& a, const NatvisCandidate& b) {
+                         if (a.origin != b.origin) {
+                             return int(a.origin) < int(b.origin);
+                         }
+                         return a.path < b.path;
+                     });
+
+    QSet<QString> claimed;
+    QList<NatvisFile> ordered;
+    ordered.reserve(sorted.size());
+    for (const NatvisCandidate& candidate : sorted) {
+        NatvisFile file;
+        file.path = candidate.path;
+        for (const QString& type : candidate.types) {
+            const QString key = type.trimmed();
+            if (key.isEmpty()) {
+                continue;
+            }
+            if (claimed.contains(key)) {
+                file.overrides = true;
+            }
+            claimed.insert(key);
+        }
+        ordered.append(file);
+    }
+    return ordered;
+}
+
+QList<QPair<QString, QStringList>> natvisConflicts(
+    const QList<NatvisCandidate>& candidates)
+{
+    // Walk the ordered files and remember where each type was first claimed;
+    // a second claim is the conflict. Ordering first means the returned path
+    // list already reads "loser first, winner last".
+    QList<NatvisFile> ordered = orderNatvis(candidates);
+    QList<NatvisCandidate> sorted = candidates;
+    std::stable_sort(sorted.begin(), sorted.end(),
+                     [](const NatvisCandidate& a, const NatvisCandidate& b) {
+                         if (a.origin != b.origin) {
+                             return int(a.origin) < int(b.origin);
+                         }
+                         return a.path < b.path;
+                     });
+
+    QHash<QString, QStringList> owners;
+    QStringList order;
+    for (const NatvisCandidate& candidate : sorted) {
+        if (candidate.path.trimmed().isEmpty()) {
+            continue;
+        }
+        for (const QString& raw : candidate.types) {
+            const QString type = raw.trimmed();
+            if (type.isEmpty()) {
+                continue;
+            }
+            if (!owners.contains(type)) {
+                order.append(type);
+            }
+            owners[type].append(candidate.path);
+        }
+    }
+
+    QList<QPair<QString, QStringList>> conflicts;
+    for (const QString& type : order) {
+        if (owners.value(type).size() > 1) {
+            conflicts.append({type, owners.value(type)});
+        }
+    }
+    return conflicts;
+}
+
+QStringList natvisTypesIn(const QString& xml)
+{
+    // A scan rather than a DOM parse. A natvis the debugger itself is about
+    // to reject must still be *loadable* by the IDE, and the extension is
+    // uniformly `Name="..."` (with `<Type Name="X*">` wildcards kept verbatim:
+    // the wildcard is part of what the file claims).
+    QStringList types;
+    const QStringList lines = xml.split(QLatin1Char('\n'));
+    const QString marker = QStringLiteral("<Type");
+    for (const QString& line : lines) {
+        int at = line.indexOf(marker);
+        while (at >= 0) {
+            const int nameAt = line.indexOf(QStringLiteral("Name=\""), at);
+            if (nameAt < 0) {
+                break;
+            }
+            const int valueStart = nameAt + 6;
+            const int valueEnd = line.indexOf(QLatin1Char('"'), valueStart);
+            if (valueEnd < 0) {
+                break;
+            }
+            const QString name = line.mid(valueStart, valueEnd - valueStart).trimmed();
+            if (!name.isEmpty() && !types.contains(name)) {
+                types.append(name);
+            }
+            at = line.indexOf(marker, valueEnd);
+        }
+    }
+    return types;
+}
+
+QStringList natvisCommands(Backend backend, const QList<NatvisCandidate>& candidates)
+{
+    QStringList paths;
+    for (const NatvisFile& file : orderNatvis(candidates)) {
+        paths.append(file.path);
+    }
+    return natvisCommands(backend, paths);
 }
 
 QStringList natvisCommands(Backend backend, const QStringList& files)
