@@ -68,6 +68,7 @@
 #include <QHBoxLayout>
 #include <QMenu>
 #include <QUrl>
+#include <QImageReader>
 #include <QInputDialog>
 #include <QLabel>
 #include <QJsonArray>
@@ -5046,6 +5047,16 @@ CodeEditor* MainWindow::openFileInTab(const QString& path)
         }
     }
 
+    // A binary, a log or an image is better shown than edited. The check runs
+    // before the text read because reading a binary as text is exactly the
+    // failure it prevents (a mangled buffer that a save would write back).
+    QWidget* viewer = openInViewer(path);
+    if (viewer != nullptr) {
+        tabWidget_->setCurrentWidget(viewer);
+        noteRecentFile(path);
+        return nullptr;
+    }
+
     // Use LightCppText::readDetectedTextFile to detect encoding and convert.
     using namespace LightCpp::Text;
     const TextFileResult result = readDetectedTextFile(path);
@@ -6822,6 +6833,181 @@ void MainWindow::openConflictResolution(const QString& path)
 // ---------------------------------------------------------------------------
 // Package manager
 // ---------------------------------------------------------------------------
+
+
+// ---------------------------------------------------------------------------
+// Hex / log / image viewers
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// A viewer tab: one read-only widget with a small header. Deliberately not a
+/// CodeEditor — a hex dump is not a document to edit, and pretending it is
+/// would put a caret and a save button on content that must not be saved.
+class ViewerTab : public QWidget {
+public:
+    ViewerTab(const QString& title, QWidget* content, QWidget* parent = nullptr)
+        : QWidget(parent)
+    {
+        setObjectName(title);
+        auto* layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
+        auto* bar = new QWidget(this);
+        bar->setObjectName(QStringLiteral("viewerHeader"));
+        auto* barLayout = new QHBoxLayout(bar);
+        barLayout->setContentsMargins(8, 4, 8, 4);
+        title_ = new QLabel(title, bar);
+        title_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        barLayout->addWidget(title_, 1);
+        layout->addWidget(bar);
+        layout->addWidget(content, 1);
+    }
+
+    void setTitle(const QString& title)
+    {
+        setObjectName(title);
+        title_->setText(title);
+        title_->setToolTip(title);
+    }
+
+private:
+    QLabel* title_ = nullptr;
+};
+
+/// Cap on what a viewer reads: a 2 GB coredump would otherwise be loaded to
+/// be shown, and the first megabyte is where the answer always is.
+constexpr qint64 kViewerByteLimit = 8 * 1024 * 1024;
+
+}  // namespace
+
+QWidget* MainWindow::openInViewer(const QString& path)
+{
+    namespace Viewer = LightCpp::Workbench::Viewer;
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return nullptr;
+    }
+    const QByteArray head = file.read(4096);
+    const Viewer::BinaryKind kind = Viewer::sniffBytes(head);
+    const bool isImage = Viewer::isImageKind(kind);
+
+    // A log is text that *says* it is a log: level tags, or the usual
+    // timestamp shapes, on a good share of its lines. A single "[ERROR]" in
+    // prose is not enough.
+    bool looksLikeLog = false;
+    if (kind == Viewer::BinaryKind::Text) {
+        const QByteArray sample = file.peek(qMin<qint64>(256 * 1024, file.size()));
+        const QList<Viewer::LogLine> lines =
+            Viewer::parseLog(QString::fromUtf8(sample));
+        int tagged = 0;
+        for (const auto& line : lines) {
+            if (line.level != Viewer::Level::Unknown && !line.timestamp.isEmpty()) {
+                ++tagged;
+            }
+        }
+        looksLikeLog = lines.size() >= 4 && tagged * 3 >= lines.size();
+    }
+    const bool hexView = !isImage && kind != Viewer::BinaryKind::Text;
+    if (!isImage && !looksLikeLog && !hexView) {
+        file.close();
+        return nullptr;  // ordinary text: the editor is the right viewer
+    }
+
+    if (isImage) {
+        file.close();
+        auto* view = new QLabel(this);
+        view->setAlignment(Qt::AlignCenter);
+        QPixmap pixmap;
+        // The size cap matters here too: a 30000x30000 PNG is a memory bomb.
+        QImageReader reader(path);
+        reader.setAutoTransform(true);
+        if (reader.canRead()) {
+            QSize target = reader.size();
+            if (target.isValid() && (target.width() > 4096 || target.height() > 4096)) {
+                target.scale(4096, 4096, Qt::KeepAspectRatio);
+                reader.setScaledSize(target);
+            }
+            pixmap = QPixmap::fromImage(reader.read());
+        }
+        if (pixmap.isNull()) {
+            view->setText(tr("Cannot display %1: %2")
+                              .arg(QFileInfo(path).fileName(),
+                                   reader.errorString()));
+        } else {
+            view->setPixmap(pixmap);
+        }
+        view->setObjectName(QStringLiteral("imageViewer"));
+        auto* tab = new ViewerTab(QFileInfo(path).fileName(), view, this);
+        tabWidget_->addTab(tab, QFileInfo(path).fileName());
+        return tab;
+    }
+
+    file.seek(0);
+    const QByteArray bytes = file.read(kViewerByteLimit);
+    const bool truncated = file.size() > bytes.size();
+    file.close();
+
+    if (looksLikeLog) {
+        const QList<Viewer::LogLine> lines =
+            Viewer::parseLog(QString::fromUtf8(bytes));
+        auto* view = new QPlainTextEdit(this);
+        view->setReadOnly(true);
+        view->setLineWrapMode(QPlainTextEdit::NoWrap);
+        view->setObjectName(QStringLiteral("logViewer"));
+        // Formatting per line, not per document: the point of the viewer is
+        // that the eye finds the errors, and a coloured line is how.
+        for (const auto& line : lines) {
+            QTextCharFormat format;
+            switch (line.level) {
+            case Viewer::Level::Error:
+            case Viewer::Level::Critical:
+                format.setForeground(QColor(0xC0, 0x20, 0x20));
+                break;
+            case Viewer::Level::Warning:
+                format.setForeground(QColor(0xB0, 0x70, 0x00));
+                break;
+            case Viewer::Level::Debug:
+                format.setForeground(QColor(0x80, 0x80, 0x80));
+                break;
+            default:
+                break;
+            }
+            QTextCursor cursor(view->document());
+            cursor.movePosition(QTextCursor::End);
+            if (cursor.position() > 0) {
+                cursor.insertBlock();
+            }
+            cursor.insertText(line.text, format);
+        }
+        const Viewer::LevelCounts counts = Viewer::countLevels(lines);
+        auto* tab = new ViewerTab(QFileInfo(path).fileName(), view, this);
+        tab->setTitle(tr("%1 — %2")
+                          .arg(QFileInfo(path).fileName(),
+                               Viewer::describeCounts(counts)));
+        tabWidget_->addTab(tab, QFileInfo(path).fileName());
+        return tab;
+    }
+
+    // Hex: the offsets are absolute (row * bytesPerRow), so a truncated read
+    // still reports the real file offsets rather than restarting at zero.
+    auto* view = new QPlainTextEdit(this);
+    view->setReadOnly(true);
+    view->setLineWrapMode(QPlainTextEdit::NoWrap);
+    view->setObjectName(QStringLiteral("hexViewer"));
+    view->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    view->setPlainText(Viewer::hexDumpText(bytes, 0, 16));
+    auto* tab = new ViewerTab(
+        tr("%1 — %2 bytes%3")
+            .arg(QFileInfo(path).fileName())
+            .arg(QFileInfo(path).size())
+            .arg(truncated ? tr(" (showing the first %1)").arg(bytes.size())
+                           : QString()),
+        view, this);
+    tabWidget_->addTab(tab, QFileInfo(path).fileName());
+    return tab;
+}
 
 void MainWindow::showPackageManager()
 {

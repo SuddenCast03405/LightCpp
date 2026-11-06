@@ -33,6 +33,7 @@
 #include "LightCpp/Workbench/EditorTools.hpp"
 #include "LightCpp/Workbench/GitExtra.hpp"
 #include "LightCpp/Workbench/PackageManager.hpp"
+#include "LightCpp/Workbench/Viewers.hpp"
 #include "LightCpp/Workbench/LspModel.hpp"
 
 #include <memory>
@@ -1199,6 +1200,18 @@ private:
     /// Tools > Package Manager...: pick a manager, search/install/remove a
     /// package, and copy the CMake flag that makes the build find it.
     void showPackageManager();
+
+    // --- hex / log / image viewers -----------------------------------------
+    /// Open `path` in a read-only viewer tab when its content is better read
+    /// that way than edited: a binary (hex dump), a log (level-coloured), an
+    /// image (shown as an image). Returns nullptr when the file should go to
+    /// the ordinary text editor instead, which is the caller's signal to fall
+    /// through.
+    ///
+    /// The decision is made from the file's bytes, not its extension: a
+    /// `.txt` full of NULs is a binary, and a `.log` written by an embedded
+    /// target is still a log.
+    QWidget* openInViewer(const QString& path);
     /// The Plugins tab: a list of every loaded plugin, one row per plugin
     /// with publisher / version / kind (C++ / Lua) tag chips.
     QWidget* createPluginPanel();
