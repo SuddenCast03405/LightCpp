@@ -2,6 +2,8 @@
 
 #include <QList>
 #include <QObject>
+
+#include <functional>
 #include <QProcess>
 #include <QString>
 #include <QStringList>
@@ -54,6 +56,18 @@ public:
     /// "git commit".
     void run(const QStringList& arguments, const QString& title);
 
+    /// Queue a command whose output the caller wants as data rather than as
+    /// a log line — `git blame`, a diff to parse, `git show` of one commit.
+    ///
+    /// `callback` runs once, on this client's thread, for the job it was
+    /// queued with: `text` is stdout (plus stderr when the command failed,
+    /// because that is where git puts the explanation) and `exitCode` is 0 on
+    /// success. The callback is still delivered when the working directory
+    /// changed in the meantime; the answer describes the directory it ran in,
+    /// and it is the caller's business whether that is still interesting.
+    void runForResult(const QStringList& arguments, const QString& title,
+                      std::function<void(const QString& text, int exitCode)> callback);
+
     /// True while a command is running or queued.
     [[nodiscard]] bool isBusy() const noexcept;
 
@@ -83,6 +97,8 @@ private:
         /// Working directory captured when the job was queued. A status
         /// result from an old project must never update the current project.
         QString workingDirectory;
+        /// When set, the answer goes here instead of to commandFinished().
+        std::function<void(const QString& text, int exitCode)> resultCallback;
     };
 
     /// Queue a command. `feedsStatus` marks the one job whose stdout is

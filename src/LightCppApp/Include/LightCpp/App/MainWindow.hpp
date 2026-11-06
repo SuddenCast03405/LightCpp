@@ -31,6 +31,8 @@
 #include "LightCpp/Text/Encoding.hpp"
 #include "LightCpp/Text/TextFile.hpp"
 #include "LightCpp/Workbench/EditorTools.hpp"
+#include "LightCpp/Workbench/GitExtra.hpp"
+#include "LightCpp/Workbench/PackageManager.hpp"
 #include "LightCpp/Workbench/LspModel.hpp"
 
 #include <memory>
@@ -739,6 +741,8 @@ private:
     QAction* actSortIncludes_ = nullptr;       // Edit > Sort Includes
     QAction* actCallHierarchy_ = nullptr;      // Edit > Call Hierarchy
     QAction* actTypeHierarchy_ = nullptr;      // Edit > Type Hierarchy
+    QAction* actPackageManager_ = nullptr;     // Tools > Package Manager
+    QAction* actBlameFile_ = nullptr;          // Git > Blame File
     QAction* actToggleBookmark_ = nullptr;     // Edit > Toggle Bookmark (Ctrl+F2)
     QAction* actNextBookmark_ = nullptr;       // Edit > Next Bookmark (F2)
     QAction* actPrevBookmark_ = nullptr;       // Edit > Previous Bookmark (Shift+F2)
@@ -770,6 +774,10 @@ private:
     QLabel* statusGit_ = nullptr;
     /// Latest status, kept so commands can report drift without re-querying.
     LightCpp::Project::GitStatusSummary gitStatus_;
+    /// The Git panel's widgets; nullptr until buildGitPanel() runs.
+    QTreeWidget* gitPanelStaged_ = nullptr;
+    QTreeWidget* gitPanelChanges_ = nullptr;
+    QLabel* gitPanelBranch_ = nullptr;
     bool inRepository_ = false;
     /// Set by an explicit refresh, so the next status answer prints the whole
     /// file list while an automatic one stays to a single line.
@@ -1171,6 +1179,26 @@ private:
     // --- side bar (the vertical Explorer / Git / Plugins activity bar) ------
     /// Git tab placeholder — the panel itself is not built yet.
     QWidget* createGitPlaceholder();
+
+    // --- the Git side panel ------------------------------------------------
+    /// Replace the "not built yet" placeholder with the real panel: branch
+    /// header, staged/unstaged change lists, and the blame/blame-hover for
+    /// the active file. The menu and status bar stay as they are; this is the
+    /// view of the same data.
+    void buildGitPanel(QWidget* panel);
+    /// Push one status answer into the panel's lists.
+    void refreshGitPanel(const LightCpp::Project::GitStatusSummary& summary);
+    /// The blame view for the active buffer, opened in the output area's
+    /// own channel: one row per block, double-click jumps to the line.
+    void showBlameForActiveFile();
+    /// Open the three-way conflict editor for `path` when git left markers in
+    /// it; a no-op (with a status message) when the file has none.
+    void openConflictResolution(const QString& path);
+
+    // --- package managers ---------------------------------------------------
+    /// Tools > Package Manager...: pick a manager, search/install/remove a
+    /// package, and copy the CMake flag that makes the build find it.
+    void showPackageManager();
     /// The Plugins tab: a list of every loaded plugin, one row per plugin
     /// with publisher / version / kind (C++ / Lua) tag chips.
     QWidget* createPluginPanel();

@@ -115,6 +115,20 @@ void GitClient::run(const QStringList& arguments, const QString& title)
     run(arguments, title, false);
 }
 
+void GitClient::runForResult(
+    const QStringList& arguments, const QString& title,
+    std::function<void(const QString&, int)> callback)
+{
+    if (arguments.isEmpty() || !callback) {
+        return;
+    }
+    Job job{arguments, title, false, GitCommandPolicy::kindOf(arguments),
+            workingDirectory_, nullptr};
+    job.resultCallback = std::move(callback);
+    queue_.append(job);
+    startNext();
+}
+
 void GitClient::run(const QStringList& arguments, const QString& title,
                     bool feedsStatus)
 {
@@ -122,7 +136,8 @@ void GitClient::run(const QStringList& arguments, const QString& title,
         return;
     }
     queue_.append(Job{arguments, title, feedsStatus,
-                      GitCommandPolicy::kindOf(arguments), workingDirectory_});
+                      GitCommandPolicy::kindOf(arguments), workingDirectory_,
+                      nullptr});
     startNext();
 }
 
@@ -178,7 +193,11 @@ void GitClient::startNext()
                     }
                     text += stderrText;
                 }
-                emit commandFinished(title, text.trimmed(), exitCode);
+                if (job.resultCallback) {
+                    job.resultCallback(text.trimmed(), exitCode);
+                } else {
+                    emit commandFinished(title, text.trimmed(), exitCode);
+                }
             }
             startNext();
         });
@@ -196,6 +215,8 @@ void GitClient::startNext()
                     emit statusReady(LightCpp::Project::GitStatusSummary{});
                     emit statusFailed(error);
                 }
+            } else if (job.resultCallback) {
+                job.resultCallback(error, -1);
             } else {
                 emit commandFinished(job.title, error, -1);
             }
@@ -222,11 +243,16 @@ void GitClient::startNext()
         // queue still has to move on, so the next job is started as usual.
         const QString title = current_.title;
         const bool feedsStatus = current_.feedsStatus;
+        const auto resultCallback = current_.resultCallback;
         current_ = Job{};
         if (feedsStatus) {
             // A status refresh with nothing to describe is the empty answer,
             // exactly as outside a repository.
             emit statusReady(LightCpp::Project::GitStatusSummary{});
+        } else if (resultCallback) {
+            resultCallback(
+                QStringLiteral("no working directory for git — open a folder or a project first"),
+                -1);
         } else {
             emit commandFinished(
                 title,

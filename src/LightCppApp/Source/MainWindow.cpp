@@ -51,6 +51,11 @@
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDialog>
+#include <QGroupBox>
+#include <QPlainTextEdit>
+#include <QSaveFile>
+#include <QScrollArea>
+#include <QToolButton>
 #include <QFileDialog>
 #include <QDir>
 #include <QDirIterator>
@@ -1600,19 +1605,180 @@ void MainWindow::loadPlugins()
 
 QWidget* MainWindow::createGitPlaceholder()
 {
+    // Kept as the factory the side bar calls; the body builds the real panel.
+    // The name stays because a plugin may address the widget by its
+    // objectName, and `sideGitPanel` is part of that contract.
     auto* panel = new QWidget(this);
     panel->setObjectName(QStringLiteral("sideGitPanel"));
-    auto* layout = new QVBoxLayout(panel);
-    layout->setContentsMargins(8, 8, 8, 8);
-    auto* note = new QLabel(tr("The Git panel is not built yet — the Git "
-                               "menu and status bar keep working."), panel);
-    note->setObjectName(QStringLiteral("sideGitNote"));
-    note->setWordWrap(true);
-    note->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
-    note->setStyleSheet(QStringLiteral("color: gray; margin-top: 24px;"));
-    layout->addWidget(note);
-    layout->addStretch(1);
+    buildGitPanel(panel);
     return panel;
+}
+
+void MainWindow::buildGitPanel(QWidget* panel)
+{
+    auto* layout = new QVBoxLayout(panel);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    // Header: branch · ahead/behind. One line, because this is a side bar and
+    // the same information is already in the status bar in full.
+    auto* header = new QWidget(panel);
+    header->setObjectName(QStringLiteral("gitPanelHeader"));
+    auto* headerLayout = new QHBoxLayout(header);
+    headerLayout->setContentsMargins(8, 6, 8, 6);
+    gitPanelBranch_ = new QLabel(tr("No repository"), header);
+    gitPanelBranch_->setObjectName(QStringLiteral("gitPanelBranch"));
+    gitPanelBranch_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    headerLayout->addWidget(gitPanelBranch_, 1);
+    auto* refreshButton = new QToolButton(header);
+    refreshButton->setObjectName(QStringLiteral("gitPanelRefresh"));
+    refreshButton->setText(tr("Refresh"));
+    refreshButton->setToolTip(tr("Re-read the repository status"));
+    refreshButton->setAutoRaise(true);
+    connect(refreshButton, &QToolButton::clicked, this, [this] {
+        if (git_ != nullptr) {
+            gitStatusWantsFileList_ = true;
+            git_->refreshStatus();
+        }
+    });
+    headerLayout->addWidget(refreshButton, 0);
+    layout->addWidget(header);
+
+    const auto makeTree = [panel](const QString& title) {
+        auto* group = new QGroupBox(title, panel);
+        auto* groupLayout = new QVBoxLayout(group);
+        groupLayout->setContentsMargins(4, 4, 4, 4);
+        auto* tree = new QTreeWidget(group);
+        tree->setHeaderHidden(true);
+        tree->setRootIsDecorated(false);
+        tree->setUniformRowHeights(true);
+        tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+        tree->setContextMenuPolicy(Qt::CustomContextMenu);
+        groupLayout->addWidget(tree);
+        return std::make_pair(group, tree);
+    };
+
+    auto [stagedGroup, stagedTree] =
+        makeTree(tr("Staged changes"));
+    gitPanelStaged_ = stagedTree;
+    gitPanelStaged_->setObjectName(QStringLiteral("gitPanelStaged"));
+    layout->addWidget(stagedGroup);
+
+    auto [changesGroup, changesTree] =
+        makeTree(tr("Changes"));
+    gitPanelChanges_ = changesTree;
+    gitPanelChanges_->setObjectName(QStringLiteral("gitPanelChanges"));
+    layout->addWidget(changesGroup, 1);
+
+    // Double-click opens the file; the diff is a menu entry rather than the
+    // default because "look at this file" is what a change list is for.
+    for (QTreeWidget* tree : {gitPanelStaged_, gitPanelChanges_}) {
+        connect(tree, &QTreeWidget::itemDoubleClicked, this,
+                [this](QTreeWidgetItem* item, int) {
+            if (item == nullptr) {
+                return;
+            }
+            const QString path = item->data(0, Qt::UserRole).toString();
+            if (!path.isEmpty()) {
+                openFileInTab(path);
+            }
+        });
+        connect(tree, &QTreeWidget::customContextMenuRequested, this,
+                [this, tree](const QPoint& point) {
+            QTreeWidgetItem* item = tree->itemAt(point);
+            const QString path =
+                item != nullptr ? item->data(0, Qt::UserRole).toString() : QString();
+            QMenu menu(this);
+            QAction* stage = nullptr;
+            QAction* unstage = nullptr;
+            if (tree == gitPanelStaged_) {
+                unstage = menu.addAction(tr("Unstage"));
+            } else {
+                stage = menu.addAction(tr("Stage"));
+            }
+            QAction* diff = menu.addAction(tr("Show Diff"));
+            QAction* blame = menu.addAction(tr("Blame"));
+            QAction* resolve = menu.addAction(tr("Resolve Conflicts..."));
+            QAction* chosen = menu.exec(tree->mapToGlobal(point));
+            if (chosen == nullptr) {
+                return;
+            }
+            if (path.isEmpty()) {
+                return;
+            }
+            if (chosen == stage) {
+                git_->run({QStringLiteral("add"), QStringLiteral("--"), path},
+                          tr("git add"));
+            } else if (chosen == unstage) {
+                git_->run({QStringLiteral("restore"), QStringLiteral("--staged"),
+                           QStringLiteral("--"), path},
+                          tr("git restore --staged"));
+            } else if (chosen == diff) {
+                git_->run({QStringLiteral("diff"), QStringLiteral("--"), path},
+                          tr("git diff"));
+            } else if (chosen == blame) {
+                openFileInTab(path);
+                showBlameForActiveFile();
+            } else if (chosen == resolve) {
+                openConflictResolution(path);
+            }
+        });
+    }
+
+    refreshGitPanel(LightCpp::Project::GitStatusSummary{});
+}
+
+void MainWindow::refreshGitPanel(const LightCpp::Project::GitStatusSummary& summary)
+{
+    if (gitPanelStaged_ == nullptr || gitPanelChanges_ == nullptr) {
+        return;
+    }
+    gitPanelStaged_->clear();
+    gitPanelChanges_->clear();
+
+    if (gitPanelBranch_ != nullptr) {
+        if (summary.branch.isEmpty() && !summary.detached
+            && summary.entries.isEmpty()) {
+            gitPanelBranch_->setText(tr("No repository"));
+        } else {
+            gitPanelBranch_->setText(summary.label());
+        }
+    }
+
+    // Resolve against the repository root git itself reports: paths in the
+    // status output are repository-relative, and joining them to the working
+    // directory (which may be a subdirectory) would point at nothing.
+    const QString root = git_ != nullptr ? git_->workingDirectory() : QString();
+    const auto addEntry = [&root](QTreeWidget* tree,
+                                  const LightCpp::Project::GitEntry& entry) {
+        auto* item = new QTreeWidgetItem(tree);
+        const QString status =
+            QStringLiteral("%1%2").arg(entry.indexStatus).arg(entry.workTreeStatus)
+                .trimmed();
+        item->setText(0, QStringLiteral("%1  %2").arg(status, entry.path));
+        // The full path is what "open the file" needs; keep it off the label
+        // so a deep tree does not turn the panel into a horizontal scroller.
+        const QString absolute =
+            entry.path.startsWith(QLatin1Char('/'))
+                ? entry.path
+                : QDir(root).filePath(QDir::fromNativeSeparators(entry.path));
+        item->setData(0, Qt::UserRole, absolute);
+        item->setToolTip(0, absolute);
+        if (entry.isUntracked()) {
+            item->setForeground(0, QBrush(QColor(0x2E, 0x8B, 0x57)));
+        }
+    };
+    for (const LightCpp::Project::GitEntry& entry : summary.entries) {
+        // X is the index, Y the working tree: a file can appear in both lists
+        // (staged edit plus a further unstaged one), which is exactly what git
+        // status shows and what the two lists are for.
+        if (entry.indexStatus != u' ' && entry.indexStatus != u'?') {
+            addEntry(gitPanelStaged_, entry);
+        }
+        if (entry.workTreeStatus != u' ' || entry.isUntracked()) {
+            addEntry(gitPanelChanges_, entry);
+        }
+    }
 }
 
 QWidget* MainWindow::createPluginPanel()
@@ -2558,6 +2724,20 @@ void MainWindow::createActions()
     connect(actSortIncludes_, &QAction::triggered, this,
             [this] { sortIncludesInEditor(); });
 
+    // --- package manager --------------------------------------------------
+    actPackageManager_ = new QAction(tr("&Package Manager..."), this);
+    actPackageManager_->setStatusTip(
+        tr("Search, install and remove packages with vcpkg, Conan, apt, "
+           "brew or winget, and copy the CMake flag that finds them"));
+    connect(actPackageManager_, &QAction::triggered, this,
+            [this] { showPackageManager(); });
+
+    actBlameFile_ = new QAction(tr("&Blame File"), this);
+    actBlameFile_->setStatusTip(
+        tr("Show which commit last touched each block of the active file"));
+    connect(actBlameFile_, &QAction::triggered, this,
+            [this] { showBlameForActiveFile(); });
+
     // --- hierarchies ------------------------------------------------------
     actCallHierarchy_ = new QAction(tr("Call &Hierarchy"), this);
     actCallHierarchy_->setStatusTip(
@@ -2882,6 +3062,8 @@ void MainWindow::createActions()
         {actSortIncludes_, "actionSortIncludes"},
         {actCallHierarchy_, "actionCallHierarchy"},
         {actTypeHierarchy_, "actionTypeHierarchy"},
+        {actPackageManager_, "actionPackageManager"},
+        {actBlameFile_, "actionBlameFile"},
     };
     for (auto it = actionNames.constBegin(); it != actionNames.constEnd();
          ++it) {
@@ -2977,6 +3159,8 @@ void MainWindow::createMenuBar()
     toolsMenu->addAction(actAnalyze_);
     toolsMenu->addSeparator();
     toolsMenu->addAction(actCommandPalette_);
+    toolsMenu->addSeparator();
+    toolsMenu->addAction(actPackageManager_);
 
     auto* debugMenu = menuBar()->addMenu(tr("&Debug"));
     debugMenu->setObjectName(QStringLiteral("menuDebug"));
@@ -3015,6 +3199,8 @@ void MainWindow::createMenuBar()
     gitMenu->addAction(actGitInit_);
     gitMenu->addSeparator();
     gitMenu->addAction(actGitBranches_);
+    gitMenu->addSeparator();
+    gitMenu->addAction(actBlameFile_);
 
     auto* helpMenu = menuBar()->addMenu(tr("&Help"));
     helpMenu->setObjectName(QStringLiteral("menuHelp"));
@@ -6432,6 +6618,364 @@ void MainWindow::syncGitWorkingDirectory()
     git_->refreshStatus();
 }
 
+
+// ---------------------------------------------------------------------------
+// Blame
+// ---------------------------------------------------------------------------
+
+void MainWindow::showBlameForActiveFile()
+{
+    CodeEditor* ed = currentEditor();
+    if (ed == nullptr || ed->filePath().isEmpty() || git_ == nullptr) {
+        statusBar()->showMessage(tr("Blame needs a saved file in a repository"), 4000);
+        return;
+    }
+    const QString path = ed->filePath();
+    const QString relative = QDir(git_->workingDirectory())
+                                 .relativeFilePath(path)
+                                 .replace(QLatin1Char('\\'), QLatin1Char('/'));
+    if (relative.startsWith(QLatin1String(".."))) {
+        statusBar()->showMessage(
+            tr("Blame: this file is outside the repository"), 4000);
+        return;
+    }
+
+    // --porcelain is the only blame format with a stable shape; the default
+    // is human-readable and re-parses differently between git versions.
+    git_->runForResult(
+        LightCpp::Workbench::Git::Commands::blame(relative, 0, 0),
+        tr("git blame"),
+        [this, relative](const QString& text, int exitCode) {
+        outputPanel_->showChannel(OutputPanel::ChannelGit);
+        outputPanel_->appendGitOutput(tr("--- git blame %1 ---").arg(relative));
+        if (exitCode != 0) {
+            outputPanel_->appendGitOutput(text);
+            return;
+        }
+        const QList<LightCpp::Workbench::Git::BlameLine> lines =
+            LightCpp::Workbench::Git::parseBlame(text, true);
+        const QList<LightCpp::Workbench::Git::BlameBlock> blocks =
+            LightCpp::Workbench::Git::groupBlame(lines);
+        if (blocks.isEmpty()) {
+            outputPanel_->appendGitOutput(tr("(no blame information)"));
+            return;
+        }
+        // One row per block, not per line: a 4000-line file usually has a few
+        // dozen blocks, and repeating the author on every line is what makes
+        // a blame view unreadable.
+        int width = 0;
+        for (const auto& block : blocks) {
+            width = qMax(width, block.author.size());
+        }
+        for (const auto& block : blocks) {
+            outputPanel_->appendGitOutput(
+                QStringLiteral("%1 %2 %3  %4")
+                    .arg(block.shortSha.leftJustified(9),
+                         block.author.leftJustified(qMin(width, 24)),
+                         block.date.left(10),
+                         block.summary));
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Conflict resolution
+// ---------------------------------------------------------------------------
+
+void MainWindow::openConflictResolution(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        statusBar()->showMessage(tr("Cannot open %1").arg(path), 4000);
+        return;
+    }
+    const QString text = QString::fromUtf8(file.readAll());
+    file.close();
+
+    const LightCpp::Workbench::Git::MergeFile merge =
+        LightCpp::Workbench::Git::parseConflictFile(text);
+    if (!merge.hasConflicts) {
+        statusBar()->showMessage(
+            tr("%1 has no conflict markers").arg(QFileInfo(path).fileName()), 4000);
+        return;
+    }
+
+    // A small dialog: one row per hunk with the three texts and a choice.
+    // A full three-pane editor is the right end state, but the decision a
+    // merge needs is exactly this one, and getting the decision right matters
+    // more than the layout around it.
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Resolve conflicts — %1").arg(QFileInfo(path).fileName()));
+    dialog.resize(760, 520);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* hint = new QLabel(
+        tr("%1 conflicting hunk(s). Pick the text to keep for each one.")
+            .arg(merge.hunks.size()),
+        &dialog);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+
+    struct Choice {
+        QComboBox* combo = nullptr;
+    };
+    QList<Choice> choices;
+    auto* scroll = new QScrollArea(&dialog);
+    scroll->setWidgetResizable(true);
+    auto* body = new QWidget(scroll);
+    auto* bodyLayout = new QVBoxLayout(body);
+    for (int i = 0; i < merge.hunks.size(); ++i) {
+        const auto& hunk = merge.hunks.at(i);
+        auto* group = new QGroupBox(
+            tr("Hunk %1 (line %2)").arg(i + 1).arg(hunk.startLine + 1), body);
+        auto* groupLayout = new QVBoxLayout(group);
+        auto* ours = new QPlainTextEdit(hunk.ourLines.join(QLatin1Char('\n')), group);
+        auto* theirs = new QPlainTextEdit(hunk.theirLines.join(QLatin1Char('\n')), group);
+        for (QPlainTextEdit* view : {ours, theirs}) {
+            view->setReadOnly(true);
+            view->setMaximumHeight(120);
+            view->setLineWrapMode(QPlainTextEdit::NoWrap);
+        }
+        groupLayout->addWidget(new QLabel(
+            tr("Ours (%1)").arg(hunk.oursLabel.isEmpty() ? tr("HEAD") : hunk.oursLabel),
+            group));
+        groupLayout->addWidget(ours);
+        groupLayout->addWidget(new QLabel(
+            tr("Theirs (%1)").arg(hunk.theirsLabel.isEmpty() ? tr("incoming")
+                                                             : hunk.theirsLabel),
+            group));
+        groupLayout->addWidget(theirs);
+
+        auto* combo = new QComboBox(group);
+        combo->addItem(tr("Ours"), int(LightCpp::Workbench::Git::MergeChoice::Ours));
+        combo->addItem(tr("Theirs"), int(LightCpp::Workbench::Git::MergeChoice::Theirs));
+        combo->addItem(tr("Both (ours first)"),
+                       int(LightCpp::Workbench::Git::MergeChoice::Both));
+        combo->addItem(tr("Both (theirs first)"),
+                       int(LightCpp::Workbench::Git::MergeChoice::BothReversed));
+        if (hunk.hasBase) {
+            combo->addItem(tr("Base"), int(LightCpp::Workbench::Git::MergeChoice::Base));
+        }
+        groupLayout->addWidget(combo);
+        choices.append(Choice{combo});
+        bodyLayout->addWidget(group);
+    }
+    bodyLayout->addStretch(1);
+    scroll->setWidget(body);
+    layout->addWidget(scroll, 1);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel,
+                                         &dialog);
+    // "Save" here means "write the resolved file", not "keep a copy": the file
+    // stays plain text and stays versioned by git.
+    buttons->button(QDialogButtonBox::Save)->setText(tr("Write resolved file"));
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        if (!QFile::exists(path)) {
+            return;
+        }
+        QString resolved = merge.prefix.join(merge.newline);
+        if (!merge.prefix.isEmpty()) {
+            resolved += merge.newline;
+        }
+        for (int i = 0; i < merge.hunks.size(); ++i) {
+            const auto choice = static_cast<LightCpp::Workbench::Git::MergeChoice>(
+                choices.at(i).combo->currentData().toInt());
+            const QStringList kept =
+                LightCpp::Workbench::Git::resolveHunk(merge.hunks.at(i), choice);
+            if (!kept.isEmpty()) {
+                resolved += kept.join(merge.newline) + merge.newline;
+            }
+            if (i < merge.betweenTexts.size() && !merge.betweenTexts.at(i).isEmpty()) {
+                resolved += merge.betweenTexts.at(i) + merge.newline;
+            }
+        }
+        if (!merge.suffix.isEmpty()) {
+            resolved += merge.suffix.join(merge.newline);
+            resolved += merge.newline;
+        }
+        QSaveFile out(path);
+        if (!out.open(QIODevice::WriteOnly)) {
+            return;
+        }
+        out.write(resolved.toUtf8());
+        out.commit();
+        dialog.accept();
+    });
+    layout->addWidget(buttons);
+
+    if (dialog.exec() == QDialog::Accepted) {
+        // Re-open (or reload) the tab so the editor shows the resolved file
+        // rather than the markers it was holding in memory.
+        // Reopening the file through the normal path reloads it into the
+        // existing tab (openFileInTab focuses a tab that is already open) and
+        // refreshes the editor's "text on disk" baseline, which a plain
+        // setPlainText() would leave stale.
+        openFileInTab(path);
+        statusBar()->showMessage(
+            tr("Wrote the resolved %1 — stage it when it compiles")
+                .arg(QFileInfo(path).fileName()),
+            6000);
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Package manager
+// ---------------------------------------------------------------------------
+
+void MainWindow::showPackageManager()
+{
+    namespace Pkg = LightCpp::Workbench::Pkg;
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Package Manager"));
+    dialog.resize(820, 560);
+    auto* layout = new QVBoxLayout(&dialog);
+
+    auto* top = new QHBoxLayout();
+    top->addWidget(new QLabel(tr("Manager:"), &dialog));
+    auto* managerCombo = new QComboBox(&dialog);
+    managerCombo->setObjectName(QStringLiteral("packageManagerCombo"));
+    const QList<Pkg::Manager> managers{
+        Pkg::Manager::Vcpkg, Pkg::Manager::Conan, Pkg::Manager::Hunter,
+        Pkg::Manager::Apt,   Pkg::Manager::Brew,  Pkg::Manager::Winget};
+    for (const Pkg::Manager manager : managers) {
+        managerCombo->addItem(Pkg::managerName(manager), int(manager));
+    }
+    top->addWidget(managerCombo);
+    top->addWidget(new QLabel(tr("Package:"), &dialog));
+    auto* nameEdit = new QLineEdit(&dialog);
+    nameEdit->setObjectName(QStringLiteral("packageNameEdit"));
+    nameEdit->setPlaceholderText(tr("fmt"));
+    top->addWidget(nameEdit, 1);
+    auto* searchButton = new QPushButton(tr("Search"), &dialog);
+    auto* installButton = new QPushButton(tr("Install"), &dialog);
+    auto* removeButton = new QPushButton(tr("Remove"), &dialog);
+    top->addWidget(searchButton);
+    top->addWidget(installButton);
+    top->addWidget(removeButton);
+    layout->addLayout(top);
+
+    // The triplet only means something for vcpkg; it is shown, not hidden,
+    // because that is where the user finds the CMake flag it has to match.
+    auto* tripletRow = new QHBoxLayout();
+    tripletRow->addWidget(new QLabel(tr("Triplet:"), &dialog));
+    auto* tripletEdit = new QLineEdit(Pkg::hostTriplet(), &dialog);
+    tripletRow->addWidget(tripletEdit, 1);
+    tripletRow->addWidget(new QLabel(tr("CMake:"), &dialog));
+    auto* cmakeFlag = new QLineEdit(&dialog);
+    cmakeFlag->setReadOnly(true);
+    tripletRow->addWidget(cmakeFlag, 2);
+    layout->addLayout(tripletRow);
+
+    auto* output = new QPlainTextEdit(&dialog);
+    output->setReadOnly(true);
+    output->setLineWrapMode(QPlainTextEdit::NoWrap);
+    output->setObjectName(QStringLiteral("packageManagerOutput"));
+    layout->addWidget(output, 1);
+
+    auto* hint = new QLabel(&dialog);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    // The tool's own directory is the working directory for every command, so
+    // a relative manifest path resolves where the user expects.
+    const auto runTool = [this, output](const QString& program,
+                                        const QStringList& arguments) {
+        if (program.isEmpty()) {
+            return;
+        }
+        auto* process = new QProcess(output);
+        process->setProcessChannelMode(QProcess::MergedChannels);
+        output->appendPlainText(QStringLiteral("$ %1 %2")
+                                    .arg(program, arguments.join(QLatin1Char(' '))));
+        QObject::connect(process,
+                         QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                         output, [process, output](int code, QProcess::ExitStatus status) {
+            const QString text = QString::fromLocal8Bit(process->readAll());
+            if (!text.trimmed().isEmpty()) {
+                output->appendPlainText(text.trimmed());
+            }
+            if (code != 0 || status != QProcess::NormalExit) {
+                output->appendPlainText(
+                    QStringLiteral("(exit %1)").arg(code));
+            }
+            process->deleteLater();
+        });
+        QObject::connect(process, &QProcess::errorOccurred, output,
+                         [process, output](QProcess::ProcessError) {
+            output->appendPlainText(process->errorString());
+            process->deleteLater();
+        });
+        process->start(program, arguments);
+    };
+
+    const auto refreshFlag = [managerCombo, cmakeFlag, tripletEdit] {
+        const auto manager = static_cast<Pkg::Manager>(
+            managerCombo->currentData().toInt());
+        const QStringList flags = Pkg::cmakeIntegrationArguments(
+            manager, QString(), tripletEdit->text().trimmed());
+        cmakeFlag->setText(flags.join(QLatin1Char(' ')));
+        cmakeFlag->setToolTip(Pkg::integrationHint(
+            manager, QString(), tripletEdit->text().trimmed()));
+    };
+    connect(managerCombo, &QComboBox::currentIndexChanged, &dialog,
+            [refreshFlag, hint, managerCombo](int) {
+        refreshFlag();
+        const auto manager = static_cast<Pkg::Manager>(
+            managerCombo->currentData().toInt());
+        hint->setText(Pkg::integrationHint(manager, QString(),
+                                           Pkg::hostTriplet()));
+    });
+    refreshFlag();
+    hint->setText(Pkg::integrationHint(
+        Pkg::Manager::Vcpkg, QString(), Pkg::hostTriplet()));
+
+    connect(searchButton, &QPushButton::clicked, &dialog,
+            [=, this] {
+        const auto manager = static_cast<Pkg::Manager>(
+            managerCombo->currentData().toInt());
+        // Hunter is a CMake module with no CLI at all; saying so is better
+        // than starting a process named "hunter" that does not exist.
+        if (Pkg::versionArguments(manager).isEmpty()) {
+            output->appendPlainText(
+                tr("%1 has no command-line tool — add it in CMakeLists.txt.")
+                    .arg(Pkg::managerName(manager)));
+            return;
+        }
+        runTool(Pkg::managerName(manager),
+                Pkg::searchArguments(manager, nameEdit->text().trimmed()));
+    });
+    connect(installButton, &QPushButton::clicked, &dialog,
+            [=, this] {
+        const auto manager = static_cast<Pkg::Manager>(
+            managerCombo->currentData().toInt());
+        if (nameEdit->text().trimmed().isEmpty()) {
+            return;
+        }
+        runTool(Pkg::managerName(manager),
+                Pkg::installArguments(manager, nameEdit->text().trimmed(),
+                                      QString(), tripletEdit->text().trimmed()));
+        refreshFlag();
+    });
+    connect(removeButton, &QPushButton::clicked, &dialog,
+            [=, this] {
+        const auto manager = static_cast<Pkg::Manager>(
+            managerCombo->currentData().toInt());
+        if (nameEdit->text().trimmed().isEmpty()) {
+            return;
+        }
+        runTool(Pkg::managerName(manager),
+                Pkg::removeArguments(manager, nameEdit->text().trimmed()));
+    });
+
+    dialog.exec();
+}
+
 void MainWindow::onGitRefresh()
 {
     syncGitWorkingDirectory();
@@ -6487,6 +7031,7 @@ void MainWindow::onGitStatusReady(const LightCpp::Project::GitStatusSummary& sum
     statusGit_->show();
     statusGit_->setText(summary.label());
     statusGit_->setToolTip(LightCpp::Project::describeGitStatus(summary));
+    refreshGitPanel(summary);
     showGitStatus(summary, gitStatusWantsFileList_);
     gitStatusWantsFileList_ = false;
 }
